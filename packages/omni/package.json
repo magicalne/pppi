@@ -1,0 +1,19 @@
+{
+	"name": "@sspi/omni",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"exports": {
+		".": "./src/extension.ts",
+		"./repos": "./src/repos.ts",
+		"./worktree": "./src/worktree.ts",
+		"./pigeon": "./src/pigeon.ts"
+	},
+	"dependencies": {
+		"@sspi/protocol": "workspace:*"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"typebox": "*"
+	}
+}
