@@ -568,8 +568,10 @@
 }
 .row.peer .who {
 	font-size: 12px;
-	color: var(--dim);
+	font-weight: 600;
+	color: var(--text);
 	margin: 0 4px 3px;
+	opacity: 0.85;
 }
 .bubble.peer-msg {
 	max-width: 84%;
