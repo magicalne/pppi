@@ -286,7 +286,6 @@ export default function App() {
 								setTarget(t);
 								setDrawerOpen(false);
 							}}
-							onClose={() => setDrawerOpen(false)}
 							onUnpair={() => {
 								setDrawerOpen(false);
 								setPairing(null);
@@ -376,36 +375,6 @@ export default function App() {
 					</button>
 				</div>
 			</div>
-
-			{sheetOpen && (
-				<>
-					<div className="backdrop" onClick={() => setSheetOpen(false)} />
-					<SessionSheet
-						sessions={sessions}
-						target={target}
-						showProjects={showProjects}
-						showWorktrees={showWorktrees}
-						onPick={(t) => {
-							setTarget(t);
-							setSheetOpen(false);
-						}}
-						onClose={() => setSheetOpen(false)}
-						onToggleProjects={(v) => {
-							setShowProjects(v);
-							localStorage.setItem("sspi.projects", v ? "1" : "0");
-						}}
-						onToggleWorktrees={(v) => {
-							setShowWorktrees(v);
-							localStorage.setItem("sspi.worktrees", v ? "1" : "0");
-						}}
-						onUnpair={() => {
-							setSheetOpen(false);
-							setPairing(null);
-							localStorage.removeItem("sspi.pairing");
-						}}
-					/>
-				</>
-			)}
 		</div>
 	);
 }

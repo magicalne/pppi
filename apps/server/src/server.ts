@@ -16,9 +16,10 @@ import { RpcAgentDriver } from "./agent.ts";
 import { tokensMatch } from "./config.ts";
 import { Stt } from "./stt.ts";
 import { decodeWav, WavError } from "./wav.ts";
-import type { ChatEntry, ClientMessage, ServerEvent } from "@sspi/protocol";
+import type { ChatEntry, ClientMessage, PairInfo, ServerEvent } from "@sspi/protocol";
 import { listSessions, pigeon, type PigeonSession } from "@sspi/omni/pigeon";
 import { loadRegistry } from "@sspi/omni/repos";
+import { buildProfiles } from "./profiles.ts";
 
 export type ServerOptions = {
 	token: string;
@@ -27,12 +28,14 @@ export type ServerOptions = {
 	webDist?: string;
 	/** Max voice upload size (default 25 MiB ≈ 26 min of 16 kHz PCM16). */
 	maxVoiceBytes?: number;
+	/** Pairing facts for this machine; enables GET /api/pair when present. */
+	pair?: PairInfo;
 };
 
 type AuthedSocket = WebSocket & { authed?: boolean };
 
 async function classify(omniSessionId: string, registryDir?: string): Promise<SessionsResponse> {
-	const empty: SessionsResponse = { omniSessionId, projects: [], others: [] };
+	const empty: SessionsResponse = { omniSessionId, projects: [], others: [], profiles: {} };
 	const res = await listSessions();
 	if (!Array.isArray(res)) return empty;
 	const reg = loadRegistry(registryDir);
@@ -60,7 +63,13 @@ async function classify(omniSessionId: string, registryDir?: string): Promise<Se
 	const others = res
 		.filter((s) => !s.me && !claimed.has(s.sessionId) && s.sessionId !== omniSessionId)
 		.map(peer);
-	return { omniSessionId, projects, others };
+	const all = [...projects.flatMap((p) => p.sessions), ...others];
+	const profiles = buildProfiles(
+		all.map((s) => s.sessionId),
+		all.map((s) => ({ id: s.sessionId, name: s.name, cwd: s.cwd })),
+		registryDir,
+	);
+	return { omniSessionId, projects, others, profiles };
 }
 
 export async function createServer(opts: ServerOptions): Promise<FastifyInstance> {
@@ -90,11 +99,13 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		if (res.code === 0) {
 			// stdout: "✉ accepted by X — msg id\n\n<reply text>"
 			const reply = res.stdout.split("\n\n").slice(1).join("\n\n").trim();
+			// profileId = target session id; clients tint via their profiles map
 			broadcast({
 				type: "assistant_final",
 				id: randomUUID(),
 				text: reply || "(empty reply)",
 				target,
+				profileId: target,
 			});
 		} else {
 			const why = res.stderr.trim().split("\n")[0] || `pigeon exited ${res.code}`;
@@ -172,6 +183,15 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		const data = await classify(omniId);
 		sessionsCache = { at: Date.now(), data };
 		return data;
+	});
+
+	// pairing facts for this machine — token-authed (the token IS the secret,
+	// this endpoint only helps already-paired clients learn the machine's name/urls)
+	app.get("/api/pair", async (req, reply) => {
+		if (!opts.pair) return reply.code(404).send({ ok: false, error: "pairing info unavailable" });
+		const auth = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+		if (!tokensMatch(auth, opts.token)) return reply.code(401).send({ ok: false, error: "bad token" });
+		return { ok: true, ...opts.pair };
 	});
 
 	// ---------------------------------------------------------------- websocket

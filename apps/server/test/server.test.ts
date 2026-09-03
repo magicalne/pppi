@@ -121,3 +121,93 @@ describe("gateway server", () => {
 		expect([422, 503]).toContain(res.statusCode);
 	});
 });
+
+describe("pairing + profiles api", () => {
+	const token = "pair-test-token";
+	const tmpDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", ".tmp-test-profiles");
+	let app: Awaited<ReturnType<typeof createServer>>;
+	let driver: RpcAgentDriver;
+
+	function boot(withPair: boolean) {
+		return async () => {
+			const { mkdirSync, rmSync, writeFileSync } = await import("node:fs");
+			rmSync(tmpDir, { recursive: true, force: true });
+			mkdirSync(join(tmpDir, "profiles"), { recursive: true });
+			writeFileSync(
+				join(tmpDir, "profiles", "joe-1.json"),
+				JSON.stringify({ id: "joe-1", name: "Joe", color: "#e8b14a", description: "owns the pigeon repo" }),
+			);
+			process.env.MOCK_REPLY = "ack from omni";
+			process.env.SSPI_DIR = tmpDir;
+			driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
+			app = await createServer({
+				token,
+				driver,
+				stt: Stt.create({ disabled: true }),
+				pair: withPair
+					? { machine: "test-box", port: 8787, token, ips: ["192.168.1.9"], urls: ["http://192.168.1.9:8787"], fingerprint: "abcdef12" }
+					: undefined,
+			});
+			await app.listen({ port: 0, host: "127.0.0.1" });
+			driver.start();
+			await new Promise<void>((r) => driver.once("ready", r));
+		};
+	}
+
+	afterEach(async () => {
+		driver?.dispose();
+		if (app) await app.close();
+		const { rmSync } = await import("node:fs");
+		rmSync(tmpDir, { recursive: true, force: true });
+		delete process.env.SSPI_DIR;
+	});
+
+	it("serves /api/pair with the right token and 401s otherwise", async () => {
+		await boot(true)();
+		const good = await app.inject({ method: "GET", url: "/api/pair", headers: { authorization: `Bearer ${token}` } });
+		expect(good.statusCode).toBe(200);
+		const body = good.json();
+		expect(body.machine).toBe("test-box");
+		expect(body.fingerprint).toBe("abcdef12");
+		expect(body.urls).toContain("http://192.168.1.9:8787");
+
+		const bad = await app.inject({ method: "GET", url: "/api/pair", headers: { authorization: "Bearer nope" } });
+		expect(bad.statusCode).toBe(401);
+	});
+
+	it("404s /api/pair when no pair info is configured", async () => {
+		await boot(false)();
+		const res = await app.inject({ method: "GET", url: "/api/pair" });
+		expect(res.statusCode).toBe(404);
+	});
+
+	it("keeps the /api/sessions shape with a profiles map", async () => {
+		await boot(false)();
+		const res = await app.inject({ method: "GET", url: "/api/sessions" });
+		expect(res.statusCode).toBe(200);
+		const body = res.json();
+		expect(Array.isArray(body.projects)).toBe(true);
+		expect(body.profiles).toBeDefined();
+	});
+
+	it("buildProfiles prefers explicit files and derives the rest deterministically", async () => {
+		const { mkdirSync, writeFileSync } = await import("node:fs");
+		mkdirSync(join(tmpDir, "profiles"), { recursive: true });
+		writeFileSync(
+			join(tmpDir, "profiles", "joe-1.json"),
+			JSON.stringify({ id: "joe-1", name: "Joe", color: "#e8b14a", description: "owns the pigeon repo" }),
+		);
+		const { buildProfiles, colorForId } = await import("../src/profiles.ts");
+		const map = buildProfiles(
+			["joe-1", "anon-9"],
+			[
+				{ id: "joe-1", name: null, cwd: "/x/pigeon" },
+				{ id: "anon-9", name: null, cwd: "/x/sspi" },
+			],
+			tmpDir,
+		);
+		expect(map["joe-1"]).toMatchObject({ name: "Joe", color: "#e8b14a", description: "owns the pigeon repo" });
+		expect(map["anon-9"]!.name).toBe("sspi"); // derived from cwd
+		expect(map["anon-9"]!.color).toBe(colorForId("anon-9"));
+	});
+});
