@@ -117,7 +117,18 @@ bun run build:web
 
 # android (JDK 17 + Android SDK required)
 cd apps/android
-./gradlew :app:assembleDebug :app:testDebugUnitTest
+./gradlew :app:testDebugUnitTest        # JVM: WavEncoder
+./gradlew :app:connectedDebugAndroidTest            # Compose UI tests (needs an emulator)
+
+# android system E2E — one command, full flow
+apps/android/e2e/run.sh
+# boots/reuses the emulator, builds, starts a throwaway mock gateway, then
+# drives the real app over adb: pair (real UI) → chat round trip → voice
+# upload → gateway down ("connecting…") → restart (auto-reconnect) → unpair.
+# KEEP=1 keeps the emulator+gateway alive after the run; E2E_AVD/E2E_PORT to
+# override the defaults. The voice upload pipeline is additionally proven by
+# an instrumented test that feeds a real WAV through WavEncoder and asserts
+# the gateway's parakeet transcript.
 ```
 
 The STT test speaks with the macOS `say` CLI and transcribes it back with the

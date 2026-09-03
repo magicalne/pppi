@@ -23,6 +23,9 @@ class SspiClient(
 	private val http = OkHttpClient.Builder()
 		.connectTimeout(5, TimeUnit.SECONDS)
 		.readTimeout(0, TimeUnit.MILLISECONDS) // WebSocket: no read timeout
+		// keepalive: without pings a half-open connection (NAT timeout, dead
+		// server) looks "connected" forever and never triggers reconnect
+		.pingInterval(30, TimeUnit.SECONDS)
 		.build()
 
 	private var ws: WebSocket? = null
