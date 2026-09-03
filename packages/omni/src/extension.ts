@@ -11,6 +11,7 @@
 // Load with: pi -e <this file>  (or via extensions/omni.ts)
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
 import { Type } from "typebox";
 import { listSessions, pigeon, sessionsForRepo, type PigeonSession } from "./pigeon.ts";
 import { addRepo, displayPath, findRepo, loadRegistry, removeRepo, type RepoRegistry } from "./repos.ts";
@@ -49,8 +50,16 @@ function selfSessionId(ctx: ExtensionContext): string | undefined {
 	if (env) return env;
 	const file = ctx.sessionManager.getSessionFile();
 	if (!file) return undefined;
+	try {
+		// session files are <timestamp>_<id>.jsonl; the header carries the real id
+		const header = JSON.parse(readFileSync(file, "utf8").split("\n")[0] ?? "{}") as { id?: string };
+		if (header.id) return header.id;
+	} catch {
+		// fall through to basename
+	}
 	const base = file.split("/").pop() ?? file;
-	return base.replace(/\.jsonl$/, "");
+	const id = base.replace(/\.jsonl$/, "").split("_").pop();
+	return id || undefined;
 }
 
 function describeSessions(sessions: PigeonSession[], reg: RepoRegistry): string {
