@@ -101,6 +101,18 @@ def tap(x: int, y: int) -> None:
     shell(f"input tap {x} {y}")
 
 
+def dismiss_permission_dialogs() -> bool:
+    """If a runtime-permission dialog is up, grant it and report that we did."""
+    xml = dump()
+    for label in ("While using the app", "Only this time", "Allow"):
+        pos = bounds_center(xml, label)
+        if pos:
+            tap(*pos)
+            time.sleep(1)
+            return True
+    return False
+
+
 def type_text(s: str) -> None:
     shell("input text " + s.replace(" ", "%s"))
 
@@ -144,31 +156,41 @@ def phase_pair() -> None:
 
     xml = dump()
     server_field = edit_field_center(xml, 0)
-    check("server field found", server_field is not None)
+    check("pair link field found", server_field is not None)
     if server_field is None:
         return
     tap(*server_field)
     time.sleep(1)
-    type_text(GATEWAY)  # full URL incl. scheme — the app validates it
-    time.sleep(1)
-
-    xml = dump()
-    token_field = edit_field_center(xml, 1)
-    check("token field found", token_field is not None)
-    if token_field is None:
-        return
-    tap(*token_field)
-    time.sleep(1)
-    type_text(TOKEN)
+    type_text(f"{GATEWAY}/?pair={TOKEN}")  # the /pair link carries the token
     time.sleep(1)
 
     check("connect button tapped", tap_text("Connect"))
     check("connected (presence dot)", wait_for_desc("connected", 25))
 
 
-def phase_chat() -> None:
+def phase_machines() -> None:
+    check("machines menu present", tap_desc("machines"))
+    check("machines drawer visible", wait_for_text("MACHINES", 10))
     xml = dump()
-    composer = edit_field_center(xml, 0)
+    check("add form present", "Paste pair link or server URL" in xml)
+    check("scan qr present", "Scan QR" in xml)
+    check("paired machine listed", "10.0.2.2" in xml or "MACHINES" in xml and len(texts(xml)) > 4)
+    # close via the scrim (top-right corner — far from the composer/mic)
+    shell("input tap 1040 300")
+    time.sleep(1)
+    dismiss_permission_dialogs()
+    check("drawer closed, chat intact", wait_for_text("Message Omni", 10))
+
+
+def phase_chat() -> None:
+    dismiss_permission_dialogs()
+    composer = None
+    for _ in range(6):
+        composer = edit_field_center(dump(), 0)
+        if composer:
+            break
+        dismiss_permission_dialogs()
+        time.sleep(2)
     check("composer found", composer is not None)
     if composer is None:
         return
@@ -181,25 +203,26 @@ def phase_chat() -> None:
 
 
 def phase_voice() -> None:
+    dismiss_permission_dialogs()
     before = set(texts(dump()))
-    started = False
-    for _ in range(2):
-        # the ● dot lives INSIDE the mic button; the label below it is not tappable
-        mic = bounds_center(dump(), "●") or bounds_center(dump(), "■")
-        if mic is None:
-            break
-        x, y = mic
-        shell(f"input swipe {x} {y} {x + 7} {y + 11} 800")
-        time.sleep(2)
-        if "listening" in dump():
-            started = True
-            break
-    check("recording started", started)
-    if not started:
+    # the ● dot lives INSIDE the mic button; the label below it is not tappable
+    mic = bounds_center(dump(), "●") or bounds_center(dump(), "■")
+    check("mic button found", mic is not None)
+    if mic is None:
         return
-    if VOICE_WAV and os.path.exists(VOICE_WAV):
-        subprocess.run(["afplay", VOICE_WAV], timeout=30)
-    shell(f"input tap {x} {y}")
+    x, y = mic
+    # hold the button in the background so we can observe the mid-hold state.
+    # identical start/end coords: ANY movement past touch slop cancels the press
+    # gesture and stops the recording. long hold: uiautomator dump waits for UI
+    # idle and the waveform animates, so the dump returns late — the hold must
+    # outlive it.
+    proc = subprocess.Popen([ADB, "shell", f"input swipe {x} {y} {x} {y} 12000"])
+    time.sleep(1.2)
+    started = "listening" in dump()
+    check("recording started", started)
+    if started and VOICE_WAV and os.path.exists(VOICE_WAV):
+        subprocess.run(["afplay", VOICE_WAV], timeout=10)
+    proc.wait()  # release → upload + send
     # outcome A: gateway transcribed a fragment -> transcript bubble appears
     # outcome B: silence -> 422 toast "transcript was empty…"
     deadline = time.time() + 25
@@ -258,6 +281,7 @@ def phase_reconnect() -> None:
 
 PHASES = {
     "pair": phase_pair,
+    "machines": phase_machines,
     "chat": phase_chat,
     "voice": phase_voice,
     "offline": phase_offline,

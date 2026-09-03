@@ -63,9 +63,20 @@ Main screen (the only screen)          Overlays (drawn in front of chat)
   This is the heartbeat of the whole design.
 - **Right:** small chevron. Tapping *anywhere on the bar* opens the session
   switcher. The bar also doubles as a breadcrumb: when you're talking to a
-  worktree session it reads `sspi · wt/fix-auth`, not `Omni`.
+  worktree session it reads `ss · wt/fix-auth`, not `Omni`.
+- **Far left: the ☰ machines button.** It opens the *machines drawer* (§3b).
 
 ---
+
+## 3b. Machines drawer (connections)
+
+One connection = one machine (gateway + its omni conversation). The drawer
+slides from the left edge, **in front of the chat**, and lists every paired
+machine: profile-colored dot + machine name; the active row is highlighted.
+`+`/the add form pairs a new machine by **pair link** (`http://ip:port/?pair=token`)
+or by **QR scan** (Android). Rows can be removed (✕ = unpair this device).
+Switching connections swaps the WebSocket and that machine's transcript —
+secrets rules unchanged (clients hold only pairing tokens).
 
 ## 4. Target tree drawer (from the pill, in front of chat)
 

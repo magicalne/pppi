@@ -85,7 +85,9 @@ bun run dev:server -- --host 0.0.0.0
 
 # 3. talk to it
 #    web:   open http://<mac>:8787 on any device, paste the token once
-#    phone: install apps/android APK, enter server + token once
+#           (or open the printed pair link — it ends in /?pair=<token>)
+#    phone: install apps/android APK, tap ☰ → Scan QR on the /pair QR,
+#           or paste the pair link
 #    terminal: pi -e $PWD/extensions/omni.ts   (interactive omni session)
 
 # 4. teach the omni agent about your repos (say: "register ~/Workspace/opensource/sspi")
@@ -96,6 +98,33 @@ The headless omni session persists across gateway restarts (`--session-id
 sspi-omni`). To run an interactive omni session in a terminal, load the same
 extension; both flavors share the tools, and cross-session messaging rides on
 pigeon.
+
+## Machines, profiles, and the pi extension
+
+**One machine = one connection.** Each machine runs a gateway with its own
+omni. Clients keep a *list* of paired machines — the ☰ machines drawer on
+web/Android switches between them; `+` pairs a new one by QR (Android) or
+pair link (both). The gateway prints the QR and the pair link at startup, and
+`/pair` reprints them from any pi session on the machine.
+
+**Every session can have an identity.** Run `/profile` in any pi session to
+give it a name, color, and description (all optional — missing fields are
+auto-generated). The gateway merges explicit profiles with deterministic
+derived ones and ships them to clients, so when the omni delegates work to
+"Joe" in some repo, Joe's answer shows up as a **yellow bubble labeled Joe**
+— on the phone and in the browser. Agents read the same profiles through the
+`sspi_profiles` tool: descriptions are how an omni decides *whom* to delegate
+to.
+
+The `sspi` pi extension (`packages/pi-ext/`) provides the commands; install
+once with `bun run install:ext` (copies it to `~/.pi/agent/extensions/sspi/`):
+
+| Command / tool | Purpose |
+|---|---|
+| `/omni` | mark the current pi session as this machine's omni (gateway resumes it) |
+| `/pair` | print the pairing QR + link for web/Android clients |
+| `/profile` | set this session's name / color / description |
+| `sspi_profiles` | tool: list profiles (agents read descriptions to pick targets) |
 
 ## Omni tools (what the agent gets)
 

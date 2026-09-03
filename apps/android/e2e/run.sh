@@ -5,8 +5,9 @@
 #
 # Boots (or reuses) the emulator, builds the APK, starts a throwaway
 # mock-agent gateway, then drives the real app over adb through:
-#   pair (real UI) -> chat round trip -> voice upload -> unpair ->
-#   gateway down ("connecting…") -> gateway restart (auto-reconnect)
+#   pair via /pair link (real UI) -> machines drawer -> chat round trip ->
+#   voice upload -> unpair -> gateway down ("connecting…") -> gateway restart
+#   (auto-reconnect)
 #
 # Env:
 #   E2E_AVD   emulator name          (default sspi-test)
@@ -89,7 +90,7 @@ export E2E_GATEWAY="http://10.0.2.2:$PORT" E2E_TOKEN="$TOKEN" E2E_GW_PID="$GW_PI
 EXIT=0
 # phases: offline kills the gateway and asserts "connecting…";
 # after the gateway restart, reconnect + unpair run in a second invocation
-if python3 "$HERE/e2e.py" pair,chat,voice,offline; then
+if python3 "$HERE/e2e.py" pair,machines,chat,voice,offline; then
   echo "== phases 1/2 PASS =="
 else
   echo "== E2E FAIL (phases 1/2) =="

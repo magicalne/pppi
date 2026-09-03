@@ -2,6 +2,7 @@ package dev.sspi.omni
 
 import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -10,6 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import androidx.compose.foundation.background
@@ -306,23 +308,25 @@ fun MachinesDrawer(
 	var token by remember { mutableStateOf("") }
 	var error by remember { mutableStateOf<String?>(null) }
 
-	Box(
-		Modifier
-			.fillMaxSize()
-			.pointerInput(Unit) { detectTapGestures { onClose() } }
-			.background(Color.Black.copy(alpha = 0.45f)),
-	)
-	Column(
-		Modifier
-			.fillMaxHeight()
-			.fillMaxWidth(0.84f)
-			.widthIn(max = 340.dp)
-			.verticalScroll(rememberScrollState())
-			.background(theme.bg)
-			.padding(top = WindowInsets.safeDrawing.getTop(LocalDensity.current).dp + 12.dp)
-			.padding(horizontal = 14.dp)
-			.padding(bottom = 20.dp),
-	) {
+	// single wrapping Box so scrim + panel share one hit-test/draw tree
+	Box(Modifier.fillMaxSize()) {
+		Box(
+			Modifier
+				.fillMaxSize()
+				.pointerInput(Unit) { detectTapGestures { onClose() } }
+				.background(Color.Black.copy(alpha = 0.45f)),
+		)
+		Column(
+			Modifier
+				.fillMaxHeight()
+				.fillMaxWidth(0.84f)
+				.widthIn(max = 340.dp)
+				.verticalScroll(rememberScrollState())
+				.background(theme.bg)
+				.padding(top = WindowInsets.safeDrawing.getTop(LocalDensity.current).dp + 12.dp)
+				.padding(horizontal = 14.dp)
+				.padding(bottom = 20.dp),
+		) {
 		Text("MACHINES", color = theme.dim, fontSize = 12.sp, modifier = Modifier.padding(vertical = 6.dp))
 		if (connections.isEmpty()) {
 			Text("No machines paired yet.", color = theme.dim, fontSize = 13.5.sp)
@@ -416,6 +420,7 @@ fun MachinesDrawer(
 			fontSize = 12.sp,
 			lineHeight = 17.sp,
 		)
+		}
 	}
 }
 
@@ -433,8 +438,11 @@ fun PairingScreen(theme: SspiTheme, onScan: () -> Unit = {}, onPair: (String, St
 	var error by remember { mutableStateOf<String?>(null) }
 
 	Column(
-		modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(24.dp),
-		verticalArrangement = Arrangement.Center,
+		modifier = Modifier
+			.fillMaxSize()
+			.verticalScroll(rememberScrollState())
+			.windowInsetsPadding(WindowInsets.safeDrawing)
+			.padding(24.dp),
 	) {
 		Text("sspi", fontSize = 40.sp, color = theme.text)
 		Text("**pi — pointer-pointer to pi", fontSize = 14.sp, color = theme.dim)
@@ -524,6 +532,7 @@ fun ChatScreen(
 	pairFetcher: (String, String) -> PairInfoDto? = { s, t -> fetchPairInfo(s, t) },
 ) {
 	val haptics = LocalHapticFeedback.current
+	val context = LocalContext.current
 	val messages = remember { mutableStateListOf<Msg>() }
 	var connected by remember { mutableStateOf(false) }
 	var agentState by remember { mutableStateOf("starting") }
@@ -532,7 +541,14 @@ fun ChatScreen(
 	var recording by remember { mutableStateOf(false) }
 	var level by remember { mutableIntStateOf(0) }
 	var input by remember { mutableStateOf("") }
-	var micGranted by remember { mutableStateOf(false) }
+	// start from the real OS state: if the permission is already granted (pm grant /
+	// previous session), a mic press must never re-open the system dialog
+	var micGranted by remember {
+		mutableStateOf(
+			ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+				PackageManager.PERMISSION_GRANTED,
+		)
+	}
 	var selected by remember { mutableStateOf(UiTarget.OMNI) }
 	var sheetOpen by remember { mutableStateOf(false) }
 	var headerPx by remember { mutableIntStateOf(0) }
@@ -956,24 +972,25 @@ fun ChatScreen(
 
 	// ---- target tree drawer (PRD §4): drops from the presence bar, in front of chat
 	if (sheetOpen) {
-		Box(
-			Modifier
-				.fillMaxSize()
-				.pointerInput(Unit) { detectTapGestures { sheetOpen = false } }
-				.background(Color.Black.copy(alpha = 0.45f)),
-		)
-		val headerDp = with(LocalDensity.current) { headerPx.toDp() }
-		Column(
-			Modifier
-				.padding(top = headerDp + 8.dp, start = 12.dp, end = 12.dp)
-				.widthIn(max = 340.dp)
-				.heightIn(max = 460.dp)
-				.verticalScroll(rememberScrollState())
-				.clip(RoundedCornerShape(18.dp))
-				.background(theme.bg)
-				.border(1.dp, theme.line, RoundedCornerShape(18.dp))
-				.padding(vertical = 8.dp),
-		) {
+		Box(Modifier.fillMaxSize()) {
+			Box(
+				Modifier
+					.fillMaxSize()
+					.pointerInput(Unit) { detectTapGestures { sheetOpen = false } }
+					.background(Color.Black.copy(alpha = 0.45f)),
+			)
+			val headerDp = with(LocalDensity.current) { headerPx.toDp() }
+			Column(
+				Modifier
+					.padding(top = headerDp + 8.dp, start = 12.dp, end = 12.dp)
+					.widthIn(max = 340.dp)
+					.heightIn(max = 460.dp)
+					.verticalScroll(rememberScrollState())
+					.clip(RoundedCornerShape(18.dp))
+					.background(theme.bg)
+					.border(1.dp, theme.line, RoundedCornerShape(18.dp))
+					.padding(vertical = 8.dp),
+			) {
 			Text(
 				"SESSIONS",
 				color = theme.dim,
@@ -1032,6 +1049,7 @@ fun ChatScreen(
 					textAlign = TextAlign.Center,
 				)
 			}
+		}
 		}
 	}
 

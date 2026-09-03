@@ -7,9 +7,10 @@ sessions. Read README.md for the full picture.
 
 - **One conversation per screen, switchable target.** Clients never show
   multi-session UI (no split views, no session-list pages). They mirror one
-  conversation at a time; the session switcher sheet only changes *which*
-  session that conversation is with (omni by default, or a repo/worktree
-  session).
+  conversation at a time; the target tree drawer (from the Omni pill) only
+  changes *which* session that conversation is with (omni by default, or a
+  repo/worktree session). The ☰ machines drawer switches *which machine* —
+  one connection = one machine's omni conversation.
 - **Secrets stay on the Mac.** Clients hold only the pairing token. Never
   ship provider keys, never log them, never echo env secrets through agent
   replies.
@@ -20,6 +21,10 @@ sessions. Read README.md for the full picture.
 - **Local STT only.** The voice path uses transcribe.cpp GGUF models
   (parakeet-unified-en-0.6b is the recommendation from pi-transcribe's
   catalog). No cloud STT.
+- **Agents have identities.** Every pi session can carry a profile
+  (name/color/description — `/profile` writes `$SSPI_DIR/profiles/`).
+  Delegated replies render tinted with the agent's color and labeled with its
+  name; descriptions are for other agents to pick delegation targets.
 - **Design source of truth:** docs/design/ui-prd.md — five themes as design
   tokens (tokens.css on web, SspiThemes on Android), "talk to a person not a
   terminal" grammar for the live status line. New UI must use the tokens.
@@ -41,8 +46,12 @@ sessions. Read README.md for the full picture.
 ## Key files
 
 - `packages/omni/src/extension.ts` — the omni tools the agent sees.
+- `packages/pi-ext/` — the /omni /pair /profile commands + sspi_profiles tool
+  (install: `bun run install:ext` → `~/.pi/agent/extensions/sspi/`).
 - `apps/server/src/agent.ts` — pi RPC driver (framing, events, restart).
+- `apps/server/src/profiles.ts` — profile palette + explicit/derived profile
+  merge (keep the JSON shape in sync with packages/pi-ext/src/store.ts).
 - `apps/server/src/stt.ts` — model resolution: `SSPI_STT_MODEL` →
   `~/.pi/agent/pi-transcribe.json` → HF-cache parakeet.
 - `packages/protocol/src/index.ts` — the wire protocol; keep TS and Kotlin
-  sides in sync.
+  sides in sync (Kotlin mirror: apps/android/.../Protocol.kt).
