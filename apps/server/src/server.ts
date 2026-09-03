@@ -65,8 +65,8 @@ async function classify(omniSessionId: string, registryDir?: string): Promise<Se
 		.map(peer);
 	const all = [...projects.flatMap((p) => p.sessions), ...others];
 	const profiles = buildProfiles(
-		all.map((s) => s.sessionId),
-		all.map((s) => ({ id: s.sessionId, name: s.name, cwd: s.cwd })),
+		[...all.map((s) => s.sessionId), omniSessionId],
+		[...all.map((s) => ({ id: s.sessionId, name: s.name, cwd: s.cwd }))],
 		registryDir,
 	);
 	return { omniSessionId, projects, others, profiles };

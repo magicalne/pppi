@@ -38,11 +38,11 @@ sealed class ServerEvent {
 
 	@Serializable
 	@SerialName("assistant_delta")
-	data class AssistantDelta(val id: String, val delta: String, val target: String? = null) : ServerEvent()
+	data class AssistantDelta(val id: String, val delta: String, val target: String? = null, val profileId: String? = null) : ServerEvent()
 
 	@Serializable
 	@SerialName("assistant_final")
-	data class AssistantFinal(val id: String, val text: String, val target: String? = null) : ServerEvent()
+	data class AssistantFinal(val id: String, val text: String, val target: String? = null, val profileId: String? = null) : ServerEvent()
 
 	@Serializable
 	@SerialName("tool_event")
@@ -73,6 +73,7 @@ data class ChatEntry(
 	val source: String? = null,
 	val ts: Long = 0,
 	val target: String? = null,
+	val profileId: String? = null,
 )
 
 @Serializable
@@ -104,6 +105,14 @@ data class PeerSessionDto(
 )
 
 @Serializable
+data class ProfileDto(
+	val id: String,
+	val name: String,
+	val color: String = "#888888",
+	val description: String = "",
+)
+
+@Serializable
 data class ProjectGroupDto(val name: String, val path: String = "", val sessions: List<PeerSessionDto> = emptyList())
 
 @Serializable
@@ -111,6 +120,19 @@ data class SessionsResponseDto(
 	val omniSessionId: String = "omni",
 	val projects: List<ProjectGroupDto> = emptyList(),
 	val others: List<PeerSessionDto> = emptyList(),
+	val profiles: Map<String, ProfileDto> = emptyMap(),
+)
+
+// ---- GET /api/pair (mirrors packages/protocol PairInfo) ----
+
+@Serializable
+data class PairInfoDto(
+	val machine: String = "",
+	val port: Int = 8787,
+	val token: String = "",
+	val ips: List<String> = emptyList(),
+	val urls: List<String> = emptyList(),
+	val fingerprint: String = "",
 )
 
 val protocolJson = Json {

@@ -1,6 +1,7 @@
 package dev.sspi.omni
 
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -24,6 +25,8 @@ class ChatScreenTest {
 
 	private lateinit var fake: FakeSspiConnection
 	private var disconnected = false
+	/** tests can pre-seed the fetchers before emitting HelloOk */
+	private var fakeSessionsResponse: SessionsResponseDto? = null
 
 	@Before
 	fun setUp() {
@@ -37,9 +40,12 @@ class ChatScreenTest {
 				token = "test-token",
 				onDisconnect = { disconnected = true },
 				onOpenThemes = {},
+				onOpenMachines = {},
 				clientFactory = { _, _, onEvent, onConnection ->
 					fake.also { it.bind(onEvent, onConnection) }
 				},
+				sessionsFetcher = { _, _ -> fakeSessionsResponse },
+				pairFetcher = { _, _ -> null },
 			)
 		}
 		rule.waitForIdle()
@@ -106,4 +112,20 @@ class ChatScreenTest {
 		fake.emit(ServerEvent.ErrorEvt(message = "boom"))
 		rule.onNodeWithText("boom").assertIsDisplayed()
 		rule.onNodeWithText("this never existed").assertDoesNotExist()
-	}}
+	}
+
+	@Test
+	fun delegatedReplyRendersProfileTintedBubble() {
+		fakeSessionsResponse = SessionsResponseDto(
+			omniSessionId = "omni",
+			profiles = mapOf("joe-1" to ProfileDto(id = "joe-1", name = "Joe", color = "#e8b14a", description = "worktree agent")),
+		)
+		// HelloOk kicks the learn thread that populates the profiles map
+		fake.emit(ServerEvent.HelloOk(agent = AgentInfo(model = "fake/glm", state = "idle")))
+		fake.emit(ServerEvent.AssistantFinal(id = "j1", text = "JOE_BUBBLE_TEST", target = null, profileId = "joe-1"))
+		rule.waitUntil(5_000) {
+			rule.onAllNodesWithText("Joe").fetchSemanticsNodes().isNotEmpty()
+		}
+		rule.onNodeWithText("JOE_BUBBLE_TEST").assertIsDisplayed()
+	}
+}

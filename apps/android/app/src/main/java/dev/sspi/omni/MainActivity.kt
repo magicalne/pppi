@@ -10,6 +10,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -176,7 +178,7 @@ class MainActivity : ComponentActivity() {
 	}
 }
 
-data class Msg(val id: String, val role: String, val text: String, val source: String?, val target: String? = null)
+data class Msg(val id: String, val role: String, val text: String, val source: String?, val target: String? = null, val profileId: String? = null)
 
 data class UiTarget(val id: String?, val label: String) {
 	companion object {
@@ -194,41 +196,238 @@ typealias ClientFactory = (
 @Composable
 fun SspiApp(theme: SspiTheme, setTheme: (String) -> Unit) {
 	val context = LocalContext.current
-	val prefs = remember { context.getSharedPreferences("sspi", Context.MODE_PRIVATE) }
-	var server by remember { mutableStateOf(prefs.getString("server", "") ?: "") }
-	var token by remember { mutableStateOf(prefs.getString("token", "") ?: "") }
+	val store = remember { ConnectionsStore(context) }
+	var connections by remember { mutableStateOf(store.load()) }
+	var activeId by remember { mutableStateOf<String?>(null) }
 	var showThemes by remember { mutableStateOf(false) }
+	var machinesOpen by remember { mutableStateOf(false) }
+	val conn = connections.firstOrNull { it.id == activeId } ?: connections.firstOrNull()
+
+	fun save(list: List<Connection>) {
+		connections = list
+		store.save(list)
+	}
+
+	fun upsert(c: Connection) {
+		save(listOf(c) + connections.filter { it.id != c.id })
+		activeId = c.id
+	}
+
+	fun remove(id: String) {
+		save(connections.filter { it.id != id })
+		if (activeId == id) activeId = connections.firstOrNull()?.id
+	}
 
 	if (showThemes) {
 		ThemesPage(theme, setTheme) { showThemes = false }
 		return
 	}
 
-	if (server.isNotBlank() && token.isNotBlank()) {
-		ChatScreen(
-			theme = theme,
-			server = server,
-			token = token,
-			onDisconnect = {
-				prefs.edit().clear().apply()
-				server = ""
-				token = ""
-			},
-			onOpenThemes = { showThemes = true },
-		)
-	} else {
-		PairingScreen(theme) { s, t ->
-			prefs.edit().putString("server", s).putString("token", t).apply()
-			server = s
-			token = t
+	// QR scanner for /pair codes (journeyapps zxing-embedded; CaptureActivity handles the camera)
+	val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { res ->
+		val text = res.contents ?: return@rememberLauncherForActivityResult
+		val parsed = parsePairInput(text)
+		if (parsed != null) {
+			val (url, token) = parsed
+			upsert(Connection(id = url, name = ConnectionsStore.hostOf(url), url = url, token = token))
 		}
 	}
+
+	if (conn != null) {
+		ChatScreen(
+			theme = theme,
+			server = conn.url,
+			token = conn.token,
+			onDisconnect = { remove(conn.id) },
+			onOpenThemes = { showThemes = true },
+			onOpenMachines = { machinesOpen = true },
+			onConnectionInfo = { name, color ->
+				save(connections.map { if (it.id == conn.id) it.copy(name = name ?: it.name, color = color ?: it.color) else it })
+			},
+		)
+	} else {
+		PairingScreen(
+			theme = theme,
+			onScan = {
+				val options = ScanOptions().apply {
+					setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+					setPrompt("scan the /pair QR on your machine")
+					setBeepEnabled(false)
+				}
+				scanLauncher.launch(options)
+			},
+			onPair = { url, token ->
+				upsert(Connection(id = url, name = ConnectionsStore.hostOf(url), url = url, token = token))
+			},
+		)
+	}
+
+	if (machinesOpen) {
+		MachinesDrawer(
+			theme = theme,
+			connections = connections,
+			activeId = conn?.id,
+			onSwitch = { id ->
+				activeId = id
+				machinesOpen = false
+			},
+			onRemove = { remove(it) },
+			onScan = {
+				val options = ScanOptions().apply {
+					setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+					setPrompt("scan the /pair QR on your machine")
+					setBeepEnabled(false)
+				}
+				scanLauncher.launch(options)
+			},
+			onAdd = { url, token ->
+				upsert(Connection(id = url, name = ConnectionsStore.hostOf(url), url = url, token = token))
+				machinesOpen = false
+			},
+			onClose = { machinesOpen = false },
+		)
+	}
+}
+
+// ---------------------------------------------------------------- machines drawer
+
+@Composable
+fun MachinesDrawer(
+	theme: SspiTheme,
+	connections: List<Connection>,
+	activeId: String?,
+	onSwitch: (String) -> Unit,
+	onRemove: (String) -> Unit,
+	onScan: () -> Unit,
+	onAdd: (String, String) -> Unit,
+	onClose: () -> Unit,
+) {
+	var link by remember { mutableStateOf("") }
+	var token by remember { mutableStateOf("") }
+	var error by remember { mutableStateOf<String?>(null) }
+
+	Box(
+		Modifier
+			.fillMaxSize()
+			.pointerInput(Unit) { detectTapGestures { onClose() } }
+			.background(Color.Black.copy(alpha = 0.45f)),
+	)
+	Column(
+		Modifier
+			.fillMaxHeight()
+			.fillMaxWidth(0.84f)
+			.widthIn(max = 340.dp)
+			.verticalScroll(rememberScrollState())
+			.background(theme.bg)
+			.padding(top = WindowInsets.safeDrawing.getTop(LocalDensity.current).dp + 12.dp)
+			.padding(horizontal = 14.dp)
+			.padding(bottom = 20.dp),
+	) {
+		Text("MACHINES", color = theme.dim, fontSize = 12.sp, modifier = Modifier.padding(vertical = 6.dp))
+		if (connections.isEmpty()) {
+			Text("No machines paired yet.", color = theme.dim, fontSize = 13.5.sp)
+		}
+		for (c in connections) {
+			Row(
+				Modifier
+					.fillMaxWidth()
+					.clip(RoundedCornerShape(12.dp))
+					.background(if (c.id == activeId) theme.surface else Color.Transparent)
+					.clickable { onSwitch(c.id) }
+					.padding(horizontal = 10.dp, vertical = 12.dp),
+				verticalAlignment = Alignment.CenterVertically,
+			) {
+				Box(Modifier.size(10.dp).clip(CircleShape).background(parseHexColor(c.color) ?: theme.dim))
+				Spacer(Modifier.width(10.dp))
+				Text(
+					c.name,
+					color = theme.text,
+					fontSize = 15.sp,
+					fontWeight = FontWeight.SemiBold,
+					maxLines = 1,
+					overflow = TextOverflow.Ellipsis,
+					modifier = Modifier.weight(1f),
+				)
+				Text(
+					"✕",
+					color = theme.dim,
+					fontSize = 13.sp,
+					modifier = Modifier
+						.clickable { onRemove(c.id) }
+						.padding(8.dp),
+				)
+			}
+		}
+		Spacer(Modifier.height(16.dp))
+		Box(Modifier.fillMaxWidth().height(1.dp).background(theme.line))
+		Spacer(Modifier.height(14.dp))
+		OutlinedTextField(
+			value = link,
+			onValueChange = { link = it },
+			placeholder = { Text("Paste pair link or server URL", color = theme.dim, fontSize = 14.sp) },
+			singleLine = true,
+			modifier = Modifier.fillMaxWidth().testTag("sspi.link"),
+			colors = fieldColors(theme),
+		)
+		Spacer(Modifier.height(8.dp))
+		OutlinedTextField(
+			value = token,
+			onValueChange = { token = it },
+			placeholder = { Text("Token (skip if the link has one)", color = theme.dim, fontSize = 14.sp) },
+			singleLine = true,
+			modifier = Modifier.fillMaxWidth().testTag("sspi.addToken"),
+			colors = fieldColors(theme),
+		)
+		error?.let {
+			Spacer(Modifier.height(8.dp))
+			Text(it, color = theme.danger, fontSize = 12.5.sp)
+		}
+		Spacer(Modifier.height(12.dp))
+		Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+			Button(
+				onClick = {
+					val parsed = parsePairInput(link, token)
+					if (parsed == null) {
+						error = "need a pair link, or a URL + token"
+					} else {
+						error = null
+						link = ""
+						token = ""
+						onAdd(parsed.first, parsed.second)
+					}
+				},
+				modifier = Modifier.weight(1f).testTag("sspi.addMachine"),
+				colors = ButtonDefaults.buttonColors(containerColor = theme.accent, contentColor = theme.accentInk),
+			) {
+				Text("Add", fontSize = 14.sp)
+			}
+			Button(
+				onClick = onScan,
+				modifier = Modifier.weight(1f).testTag("sspi.scan"),
+				colors = ButtonDefaults.buttonColors(containerColor = theme.surface, contentColor = theme.text),
+			) {
+				Text("Scan QR", fontSize = 14.sp)
+			}
+		}
+		Spacer(Modifier.height(10.dp))
+		Text(
+			"Run /pair in any pi session on the machine to get a link or QR.",
+			color = theme.dim,
+			fontSize = 12.sp,
+			lineHeight = 17.sp,
+		)
+	}
+}
+
+fun parseHexColor(hex: String?): Color? {
+	if (hex == null || !hex.matches(Regex("^#[0-9a-fA-F]{6}$"))) return null
+	return Color(android.graphics.Color.parseColor(hex))
 }
 
 // ---------------------------------------------------------------- pairing
 
 @Composable
-fun PairingScreen(theme: SspiTheme, onPair: (String, String) -> Unit) {
+fun PairingScreen(theme: SspiTheme, onScan: () -> Unit = {}, onPair: (String, String) -> Unit) {
 	var server by remember { mutableStateOf("") }
 	var token by remember { mutableStateOf("") }
 	var error by remember { mutableStateOf<String?>(null) }
@@ -243,7 +442,7 @@ fun PairingScreen(theme: SspiTheme, onPair: (String, String) -> Unit) {
 		Text("Pair with your omni agent", fontSize = 20.sp, color = theme.text)
 		Spacer(Modifier.height(8.dp))
 		Text(
-			"Start the sspi server on your Mac. It prints a pairing token — secrets stay on the Mac.",
+			"Scan the /pair QR, or paste the pair link. Secrets stay on the machine.",
 			fontSize = 13.sp,
 			color = theme.dim,
 		)
@@ -251,8 +450,8 @@ fun PairingScreen(theme: SspiTheme, onPair: (String, String) -> Unit) {
 		OutlinedTextField(
 			value = server,
 			onValueChange = { server = it },
-			label = { Text("Server") },
-			placeholder = { Text("http://192.168.1.10:8787") },
+			label = { Text("Pair link or server URL") },
+			placeholder = { Text("http://192.168.1.10:8787/?pair=…") },
 			singleLine = true,
 			modifier = Modifier.fillMaxWidth().testTag("sspi.server"),
 			colors = fieldColors(theme),
@@ -261,26 +460,34 @@ fun PairingScreen(theme: SspiTheme, onPair: (String, String) -> Unit) {
 		OutlinedTextField(
 			value = token,
 			onValueChange = { token = it },
-			label = { Text("Pairing token") },
+			label = { Text("Token (skip if the link has one)") },
 			singleLine = true,
 			modifier = Modifier.fillMaxWidth().testTag("sspi.token"),
 			colors = fieldColors(theme),
 		)
 		Spacer(Modifier.height(20.dp))
-		Button(
-			onClick = {
-				val s = server.trim().trimEnd('/')
-				val t = token.trim()
-				if (!s.startsWith("http") || t.isEmpty()) {
-					error = "need a server URL and the token"
-				} else {
-					onPair(s, t)
-				}
-			},
-			modifier = Modifier.fillMaxWidth().testTag("sspi.connect"),
-			colors = ButtonDefaults.buttonColors(containerColor = theme.accent, contentColor = theme.accentInk),
-		) {
-			Text("Connect")
+		Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+			Button(
+				onClick = {
+					val parsed = parsePairInput(server, token)
+					if (parsed == null) {
+						error = "need a pair link, or a URL + token"
+					} else {
+						onPair(parsed.first, parsed.second)
+					}
+				},
+				modifier = Modifier.weight(1f).testTag("sspi.connect"),
+				colors = ButtonDefaults.buttonColors(containerColor = theme.accent, contentColor = theme.accentInk),
+			) {
+				Text("Connect")
+			}
+			Button(
+				onClick = onScan,
+				modifier = Modifier.weight(1f).testTag("sspi.scan"),
+				colors = ButtonDefaults.buttonColors(containerColor = theme.surface, contentColor = theme.text),
+			) {
+				Text("Scan QR")
+			}
 		}
 		error?.let {
 			Spacer(Modifier.height(12.dp))
@@ -310,7 +517,11 @@ fun ChatScreen(
 	token: String,
 	onDisconnect: () -> Unit,
 	onOpenThemes: () -> Unit,
+	onOpenMachines: () -> Unit = {},
+	onConnectionInfo: (String?, String?) -> Unit = { _, _ -> },
 	clientFactory: ClientFactory = ::sspiClientFactory,
+	sessionsFetcher: (String, String) -> SessionsResponseDto? = { s, t -> fetchSessions(s, t) },
+	pairFetcher: (String, String) -> PairInfoDto? = { s, t -> fetchPairInfo(s, t) },
 ) {
 	val haptics = LocalHapticFeedback.current
 	val messages = remember { mutableStateListOf<Msg>() }
@@ -340,7 +551,19 @@ fun ChatScreen(
 					is ServerEvent.HelloOk -> {
 						agentState = evt.agent.state
 						messages.clear()
-						messages.addAll(evt.history.map { Msg(it.id, it.role, it.text, it.source, it.target) })
+						messages.addAll(evt.history.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId) })
+						// learn the machine's name + omni profile color once, off the UI thread
+						thread(name = "sspi-learn") {
+							try {
+								val info = pairFetcher(server, token)
+								val sess = sessionsFetcher(server, token)
+								sessions = sess
+								val omniColor = sess?.profiles?.get(sess.omniSessionId)?.color
+								onConnectionInfo(info?.machine, omniColor)
+							} catch (_: Exception) {
+								// offline — keep the host name
+							}
+						}
 					}
 					is ServerEvent.HelloFail -> {
 						notice = evt.error
@@ -362,13 +585,13 @@ fun ChatScreen(
 							val m = messages[idx]
 							messages[idx] = m.copy(text = m.text + evt.delta)
 						} else {
-							messages.add(Msg(evt.id, "assistant", evt.delta, null, evt.target))
+							messages.add(Msg(evt.id, "assistant", evt.delta, null, evt.target, evt.profileId))
 						}
 					}
 					is ServerEvent.AssistantFinal -> {
 						val idx = messages.indexOfFirst { it.id == evt.id }
-						if (idx >= 0) messages[idx] = Msg(evt.id, "assistant", evt.text, null, evt.target)
-						else messages.add(Msg(evt.id, "assistant", evt.text, null, evt.target))
+						if (idx >= 0) messages[idx] = Msg(evt.id, "assistant", evt.text, null, evt.target, evt.profileId)
+						else messages.add(Msg(evt.id, "assistant", evt.text, null, evt.target, evt.profileId))
 					}
 					is ServerEvent.AgentStateEvt -> {
 						agentState = evt.state
@@ -404,7 +627,7 @@ fun ChatScreen(
 	LaunchedEffect(sheetOpen, selected) {
 		while (sheetOpen || selected.id != null) {
 			sessions = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-				fetchSessions(server, token)
+				sessionsFetcher(server, token)
 			}
 			delay(5000)
 		}
@@ -513,17 +736,27 @@ fun ChatScreen(
 	val dotDesc = if (connected) "connected" else "connecting…"
 
 	Column(modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-		// ---- presence bar (PRD §3): tap = session switcher
-			Row(
-				modifier = Modifier
-					.fillMaxWidth()
-					.background(theme.bg)
-					.clickable { sheetOpen = true }
-					.semantics { contentDescription = "sessions" }
-					.onGloballyPositioned { headerPx = it.size.height }
-					.padding(horizontal = 16.dp, vertical = 12.dp),
+		// ---- presence bar (PRD §3): ☰ = machines · tap = target tree
+		Row(
+			modifier = Modifier
+				.fillMaxWidth()
+				.background(theme.bg)
+				.clickable { sheetOpen = true }
+				.semantics { contentDescription = "sessions" }
+				.onGloballyPositioned { headerPx = it.size.height }
+				.padding(horizontal = 16.dp, vertical = 12.dp),
 			verticalAlignment = Alignment.CenterVertically,
 		) {
+			Text(
+				"☰",
+				color = theme.dim,
+				fontSize = 17.sp,
+				modifier = Modifier
+					.clickable { onOpenMachines() }
+					.padding(8.dp)
+					.semantics { contentDescription = "machines" },
+			)
+			Spacer(Modifier.width(8.dp))
 			Box(
 				modifier = Modifier
 					.size(10.dp)
@@ -595,12 +828,31 @@ fun ChatScreen(
 						)
 					}
 				} else {
-					Row(Modifier.fillMaxWidth()) {
-						Box(Modifier.width(8.dp).padding(top = 8.dp)) {
-							Box(Modifier.size(7.dp).clip(CircleShape).background(theme.accent.copy(alpha = 0.85f)))
+					val prof = m.profileId?.let { pid -> sessions?.profiles?.get(pid) }
+					if (prof != null) {
+						// a profiled agent replied (delegation) — tint the bubble with its color
+						Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+							Text(prof.name, color = theme.dim, fontSize = 12.sp, modifier = Modifier.padding(end = 4.dp, bottom = 3.dp))
+							Text(
+								text = m.text.ifEmpty { "…" },
+								color = Color(0xFF141210),
+								fontSize = 17.sp,
+								lineHeight = 26.sp,
+								modifier = Modifier
+									.widthIn(max = 300.dp)
+									.clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 6.dp))
+									.background(parseHexColor(prof.color) ?: theme.accent)
+									.padding(horizontal = 14.dp, vertical = 10.dp),
+							)
 						}
-						Spacer(Modifier.width(10.dp))
-						Text(m.text.ifEmpty { "…" }, color = theme.text, fontSize = 17.sp, lineHeight = 26.sp)
+					} else {
+						Row(Modifier.fillMaxWidth()) {
+							Box(Modifier.width(8.dp).padding(top = 8.dp)) {
+								Box(Modifier.size(7.dp).clip(CircleShape).background(theme.accent.copy(alpha = 0.85f)))
+							}
+							Spacer(Modifier.width(10.dp))
+							Text(m.text.ifEmpty { "…" }, color = theme.text, fontSize = 17.sp, lineHeight = 26.sp)
+						}
 					}
 				}
 			}
@@ -893,6 +1145,20 @@ fun fetchSessions(server: String, token: String): SessionsResponseDto? {
 		val body = conn.inputStream.readBytes().decodeToString()
 		conn.disconnect()
 		sessionJson.decodeFromString(SessionsResponseDto.serializer(), body)
+	} catch (_: Exception) {
+		null
+	}
+}
+
+fun fetchPairInfo(server: String, token: String): PairInfoDto? {
+	return try {
+		val conn = URL("${server.trimEnd('/')}/api/pair").openConnection() as HttpURLConnection
+		conn.setRequestProperty("Authorization", "Bearer $token")
+		conn.connectTimeout = 3000
+		conn.readTimeout = 5000
+		val body = conn.inputStream.readBytes().decodeToString()
+		conn.disconnect()
+		sessionJson.decodeFromString(PairInfoDto.serializer(), body)
 	} catch (_: Exception) {
 		null
 	}

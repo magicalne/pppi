@@ -28,7 +28,7 @@ class PairingScreenTest {
 	fun emptyFieldsShowValidationError() {
 		setContent()
 		rule.onNodeWithTag("sspi.connect").performClick()
-		rule.onNodeWithText("need a server URL and the token").assertIsDisplayed()
+		rule.onNodeWithText("need a pair link, or a URL + token").assertIsDisplayed()
 		assertEquals(null, paired)
 	}
 
@@ -39,5 +39,21 @@ class PairingScreenTest {
 		rule.onNodeWithTag("sspi.token").performTextInput("abc123")
 		rule.onNodeWithTag("sspi.connect").performClick()
 		assertEquals("http://10.0.2.2:8787" to "abc123", paired)
+	}
+
+	@Test
+	fun pairLinkCarriesTokenWithoutTokenField() {
+		setContent()
+		rule.onNodeWithTag("sspi.server").performTextInput("http://192.168.1.9:8787/?pair=deadbeef99")
+		rule.onNodeWithTag("sspi.connect").performClick()
+		assertEquals("http://192.168.1.9:8787" to "deadbeef99", paired)
+	}
+
+	@Test
+	fun parsePairInputRejectsGarbage() {
+		assertEquals(null, parsePairInput("not a url"))
+		assertEquals("http://host:1" to "abc", parsePairInput("http://host:1/?pair=abc")) // link is self-sufficient
+		assertEquals("http://host:1" to "tok", parsePairInput("http://host:1", "tok"))
+		assertEquals(null, parsePairInput("http://host:1")) // url without token anywhere
 	}
 }
