@@ -69,6 +69,11 @@ export default function App() {
 		};
 	}, [pairing]);
 
+	function showNotice(message: string) {
+		setNotice(message);
+		setTimeout(() => setNotice((cur) => (cur === message ? null : cur)), 6000);
+	}
+
 	function handleEvent(evt: ServerEvent) {
 		switch (evt.type) {
 			case "hello_ok":
@@ -79,7 +84,7 @@ export default function App() {
 				);
 				break;
 			case "hello_fail":
-				setNotice(evt.error);
+				showNotice(evt.error);
 				setPairing(null);
 				localStorage.removeItem("sspi.pairing");
 				break;
@@ -125,8 +130,7 @@ export default function App() {
 				break;
 			case "agent_notify":
 			case "error":
-				setNotice(evt.message);
-				setTimeout(() => setNotice(null), 6000);
+				showNotice(evt.message);
 				break;
 		}
 	}
@@ -154,8 +158,7 @@ export default function App() {
 			});
 			const body = await res.json().catch(() => ({ error: "bad response" }));
 			if (!res.ok || !body.ok) {
-				setNotice(body.error ?? `voice failed (${res.status})`);
-				setTimeout(() => setNotice(null), 6000);
+				showNotice(body.error ?? `voice failed (${res.status})`);
 			}
 			return;
 		}
@@ -172,8 +175,7 @@ export default function App() {
 			recorderRef.current = rec;
 			setRecording(true);
 		} catch {
-			setNotice("microphone unavailable — check permissions");
-			setTimeout(() => setNotice(null), 6000);
+			showNotice("microphone unavailable — check permissions");
 		}
 	}, [recording, pairing]);
 

@@ -18,14 +18,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -120,7 +122,7 @@ fun SspiApp() {
 		)
 	} else {
 		PairingScreen(
-			initialServer = "http://",
+			initialServer = prefs.getString("server", "") ?: "",
 			onPair = { s, t ->
 				prefs.edit().putString("server", s).putString("token", t).apply()
 				server = s
@@ -137,7 +139,7 @@ fun PairingScreen(initialServer: String, onPair: (String, String) -> Unit) {
 	var error by remember { mutableStateOf<String?>(null) }
 
 	Column(
-		modifier = Modifier.fillMaxSize().imePadding().padding(24.dp),
+		modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(24.dp),
 		verticalArrangement = Arrangement.Center,
 	) {
 		Text("sspi", fontSize = 40.sp, color = Text0)
@@ -154,7 +156,8 @@ fun PairingScreen(initialServer: String, onPair: (String, String) -> Unit) {
 		OutlinedTextField(
 			value = server,
 			onValueChange = { server = it },
-			label = { Text("Server (e.g. http://192.168.1.10:8787)") },
+			label = { Text("Server") },
+			placeholder = { Text("http://192.168.1.10:8787") },
 			singleLine = true,
 			modifier = Modifier.fillMaxWidth(),
 		)
@@ -216,7 +219,10 @@ fun ChatScreen(server: String, token: String, onDisconnect: () -> Unit) {
 						messages.clear()
 						messages.addAll(evt.history.map { Msg(it.id, it.role, it.text, it.source) })
 					}
-					is ServerEvent.HelloFail -> notice = evt.error
+					is ServerEvent.HelloFail -> {
+						notice = evt.error
+						onDisconnect() // bad token → back to pairing instead of endless "connecting…"
+					}
 					is ServerEvent.Transcript -> {
 						pendingVoiceId = evt.id
 						messages.add(Msg(evt.id, "user", evt.text, "voice"))
@@ -273,12 +279,13 @@ fun ChatScreen(server: String, token: String, onDisconnect: () -> Unit) {
 		recording = true
 		haptics.performHapticFeedback(HapticFeedbackType.LongPress)
 		val minBuf = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+		// generous buffer: absorbs audio bursts and GC pauses instead of dropping samples
 		val record = AudioRecord(
 			MediaRecorder.AudioSource.MIC,
 			16000,
 			AudioFormat.CHANNEL_IN_MONO,
 			AudioFormat.ENCODING_PCM_16BIT,
-			minBuf * 2,
+			maxOf(minBuf * 2, 32000 * 2),
 		)
 		record.startRecording()
 		thread(name = "sspi-rec") {
@@ -346,7 +353,7 @@ fun ChatScreen(server: String, token: String, onDisconnect: () -> Unit) {
 		else -> "one session · every screen"
 	}
 
-	Column(modifier = Modifier.fillMaxSize().imePadding()) {
+	Column(modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
 		// header
 		Row(
 			modifier = Modifier.fillMaxWidth().background(Panel).padding(horizontal = 16.dp, vertical = 14.dp),
