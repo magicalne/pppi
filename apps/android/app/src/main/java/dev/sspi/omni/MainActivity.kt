@@ -58,6 +58,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -159,7 +160,7 @@ fun PairingScreen(initialServer: String, onPair: (String, String) -> Unit) {
 			label = { Text("Server") },
 			placeholder = { Text("http://192.168.1.10:8787") },
 			singleLine = true,
-			modifier = Modifier.fillMaxWidth(),
+			modifier = Modifier.fillMaxWidth().testTag("sspi.server"),
 		)
 		Spacer(Modifier.height(12.dp))
 		OutlinedTextField(
@@ -167,7 +168,7 @@ fun PairingScreen(initialServer: String, onPair: (String, String) -> Unit) {
 			onValueChange = { token = it },
 			label = { Text("Pairing token") },
 			singleLine = true,
-			modifier = Modifier.fillMaxWidth(),
+			modifier = Modifier.fillMaxWidth().testTag("sspi.token"),
 		)
 		Spacer(Modifier.height(20.dp))
 		Button(
@@ -180,7 +181,7 @@ fun PairingScreen(initialServer: String, onPair: (String, String) -> Unit) {
 					onPair(s, t)
 				}
 			},
-			modifier = Modifier.fillMaxWidth(),
+			modifier = Modifier.fillMaxWidth().testTag("sspi.connect"),
 		) {
 			Text("Connect")
 		}
@@ -191,8 +192,20 @@ fun PairingScreen(initialServer: String, onPair: (String, String) -> Unit) {
 	}
 }
 
+typealias ClientFactory = (
+	serverUrl: String,
+	token: String,
+	onEvent: (ServerEvent) -> Unit,
+	onConnection: (Boolean) -> Unit,
+) -> SspiConnection
+
 @Composable
-fun ChatScreen(server: String, token: String, onDisconnect: () -> Unit) {
+fun ChatScreen(
+	server: String,
+	token: String,
+	onDisconnect: () -> Unit,
+	clientFactory: ClientFactory = ::sspiClientFactory,
+) {
 	val haptics = LocalHapticFeedback.current
 	val messages = remember { mutableStateListOf<Msg>() }
 	var connected by remember { mutableStateOf(false) }
@@ -209,10 +222,10 @@ fun ChatScreen(server: String, token: String, onDisconnect: () -> Unit) {
 	val keepRecording = remember { AtomicBoolean(false) }
 
 	val client = remember {
-		SspiClient(
-			serverUrl = server,
-			token = token,
-			onEvent = { evt ->
+		clientFactory(
+			server,
+			token,
+			{ evt ->
 				when (evt) {
 					is ServerEvent.HelloOk -> {
 						agentState = evt.agent.state
@@ -257,8 +270,7 @@ fun ChatScreen(server: String, token: String, onDisconnect: () -> Unit) {
 					is ServerEvent.AgentInfoEvt -> {}
 				}
 			},
-			onConnection = { ok -> connected = ok },
-		)
+		) { ok -> connected = ok }
 	}
 
 	DisposableEffect(Unit) {
@@ -410,6 +422,7 @@ fun ChatScreen(server: String, token: String, onDisconnect: () -> Unit) {
 			Box(
 				modifier = Modifier
 					.size(84.dp)
+					.testTag("sspi.mic")
 					.clip(CircleShape)
 					.background(if (recording) Rec else Color(0xFF22304F))
 					.border(3.dp, if (recording) Rec else Line, CircleShape)
@@ -453,7 +466,7 @@ fun ChatScreen(server: String, token: String, onDisconnect: () -> Unit) {
 					onValueChange = { input = it },
 					placeholder = { Text("or type…", color = Dim) },
 					singleLine = true,
-					modifier = Modifier.weight(1f),
+					modifier = Modifier.weight(1f).testTag("sspi.composer"),
 				)
 				Spacer(Modifier.width(8.dp))
 				Button(
@@ -466,6 +479,7 @@ fun ChatScreen(server: String, token: String, onDisconnect: () -> Unit) {
 					},
 					enabled = input.isNotBlank(),
 					colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Bg),
+					modifier = Modifier.testTag("sspi.send"),
 				) {
 					Text("send")
 				}

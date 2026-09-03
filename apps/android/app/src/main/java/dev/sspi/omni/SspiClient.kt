@@ -18,7 +18,7 @@ class SspiClient(
 	private var token: String,
 	private val onEvent: (ServerEvent) -> Unit,
 	private val onConnection: (Boolean) -> Unit,
-) {
+) : SspiConnection {
 
 	private val http = OkHttpClient.Builder()
 		.connectTimeout(5, TimeUnit.SECONDS)
@@ -29,7 +29,7 @@ class SspiClient(
 	private var closedByUser = false
 	private var retryDelayMs = 1_000L
 
-	fun connect() {
+	override fun connect() {
 		closedByUser = false
 		val url = serverUrl.trimEnd('/').replaceFirst("http", "ws") + "/ws"
 		val request = Request.Builder().url(url).build()
@@ -72,16 +72,16 @@ class SspiClient(
 		retryDelayMs = (retryDelayMs * 2).coerceAtMost(15_000)
 	}
 
-	fun sendChat(text: String) {
+	override fun sendChat(text: String) {
 		ws?.send(protocolJson.encodeToString(ClientMessage.serializer(), ClientMessage.Chat(text)))
 	}
 
-	fun abort() {
+	override fun abort() {
 		ws?.send(protocolJson.encodeToString(ClientMessage.serializer(), ClientMessage.Abort()))
 	}
 
 	/** Upload a voice recording; the server transcribes locally and prompts the omni agent. */
-	fun uploadVoice(wav: ByteArray, onDone: (Boolean, String) -> Unit) {
+	override fun uploadVoice(wav: ByteArray, onDone: (Boolean, String) -> Unit) {
 		val url = serverUrl.trimEnd('/') + "/api/voice"
 		val req = Request.Builder()
 			.url(url)
@@ -108,7 +108,7 @@ class SspiClient(
 		)
 	}
 
-	fun close() {
+	override fun close() {
 		closedByUser = true
 		ws?.close(1000, "bye")
 		ws = null
