@@ -22,7 +22,7 @@ class FakeSspiConnection : SspiConnection {
 		connectCount++
 	}
 
-	override fun sendChat(text: String) {
+	override fun sendChat(text: String, target: String?) {
 		chats.add(text)
 	}
 

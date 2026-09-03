@@ -51,6 +51,25 @@ def dump() -> str:
     return ""
 
 
+def wait_for_desc(desc: str, timeout: float = 30.0) -> bool:
+    """Wait until a node with content-desc=desc appears (presence dot etc.)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if f'content-desc="{desc}"' in dump():
+            return True
+        time.sleep(1)
+    return False
+
+
+def tap_desc(desc: str) -> bool:
+    xml = dump()
+    m = re.search(rf'content-desc="{desc}"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml)
+    if not m:
+        return False
+    tap((int(m.group(1)) + int(m.group(3))) // 2, (int(m.group(2)) + int(m.group(4))) // 2)
+    return True
+
+
 def texts(xml: str) -> list[str]:
     return [m for m in re.findall(r'text="([^"]+)"', xml) if m.strip()]
 
@@ -144,7 +163,7 @@ def phase_pair() -> None:
     time.sleep(1)
 
     check("connect button tapped", tap_text("Connect"))
-    check("connected (status text)", wait_for_text("one session · every screen", 20))
+    check("connected (presence dot)", wait_for_desc("connected", 25))
 
 
 def phase_chat() -> None:
@@ -157,7 +176,7 @@ def phase_chat() -> None:
     time.sleep(1)
     type_text("e2e ping")
     time.sleep(1)
-    check("send tapped", tap_text("send"))
+    shell("input keyevent 66")  # Enter → IME Send action
     check("mock agent reply mirrored", wait_for_text(MOCK_REPLY, 40))
 
 
@@ -165,15 +184,14 @@ def phase_voice() -> None:
     before = set(texts(dump()))
     started = False
     for _ in range(2):
-        # the ● dot lives INSIDE the mic button; the "hold to talk" label is
-        # ~150px below it — tapping the label misses the button
-        mic = bounds_center(dump(), "●") or bounds_center(dump(), "■") or bounds_center(dump(), "hold to talk")
+        # the ● dot lives INSIDE the mic button; the label below it is not tappable
+        mic = bounds_center(dump(), "●") or bounds_center(dump(), "■")
         if mic is None:
             break
         x, y = mic
         shell(f"input swipe {x} {y} {x + 7} {y + 11} 800")
         time.sleep(2)
-        if "recording" in dump():
+        if "listening" in dump():
             started = True
             break
     check("recording started", started)
@@ -181,7 +199,7 @@ def phase_voice() -> None:
         return
     if VOICE_WAV and os.path.exists(VOICE_WAV):
         subprocess.run(["afplay", VOICE_WAV], timeout=30)
-    shell(f"input tap {x} {y - 20}")
+    shell(f"input tap {x} {y}")
     # outcome A: gateway transcribed a fragment -> transcript bubble appears
     # outcome B: silence -> 422 toast "transcript was empty…"
     deadline = time.time() + 25
@@ -202,7 +220,9 @@ def phase_voice() -> None:
 
 
 def phase_unpair() -> None:
-    check("unpair tapped", tap_text("unpair"))
+    check("session sheet opened", tap_desc("sessions"))
+    check("unpair visible", wait_for_text("Unpair this device", 10))
+    check("unpair tapped", tap_text("Unpair this device"))
     check("back on pairing screen", wait_for_text("Pair with your omni agent", 10))
 
 
@@ -217,9 +237,14 @@ def phase_offline() -> None:
 
 
 def phase_reconnect() -> None:
-    check("reconnected after gateway restart", wait_for_text("one session · every screen", 60))
+    check("reconnected after gateway restart", wait_for_desc("connected", 90))
     # fresh gateway = empty history; prove the reconnect with a new round trip
-    composer = edit_field_center(dump(), 0)
+    composer = None
+    for _ in range(6):  # dumps can transiently fail right after a long poll loop
+        composer = edit_field_center(dump(), 0)
+        if composer:
+            break
+        time.sleep(2)
     check("composer found after reconnect", composer is not None)
     if composer is None:
         return
@@ -227,7 +252,7 @@ def phase_reconnect() -> None:
     time.sleep(1)
     type_text("e2e reconnect ping")
     time.sleep(1)
-    check("send tapped after reconnect", tap_text("send"))
+    shell("input keyevent 66")
     check("post-reconnect reply", wait_for_text(MOCK_REPLY, 40))
 
 

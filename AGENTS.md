@@ -5,18 +5,24 @@ sessions. Read README.md for the full picture.
 
 ## Ground rules
 
-- **One omni session, many clients.** Never add multi-session UI to web or
-  android clients. They mirror the single omni conversation the gateway owns.
+- **One conversation per screen, switchable target.** Clients never show
+  multi-session UI (no split views, no session-list pages). They mirror one
+  conversation at a time; the session switcher sheet only changes *which*
+  session that conversation is with (omni by default, or a repo/worktree
+  session).
 - **Secrets stay on the Mac.** Clients hold only the pairing token. Never
   ship provider keys, never log them, never echo env secrets through agent
   replies.
 - **Voice first.** Any new client feature must work with hold-to-talk first;
-  text input is the fallback.
+  text input is the fallback. Enter/IME-send always sends; no send buttons.
 - **Two layers, no shortcuts.** omni → repo sessions (pigeon), repo →
   worktrees (git worktrees under `.worktrees/` on `wt/*` branches).
 - **Local STT only.** The voice path uses transcribe.cpp GGUF models
   (parakeet-unified-en-0.6b is the recommendation from pi-transcribe's
   catalog). No cloud STT.
+- **Design source of truth:** docs/design/ui-prd.md — five themes as design
+  tokens (tokens.css on web, SspiThemes on Android), "talk to a person not a
+  terminal" grammar for the live status line. New UI must use the tokens.
 
 ## Stack conventions
 

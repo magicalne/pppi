@@ -75,8 +75,10 @@ class SspiClient(
 		retryDelayMs = (retryDelayMs * 2).coerceAtMost(15_000)
 	}
 
-	override fun sendChat(text: String) {
-		ws?.send(protocolJson.encodeToString(ClientMessage.serializer(), ClientMessage.Chat(text)))
+	override fun sendChat(text: String, target: String?) {
+		ws?.send(
+			protocolJson.encodeToString(ClientMessage.serializer(), ClientMessage.Chat(text, target = target)),
+		)
 	}
 
 	override fun abort() {

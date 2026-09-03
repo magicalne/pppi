@@ -11,11 +11,14 @@ import fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import type { WebSocket } from "ws";
+import type { PeerSession, SessionsResponse, Target } from "@sspi/protocol";
 import { RpcAgentDriver } from "./agent.ts";
 import { tokensMatch } from "./config.ts";
 import { Stt } from "./stt.ts";
 import { decodeWav, WavError } from "./wav.ts";
 import type { ChatEntry, ClientMessage, ServerEvent } from "@sspi/protocol";
+import { listSessions, pigeon, type PigeonSession } from "@sspi/omni/pigeon";
+import { loadRegistry } from "@sspi/omni/repos";
 
 export type ServerOptions = {
 	token: string;
@@ -28,10 +31,41 @@ export type ServerOptions = {
 
 type AuthedSocket = WebSocket & { authed?: boolean };
 
+function classify(omniSessionId: string, registryDir?: string): SessionsResponse {
+	const empty: SessionsResponse = { omniSessionId, projects: [], others: [] };
+	const res = listSessions();
+	if (!Array.isArray(res)) return empty;
+	const reg = loadRegistry(registryDir);
+		const peer = (s: PigeonSession): PeerSession => {
+			const wtMatch = s.cwd.includes("/.worktrees/")
+				? s.cwd.split("/.worktrees/")[1]?.split("/")[0]
+				: undefined;
+			return {
+				sessionId: s.sessionId,
+				name: s.name,
+				state: s.state === "idle" ? "idle" : s.state === "unreach" ? "unreachable" : "busy",
+				cwd: s.cwd,
+				branch: wtMatch ? "worktree" : "main",
+				worktree: wtMatch ?? null,
+			};
+		};
+	const projects = reg.repos.map((r) => ({
+		name: r.name,
+		path: r.path,
+		sessions: res
+			.filter((s) => !s.me && (s.cwd === r.path || s.cwd.startsWith(`${r.path}/`)))
+			.map(peer),
+	}));
+	const claimed = new Set(projects.flatMap((p) => p.sessions.map((s) => s.sessionId)));
+	const others = res.filter((s) => !s.me && !claimed.has(s.sessionId)).map(peer);
+	return { omniSessionId, projects, others };
+}
+
 export async function createServer(opts: ServerOptions): Promise<FastifyInstance> {
 	const app = fastify({ logger: false, bodyLimit: opts.maxVoiceBytes ?? 25 * 1024 * 1024 }) as FastifyInstance;
 
 	const clients = new Set<AuthedSocket>();
+	let sessionsCache: { at: number; data: SessionsResponse } | null = null;
 
 	function broadcast(evt: ServerEvent): void {
 		const line = JSON.stringify(evt);
@@ -44,12 +78,33 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		}
 	}
 
-	// ---------------------------------------------------------------- agent wiring
+	async function sendToPeer(text: string, target: string): Promise<void> {
+		const id = randomUUID();
+		broadcast({ type: "user_message", id, text, source: "text", target });
+		// pigeon --wait blocks until the peer session replies (or timeout)
+		const res = await pigeon(["send", target, text, "--wait", "--timeout", "120"], {
+			timeoutMs: 130_000,
+		});
+		if (res.code === 0) {
+			// stdout: "✉ accepted by X — msg id\n\n<reply text>"
+			const reply = res.stdout.split("\n\n").slice(1).join("\n\n").trim();
+			broadcast({
+				type: "assistant_final",
+				id: randomUUID(),
+				text: reply || "(empty reply)",
+				target,
+			});
+		} else {
+			const why = res.stderr.trim().split("\n")[0] || `pigeon exited ${res.code}`;
+			broadcast({ type: "error", message: why, target });
+		}
+	}
 
+	// driver events are always the omni conversation (no target)
 	opts.driver.on("state", (state, toolName) => broadcast({ type: "agent_state", state, toolName }));
 	opts.driver.on("assistant-delta", (id, delta) => broadcast({ type: "assistant_delta", id, delta }));
 	opts.driver.on("assistant-final", (id, text) => broadcast({ type: "assistant_final", id, text }));
-	opts.driver.on("tool", (toolName, phase) => broadcast({ type: "tool_event", toolName, phase }));
+	opts.driver.on("tool", (toolName, phase, label) => broadcast({ type: "tool_event", toolName, phase, label }));
 	opts.driver.on("notify", (level, message) => broadcast({ type: "agent_notify", level, message }));
 	opts.driver.on("error", (message) => broadcast({ type: "error", message }));
 	opts.driver.on("info", (info) =>
@@ -59,11 +114,15 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		}),
 	);
 
-	async function submitUserText(text: string, source: "voice" | "text"): Promise<{ id: string; transcript?: string }> {
+	async function submitUserText(text: string, source: "voice" | "text", target?: Target): Promise<{ id: string }> {
 		const id = randomUUID();
-		if (source === "voice") broadcast({ type: "transcript", id, text });
-		broadcast({ type: "user_message", id, text, source });
-		await opts.driver.prompt(text);
+		if (!target || target === opts.driver.info.sessionId) {
+			if (source === "voice") broadcast({ type: "transcript", id, text });
+			broadcast({ type: "user_message", id, text, source });
+			await opts.driver.prompt(text);
+			return { id };
+		}
+		await sendToPeer(text, target);
 		return { id };
 	}
 
@@ -105,6 +164,14 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		return { ok: true, id, transcript };
 	});
 
+	app.get("/api/sessions", async () => {
+		const omniId = opts.driver.info.sessionId ?? "omni";
+		if (sessionsCache && Date.now() - sessionsCache.at < 3_000) return sessionsCache.data;
+		const data = classify(omniId);
+		sessionsCache = { at: Date.now(), data };
+		return data;
+	});
+
 	// ---------------------------------------------------------------- websocket
 
 	await app.register(fastifyWebsocket, { options: { maxPayload: 1024 * 1024 } });
@@ -142,7 +209,11 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 			}
 			if (msg.type === "chat") {
 				const text = (msg.text ?? "").trim();
-				if (text) submitUserText(text, msg.source ?? "text").catch((err) => send(socket, { type: "error", message: String(err.message ?? err) }));
+				if (text) {
+					submitUserText(text, msg.source ?? "text", msg.target).catch((err) =>
+						send(socket, { type: "error", message: String(err.message ?? err), target: msg.target }),
+					);
+				}
 			} else if (msg.type === "abort") {
 				opts.driver.abort();
 			}

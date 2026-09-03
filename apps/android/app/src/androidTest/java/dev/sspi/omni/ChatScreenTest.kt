@@ -1,11 +1,13 @@
 package dev.sspi.omni
 
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.text.input.ImeAction
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -27,11 +29,14 @@ class ChatScreenTest {
 	fun setUp() {
 		fake = FakeSspiConnection()
 		disconnected = false
+		val theme = themeById("dusk")
 		rule.setContent {
 			ChatScreen(
+				theme = theme,
 				server = "http://test:1",
 				token = "test-token",
 				onDisconnect = { disconnected = true },
+				onOpenThemes = {},
 				clientFactory = { _, _, onEvent, onConnection ->
 					fake.also { it.bind(onEvent, onConnection) }
 				},
@@ -72,9 +77,9 @@ class ChatScreenTest {
 	}
 
 	@Test
-	fun composerSendsThroughConnectionAndClears() {
+	fun composerSendsViaImeAction() {
 		rule.onNodeWithTag("sspi.composer").performTextInput("hello omni")
-		rule.onNodeWithTag("sspi.send").performClick()
+		rule.onNodeWithTag("sspi.composer").performImeAction()
 		rule.waitForIdle()
 		org.junit.Assert.assertEquals(listOf("hello omni"), fake.chats)
 	}
@@ -93,7 +98,7 @@ class ChatScreenTest {
 		fake.emit(ServerEvent.AgentStateEvt(state = "tool", toolName = "omni_repos"))
 		rule.waitForIdle()
 		fake.emit(ServerEvent.AgentStateEvt(state = "idle"))
-		rule.onNodeWithText("one session · every screen").assertIsDisplayed()
+		rule.onNodeWithContentDescription("connected").assertExists()
 	}
 
 	@Test

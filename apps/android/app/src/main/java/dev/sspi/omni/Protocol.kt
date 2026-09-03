@@ -30,23 +30,23 @@ sealed class ServerEvent {
 
 	@Serializable
 	@SerialName("user_message")
-	data class UserMessage(val id: String, val text: String, val source: String = "text") : ServerEvent()
+	data class UserMessage(val id: String, val text: String, val source: String = "text", val target: String? = null) : ServerEvent()
 
 	@Serializable
 	@SerialName("transcript")
-	data class Transcript(val id: String, val text: String) : ServerEvent()
+	data class Transcript(val id: String, val text: String, val target: String? = null) : ServerEvent()
 
 	@Serializable
 	@SerialName("assistant_delta")
-	data class AssistantDelta(val id: String, val delta: String) : ServerEvent()
+	data class AssistantDelta(val id: String, val delta: String, val target: String? = null) : ServerEvent()
 
 	@Serializable
 	@SerialName("assistant_final")
-	data class AssistantFinal(val id: String, val text: String) : ServerEvent()
+	data class AssistantFinal(val id: String, val text: String, val target: String? = null) : ServerEvent()
 
 	@Serializable
 	@SerialName("tool_event")
-	data class ToolEvent(val toolName: String, val phase: String) : ServerEvent()
+	data class ToolEvent(val toolName: String, val phase: String, val label: String? = null) : ServerEvent()
 
 	@Serializable
 	@SerialName("agent_notify")
@@ -54,7 +54,7 @@ sealed class ServerEvent {
 
 	@Serializable
 	@SerialName("error")
-	data class ErrorEvt(val message: String) : ServerEvent()
+	data class ErrorEvt(val message: String, val target: String? = null) : ServerEvent()
 }
 
 @Serializable
@@ -72,6 +72,7 @@ data class ChatEntry(
 	val text: String,
 	val source: String? = null,
 	val ts: Long = 0,
+	val target: String? = null,
 )
 
 @Serializable
@@ -83,12 +84,34 @@ sealed class ClientMessage {
 
 	@Serializable
 	@SerialName("chat")
-	data class Chat(val text: String, val source: String = "text") : ClientMessage()
+	data class Chat(val text: String, val source: String = "text", val target: String? = null) : ClientMessage()
 
 	@Serializable
 	@SerialName("abort")
 	class Abort : ClientMessage()
 }
+
+// ---- GET /api/sessions (mirrors packages/protocol) ----
+
+@Serializable
+data class PeerSessionDto(
+	val sessionId: String,
+	val name: String? = null,
+	val state: String = "idle",
+	val cwd: String = "",
+	val branch: String = "main",
+	val worktree: String? = null,
+)
+
+@Serializable
+data class ProjectGroupDto(val name: String, val path: String = "", val sessions: List<PeerSessionDto> = emptyList())
+
+@Serializable
+data class SessionsResponseDto(
+	val omniSessionId: String = "omni",
+	val projects: List<ProjectGroupDto> = emptyList(),
+	val others: List<PeerSessionDto> = emptyList(),
+)
 
 val protocolJson = Json {
 	ignoreUnknownKeys = true

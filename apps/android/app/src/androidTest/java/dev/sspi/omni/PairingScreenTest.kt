@@ -18,11 +18,9 @@ class PairingScreenTest {
 	private var paired: Pair<String, String>? = null
 
 	private fun setContent() {
+		val theme = themeById("dusk")
 		rule.setContent {
-			PairingScreen(
-				initialServer = "",
-				onPair = { s, t -> paired = s to t },
-			)
+			PairingScreen(theme = theme) { s, t -> paired = s to t }
 		}
 	}
 

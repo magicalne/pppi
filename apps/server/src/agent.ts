@@ -35,11 +35,39 @@ export type DriverEvents = {
 	state: (state: AgentState) => void;
 	"assistant-delta": (id: string, delta: string) => void;
 	"assistant-final": (id: string, text: string) => void;
-	tool: (toolName: string, phase: "start" | "end") => void;
+	tool: (toolName: string, phase: "start" | "end", label?: string) => void;
 	notify: (level: "info" | "warning" | "error", message: string) => void;
 	error: (message: string) => void;
 	ready: () => void;
 };
+
+/** One-line "verb + object" status copy for a tool call (PRD §5). */
+export function toolLabel(toolName: string, args: any): string {
+	const a = args ?? {};
+	const p = (v: any) => {
+		const s = String(v ?? "");
+		if (!s) return "";
+		const parts = s.split("/").filter(Boolean);
+		return parts.slice(-2).join("/") || s;
+	};
+	switch (toolName) {
+		case "read":
+			return `reading ${p(a.path ?? a.file_path ?? a.abs_path)}`;
+		case "write":
+		case "edit":
+			return `writing ${p(a.path ?? a.file_path)}`;
+		case "bash":
+			return `running ${(String(a.command ?? "shell") .split(/\s+/)[0] || "shell").slice(0, 24)}`;
+		case "glob":
+		case "grep":
+			return `searching ${String(a.pattern ?? "").slice(0, 24)}`;
+		case "pigeon":
+			return a.action === "send" ? `asking ${a.target ?? "a session"}` : "coordinating";
+		default:
+			if (toolName.startsWith("omni_")) return "coordinating";
+			return `running ${toolName}`;
+	}
+}
 
 export class RpcAgentDriver extends EventEmitter {
 	private proc: ChildProcessWithoutNullStreams | null = null;
@@ -188,7 +216,7 @@ export class RpcAgentDriver extends EventEmitter {
 				break;
 			case "tool_execution_start":
 				this.setState("tool", ev.toolName);
-				this.emit("tool", ev.toolName, "start");
+				this.emit("tool", ev.toolName, "start", toolLabel(ev.toolName, ev.args));
 				break;
 			case "tool_execution_end":
 				this.emit("tool", ev.toolName, "end");
