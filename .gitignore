@@ -9,3 +9,4 @@ apps/android/local.properties
 *.log
 .DS_Store
 .pi/
+.worktrees/

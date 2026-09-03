@@ -77,6 +77,9 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 
 	const clients = new Set<AuthedSocket>();
 	let sessionsCache: { at: number; data: SessionsResponse } | null = null;
+	// peer exchanges (targets + delegated replies) never enter the omni session
+	// transcript, so keep them here for reconnecting clients; lost on gateway restart.
+	const peerLog: ChatEntry[] = [];
 
 	function broadcast(evt: ServerEvent): void {
 		const line = JSON.stringify(evt);
@@ -92,6 +95,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 	async function sendToPeer(text: string, target: string): Promise<void> {
 		const id = randomUUID();
 		broadcast({ type: "user_message", id, text, source: "text", target });
+		peerLog.push({ id, role: "user", text, source: "text", ts: Date.now(), target });
 		// pigeon --wait blocks until the peer session replies (or timeout)
 		const res = await pigeon(["send", target, text, "--wait", "--timeout", "120"], {
 			timeoutMs: 130_000,
@@ -100,13 +104,15 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 			// stdout: "✉ accepted by X — msg id\n\n<reply text>"
 			const reply = res.stdout.split("\n\n").slice(1).join("\n\n").trim();
 			// profileId = target session id; clients tint via their profiles map
+			const replyId = randomUUID();
 			broadcast({
 				type: "assistant_final",
-				id: randomUUID(),
+				id: replyId,
 				text: reply || "(empty reply)",
 				target,
 				profileId: target,
 			});
+			peerLog.push({ id: replyId, role: "assistant", text: reply || "(empty reply)", ts: Date.now(), target, profileId: target });
 		} else {
 			const why = res.stderr.trim().split("\n")[0] || `pigeon exited ${res.code}`;
 			broadcast({ type: "error", message: why, target });
@@ -222,7 +228,9 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 				let history: ChatEntry[] = [];
 				try {
 					const entries = await opts.driver.history();
-					history = entries.map((h) => ({ ...h, id: randomUUID() }));
+					history = [...entries, ...peerLog]
+						.map((h) => ({ ...h, id: randomUUID() }))
+						.sort((a, b) => a.ts - b.ts);
 				} catch {
 					// keep empty history rather than failing the handshake
 				}

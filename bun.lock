@@ -58,6 +58,10 @@
         "typebox": "*",
       },
     },
+    "packages/pi-ext": {
+      "name": "@sspi/pi-ext",
+      "version": "0.1.0",
+    },
     "packages/protocol": {
       "name": "@sspi/protocol",
       "version": "0.1.0",
@@ -423,6 +427,8 @@
     "@smithy/util-utf8": ["@smithy/util-utf8@2.3.0", "", { "dependencies": { "@smithy/util-buffer-from": "^2.2.0", "tslib": "^2.6.2" } }, "sha512-R8Rdn8Hy72KKcebgLiv8jQcQkXoLMOGGv5uI1/k0l+snqkOzQ1R0ChUBCxWMlBsFMekWjq0wRudIweFs7sKT5A=="],
 
     "@sspi/omni": ["@sspi/omni@workspace:packages/omni"],
+
+    "@sspi/pi-ext": ["@sspi/pi-ext@workspace:packages/pi-ext"],
 
     "@sspi/protocol": ["@sspi/protocol@workspace:packages/protocol"],
 

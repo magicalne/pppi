@@ -6,27 +6,63 @@ import type { AgentState, ChatEntry, SessionsResponse, ServerEvent } from "@sspi
 type Pairing = { server: string; token: string };
 type Target = { id: string | undefined; label: string };
 
+/** One paired machine (gateway + its omni). Clients hold only the token. */
+type Connection = { id: string; name: string; url: string; token: string; color?: string };
+
 type Msg = {
 	id: string;
 	role: "user" | "assistant";
 	text: string;
 	source?: "voice" | "text";
 	target?: string;
+	profileId?: string;
 	tool?: { phase: "start" | "end"; label?: string };
 };
 
 const OMNI = (): Target => ({ id: undefined, label: "Omni" });
 
-function loadPairing(): Pairing | null {
+function loadConnections(): Connection[] {
 	try {
-		const raw = localStorage.getItem("sspi.pairing");
-		if (raw) return JSON.parse(raw);
+		const raw = localStorage.getItem("sspi.connections");
+		if (raw) {
+			const list = JSON.parse(raw) as Connection[];
+			if (Array.isArray(list) && list.length) return list;
+		}
 	} catch {
 		// ignore
 	}
-	const fromUrl = new URLSearchParams(location.search);
-	if (fromUrl.get("token")) return { server: location.origin, token: fromUrl.get("token")! };
-	return null;
+	// migrate the v0 single-pairing record
+	try {
+		const raw = localStorage.getItem("sspi.pairing");
+		if (raw) {
+			const p = JSON.parse(raw) as Pairing;
+			if (p.server && p.token) {
+				return [{ id: p.server, name: hostOf(p.server), url: p.server, token: p.token }];
+			}
+		}
+	} catch {
+		// ignore
+	}
+	return [];
+}
+
+function hostOf(url: string): string {
+	try {
+		return new URL(url).host;
+	} catch {
+		return url;
+	}
+}
+
+/** Accepts a full pair link ("http://ip:port/?pair=token") or a bare server URL. */
+function parsePairInput(input: string, tokenFallback: string): { url: string; token: string } | null {
+	const s = input.trim().replace(/\/$/, "");
+	if (!s) return null;
+	const m = s.match(/^(https?:\/\/[^\s?]+)\/?\?pair=([A-Za-z0-9]+)$/);
+	if (m) return { url: m[1]!, token: m[2]! };
+	if (!/^https?:\/\//.test(s)) return null;
+	const token = tokenFallback.trim();
+	return token ? { url: s, token } : null;
 }
 
 /** PRD §5 grammar — the omni session's one-line status. */
@@ -49,7 +85,8 @@ function omniStatus(state: AgentState, toolLabel: string | null, connected: bool
 export default function App() {
 	const [theme, setTheme] = useState<ThemeId>(loadTheme);
 	const [tab, setTab] = useState<"chat" | "themes">("chat");
-	const [pairing, setPairing] = useState<Pairing | null>(loadPairing);
+	const [connections, setConnections] = useState<Connection[]>(loadConnections);
+	const [activeId, setActiveId] = useState<string | null>(() => localStorage.getItem("sspi.active"));
 	const [connected, setConnected] = useState(false);
 	const [msgs, setMsgs] = useState<Msg[]>([]);
 	const [agentState, setAgentState] = useState<AgentState>("starting");
@@ -57,6 +94,7 @@ export default function App() {
 	const [notice, setNotice] = useState<string | null>(null);
 	const [target, setTarget] = useState<Target>(OMNI);
 	const [drawerOpen, setDrawerOpen] = useState(false);
+	const [connOpen, setConnOpen] = useState(false);
 	const [sessions, setSessions] = useState<SessionsResponse | null>(null);
 	const [recording, setRecording] = useState(false);
 	const [level, setLevel] = useState(0);
@@ -66,25 +104,59 @@ export default function App() {
 	const listRef = useRef<HTMLDivElement | null>(null);
 	const levelRef = useRef(0);
 
+	const conn = connections.find((c) => c.id === activeId) ?? connections[0] ?? null;
+
 	useEffect(() => applyTheme(theme), [theme]);
+
+	useEffect(() => {
+		localStorage.setItem("sspi.connections", JSON.stringify(connections));
+		if (connections.length) localStorage.removeItem("sspi.pairing"); // v0 key
+	}, [connections]);
+
+	useEffect(() => {
+		if (activeId) localStorage.setItem("sspi.active", activeId);
+	}, [activeId]);
+
+	// ?pair=<token> onboarding: opening the gateway's pair link pairs this browser
+	useEffect(() => {
+		const token = new URLSearchParams(location.search).get("pair");
+		if (!token) return;
+		const url = location.origin;
+		setConnections((prev) => {
+			const next = [...prev.filter((c) => c.id !== url), { id: url, name: hostOf(url), url, token }];
+			return next;
+		});
+		setActiveId(url);
+		history.replaceState(null, "", location.pathname);
+	}, []);
 
 	const showNotice = useCallback((message: string) => {
 		setNotice(message);
 		setTimeout(() => setNotice((cur) => (cur === message ? null : cur)), 6000);
 	}, []);
 
+	function addConnection(c: Connection) {
+		setConnections((prev) => [...prev.filter((x) => x.id !== c.id), c]);
+		setActiveId(c.id);
+	}
+
+	function removeConnection(id: string) {
+		setConnections((prev) => prev.filter((c) => c.id !== id));
+		setActiveId((cur) => (cur === id ? null : cur));
+	}
+
 	// -------------------------------------------------------------- websocket
 
 	useEffect(() => {
-		if (!pairing) return;
-		const wsUrl = `${pairing.server.replace(/^http/, "ws").replace(/\/$/, "")}/ws`;
+		if (!conn) return;
+		const wsUrl = `${conn.url.replace(/^http/, "ws").replace(/\/$/, "")}/ws`;
 		let closed = false;
 		let retry: ReturnType<typeof setTimeout> | null = null;
 		const connect = () => {
 			if (closed) return;
 			const ws = new WebSocket(wsUrl);
 			wsRef.current = ws;
-			ws.onopen = () => ws.send(JSON.stringify({ type: "hello", token: pairing.token, client: "web" }));
+			ws.onopen = () => ws.send(JSON.stringify({ type: "hello", token: conn.token, client: "web" }));
 			ws.onmessage = (m) => handleEvent(JSON.parse(m.data) as ServerEvent);
 			ws.onclose = () => {
 				setConnected(false);
@@ -98,7 +170,25 @@ export default function App() {
 			wsRef.current?.close();
 			wsRef.current = null;
 		};
-	}, [pairing]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [conn?.id, conn?.token]);
+
+	// learn the machine's name + omni profile color once connected
+	const learnAbout = useCallback(async (c: Connection) => {
+		try {
+			const res = await fetch(`${c.url.replace(/\/$/, "")}/api/pair`, {
+				headers: { authorization: `Bearer ${c.token}` },
+			});
+			if (res.ok) {
+				const body = await res.json();
+				if (body.ok && body.machine) {
+					setConnections((prev) => prev.map((x) => (x.id === c.id ? { ...x, name: body.machine as string } : x)));
+				}
+			}
+		} catch {
+			// offline — keep the host name
+		}
+	}, []);
 
 	function handleEvent(evt: ServerEvent) {
 		switch (evt.type) {
@@ -106,11 +196,11 @@ export default function App() {
 				setConnected(true);
 				setAgentState(evt.agent.state);
 				setMsgs(evt.history.map((h: ChatEntry) => ({ ...h })));
+				if (conn) void learnAbout(conn);
 				break;
 			case "hello_fail":
 				showNotice(evt.error);
-				setPairing(null);
-				localStorage.removeItem("sspi.pairing");
+				if (conn) removeConnection(conn.id);
 				break;
 			case "transcript":
 				setMsgs((b) => [
@@ -131,18 +221,19 @@ export default function App() {
 					if (last && last.role === "assistant" && last.id === evt.id) {
 						return [...b.slice(0, -1), { ...last, text: last.text + evt.delta }];
 					}
-					return [...b, { id: evt.id, role: "assistant", text: evt.delta, target: evt.target }];
+					return [...b, { id: evt.id, role: "assistant", text: evt.delta, target: evt.target, profileId: evt.profileId }];
 				});
 				break;
 			case "assistant_final":
 				setMsgs((b) => {
 					const idx = b.findIndex((x) => x.id === evt.id);
+					const patch = (m: Msg): Msg => ({ ...m, text: evt.text, profileId: evt.profileId });
 					if (idx >= 0) {
 						const copy = [...b];
-						copy[idx] = { ...copy[idx]!, text: evt.text };
+						copy[idx] = patch(copy[idx]!);
 						return copy;
 					}
-					return [...b, { id: evt.id, role: "assistant", text: evt.text, target: evt.target }];
+					return [...b, { id: evt.id, role: "assistant", text: evt.text, target: evt.target, profileId: evt.profileId }];
 				});
 				break;
 			case "tool_event":
@@ -170,17 +261,34 @@ export default function App() {
 	// -------------------------------------------------------------- sessions poll
 
 	const refreshSessions = useCallback(async () => {
-		if (!pairing) return;
+		if (!conn) return;
 		try {
-			const res = await fetch(`${pairing.server.replace(/\/$/, "")}/api/sessions`, {
-				headers: { authorization: `Bearer ${pairing.token}` },
+			const res = await fetch(`${conn.url.replace(/\/$/, "")}/api/sessions`, {
+				headers: { authorization: `Bearer ${conn.token}` },
 			});
-			if (res.ok) setSessions(await res.json());
+			if (res.ok) {
+				const data = (await res.json()) as SessionsResponse;
+				setSessions(data);
+				// tint the active connection with the omni profile color
+				const omniProfile = data.profiles?.[data.omniSessionId];
+				if (omniProfile) {
+					setConnections((prev) => prev.map((x) => (x.id === conn.id ? { ...x, color: omniProfile.color } : x)));
+				}
+			}
 		} catch {
-			// ignore — sheet shows stale data
+			// ignore — drawer shows stale data
 		}
-	}, [pairing]);
+	}, [conn]);
 
+	// light always-on poll: bubble colors need the profiles map even with the drawer closed
+	useEffect(() => {
+		if (!conn || !connected) return;
+		refreshSessions();
+		const t = setInterval(refreshSessions, 20_000);
+		return () => clearInterval(t);
+	}, [conn, connected, refreshSessions]);
+
+	// fast poll while the target tree is open
 	useEffect(() => {
 		if (!drawerOpen) return;
 		refreshSessions();
@@ -204,9 +312,9 @@ export default function App() {
 			setRecording(false);
 			if (!rec) return;
 			const { wav } = await rec.stop();
-			const res = await fetch(`${pairing!.server.replace(/\/$/, "")}/api/voice`, {
+			const res = await fetch(`${conn!.url.replace(/\/$/, "")}/api/voice`, {
 				method: "POST",
-				headers: { authorization: `Bearer ${pairing!.token}`, "content-type": "audio/wav" },
+				headers: { authorization: `Bearer ${conn!.token}`, "content-type": "audio/wav" },
 				body: wav,
 			});
 			const body = await res.json().catch(() => ({ error: "bad response" }));
@@ -227,7 +335,7 @@ export default function App() {
 		} catch {
 			showNotice("microphone unavailable — check permissions");
 		}
-	}, [recording, pairing, showNotice]);
+	}, [recording, conn, showNotice]);
 
 	useEffect(() => {
 		listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -235,7 +343,16 @@ export default function App() {
 
 	// -------------------------------------------------------------- render
 
-	if (!pairing) return <Pairing onDone={setPairing} notice={notice} />;
+	if (!conn)
+		return (
+			<Pairing
+				onDone={(p) => {
+					addConnection({ id: p.server, name: hostOf(p.server), url: p.server, token: p.token });
+					setTab("chat");
+				}}
+				notice={notice}
+			/>
+		);
 
 	if (tab === "themes")
 		return (
@@ -257,6 +374,16 @@ export default function App() {
 		<div className="app">
 			<div className="headwrap">
 				<header className="presence" onClick={() => setDrawerOpen(true)} aria-label="Sessions">
+					<button
+						className="iconbtn menu"
+						aria-label="Machines"
+						onClick={(e) => {
+							e.stopPropagation();
+							setConnOpen(true);
+						}}
+					>
+						☰
+					</button>
 					<span className={`avatar ${!connected ? "" : busy ? "busy" : "on"}`} />
 					<span className="names">
 						<span className="name">
@@ -288,42 +415,77 @@ export default function App() {
 							}}
 							onUnpair={() => {
 								setDrawerOpen(false);
-								setPairing(null);
-								localStorage.removeItem("sspi.pairing");
+								if (conn) removeConnection(conn.id);
 							}}
+						/>
+					</>
+				)}
+
+				{connOpen && (
+					<>
+						<div className="backdrop" onClick={() => setConnOpen(false)} />
+						<ConnectionsDrawer
+							connections={connections}
+							activeId={conn?.id ?? null}
+							connected={connected}
+							onSwitch={(id) => {
+								setActiveId(id);
+								setConnOpen(false);
+							}}
+							onRemove={removeConnection}
+							onAdd={(c) => addConnection(c)}
+							onClose={() => setConnOpen(false)}
 						/>
 					</>
 				)}
 			</div>
 
 			<div className="list" ref={listRef}>
-				{visible.length === 0 && (
-					<div className="empty">
-						<p className="hi">Hey, it's Omni.</p>
-						<p className="hint">
-							Tell me what to build, ask about a repo, or hold the mic and just talk.
-						</p>
-					</div>
-				)}
-				{visible.map((m) =>
-					m.tool ? (
-						<div key={m.id} className="toolchip">{m.tool.label ?? m.id}</div>
-					) : m.role === "user" ? (
-						<div key={m.id} className="row user">
-							<div className="bubble user-msg">
-								{m.source === "voice" && <span className="mic-glyph">🎙</span>}
-								{m.text}
-							</div>
+					{visible.length === 0 && (
+						<div className="empty">
+							<p className="hi">Hey, it's {targetName}.</p>
+							<p className="hint">
+								Tell me what to build, ask about a repo, or hold the mic and just talk.
+							</p>
 						</div>
-					) : (
+					)}
+				{visible.map((m) => {
+					const prof = m.profileId ? sessions?.profiles?.[m.profileId] : undefined;
+					if (m.tool) {
+						return (
+							<div key={m.id} className="toolchip">{m.tool.label ?? m.id}</div>
+						);
+					}
+					if (m.role === "user") {
+						return (
+							<div key={m.id} className="row user">
+								<div className="bubble user-msg">
+									{m.source === "voice" && <span className="mic-glyph">🎙</span>}
+									{m.text}
+								</div>
+							</div>
+						);
+					}
+					if (prof) {
+						// a profiled agent replied (delegation) — tint the bubble with its color
+						return (
+							<div key={m.id} className="row peer">
+								<span className="who">{prof.name}</span>
+								<div className="bubble peer-msg" style={{ background: prof.color }}>
+									{m.text || "…"}
+								</div>
+							</div>
+						);
+					}
+					return (
 						<div key={m.id} className="assistant-msg">
 							<span className="dotcol">
 								<i />
 							</span>
 							<span>{m.text || "…"}</span>
 						</div>
-					),
-				)}
+					);
+				})}
 				{busy && (
 					<div className="working">
 						<span>{statusText || "thinking…"}</span>
@@ -387,6 +549,50 @@ function peerStatus(sessions: SessionsResponse | null, id: string): string {
 	const o = sessions?.others.find((x) => x.sessionId === id);
 	if (o) return o.state === "busy" ? "working…" : o.state === "unreachable" ? "unreachable" : "";
 	return "";
+}
+
+function ConnectionsDrawer(props: {
+	connections: Connection[];
+	activeId: string | null;
+	connected: boolean;
+	onSwitch: (id: string) => void;
+	onRemove: (id: string) => void;
+	onAdd: (c: Connection) => void;
+	onClose: () => void;
+}) {
+	const onAdd = (e: React.FormEvent<HTMLFormElement>) => {
+		e.preventDefault();
+		const data = new FormData(e.currentTarget);
+		const parsed = parsePairInput(String(data.get("link") ?? ""), String(data.get("token") ?? ""));
+		if (!parsed) return;
+		props.onAdd({ id: parsed.url, name: hostOf(parsed.url), url: parsed.url, token: parsed.token });
+		e.currentTarget.reset();
+	};
+
+	return (
+		<div className="conn-drawer" onClick={(e) => e.stopPropagation()}>
+			<h3>Machines</h3>
+			{props.connections.length === 0 && <p className="conn-empty">No machines paired yet.</p>}
+			{props.connections.map((c) => (
+				<div key={c.id} className={`crow ${c.id === props.activeId ? "active" : ""}`}>
+					<button className="crow-main" onClick={() => props.onSwitch(c.id)}>
+						<span className="cdot" style={{ background: c.color ?? "var(--dim)" }} />
+						<span className="cname">{c.name}</span>
+						{c.id === props.activeId && <span className="ctag">{props.connected ? "online" : "offline"}</span>}
+					</button>
+					<button className="crow-x" aria-label={`Remove ${c.name}`} onClick={() => props.onRemove(c.id)}>
+						✕
+					</button>
+				</div>
+			))}
+			<form className="cadd" onSubmit={onAdd}>
+				<input name="link" placeholder="Paste pair link or server URL" autoComplete="off" />
+				<input name="token" placeholder="Token (skip if the link has one)" autoComplete="off" />
+				<button type="submit">Add machine</button>
+			</form>
+			<p className="conn-hint">Run /pair in any pi session on the machine to get a link or QR.</p>
+		</div>
+	);
 }
 
 function SessionDrawer(props: {
@@ -463,7 +669,8 @@ function Pairing({ onDone, notice }: { onDone: (p: Pairing) => void; notice: str
    └──────┘        └──────┘        └──────┘`}</pre>
 			<h1 style={{ fontSize: 22 }}>Pair with your omni agent</h1>
 			<p style={{ color: "var(--dim)" }}>
-				Run the sspi server on your Mac; it prints a pairing token. Secrets never leave the Mac.
+				Paste the pair link from <code style={{ fontFamily: "var(--font-mono)" }}>/pair</code> — or run the sspi server on
+				your Mac and enter its URL + token. Secrets never leave the machine.
 			</p>
 			<form
 				style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 22 }}
@@ -472,18 +679,16 @@ function Pairing({ onDone, notice }: { onDone: (p: Pairing) => void; notice: str
 					const data = new FormData(e.currentTarget);
 					const server = String(data.get("server") ?? "").replace(/\/$/, "");
 					const token = String(data.get("token") ?? "").trim();
-					if (server && token) {
-						localStorage.setItem("sspi.pairing", JSON.stringify({ server, token }));
-						onDone({ server, token });
-					}
+					const parsed = parsePairInput(server, token);
+					if (parsed) onDone({ server: parsed.url, token: parsed.token });
 				}}
 			>
 				<label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, color: "var(--dim)" }}>
-					Server
+					Pair link or server URL
 					<input
 						name="server"
 						required
-						defaultValue={location.origin.includes("5173") ? "http://localhost:8787" : location.origin}
+						defaultValue={location.search.includes("pair=") ? location.href : location.origin.includes("5173") ? "http://localhost:8787" : location.origin}
 						style={fieldStyle}
 					/>
 				</label>

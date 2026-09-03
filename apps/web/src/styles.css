@@ -428,6 +428,159 @@
 	border-color: var(--danger);
 }
 
+/* ---------------- machines drawer (connections) ---------------- */
+
+.iconbtn.menu {
+	font-size: 17px;
+	margin-right: 2px;
+}
+.conn-drawer {
+	position: fixed;
+	top: 0;
+	left: 0;
+	bottom: 0;
+	width: min(320px, 86vw);
+	background: var(--bg);
+	border-right: 1px solid var(--line);
+	z-index: 41;
+	padding: calc(14px + env(safe-area-inset-top)) 14px 20px;
+	overflow-y: auto;
+	animation: slidein 0.18s ease;
+}
+@keyframes slidein {
+	from {
+		transform: translateX(-24px);
+		opacity: 0.6;
+	}
+}
+.conn-drawer h3 {
+	margin: 4px 6px 10px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--dim);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+.conn-empty {
+	color: var(--dim);
+	font-size: 13.5px;
+	margin: 4px 6px 12px;
+}
+.crow {
+	display: flex;
+	align-items: center;
+	border-radius: 12px;
+	margin-bottom: 4px;
+}
+.crow:hover {
+	background: var(--surface);
+}
+.crow.active {
+	background: var(--surface);
+	box-shadow: inset 3px 0 0 var(--accent);
+}
+.crow-main {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex: 1;
+	min-width: 0;
+	background: none;
+	border: 0;
+	color: var(--text);
+	font: inherit;
+	font-size: 15px;
+	padding: 12px 8px 12px 10px;
+	cursor: pointer;
+	text-align: left;
+}
+.crow .cdot {
+	flex: none;
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+}
+.crow .cname {
+	flex: 1;
+	min-width: 0;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.crow .ctag {
+	flex: none;
+	font-size: 11.5px;
+	color: var(--dim);
+}
+.crow-x {
+	flex: none;
+	background: none;
+	border: 0;
+	color: var(--dim);
+	font-size: 13px;
+	padding: 8px 10px;
+	cursor: pointer;
+}
+.crow-x:hover {
+	color: var(--danger);
+}
+.cadd {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 14px;
+	padding-top: 14px;
+	border-top: 1px solid var(--line);
+}
+.cadd input {
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	padding: 10px 12px;
+	color: var(--text);
+	font: inherit;
+	font-size: 14px;
+}
+.cadd button {
+	background: var(--accent);
+	color: var(--accent-ink);
+	border: 0;
+	border-radius: 10px;
+	padding: 10px 12px;
+	font: inherit;
+	font-size: 14px;
+	font-weight: 600;
+	cursor: pointer;
+}
+.conn-hint {
+	color: var(--dim);
+	font-size: 12px;
+	line-height: 1.5;
+	margin: 10px 2px 0;
+}
+
+/* ---------------- delegated (profiled) replies ---------------- */
+
+.row.peer {
+	align-items: flex-end;
+	animation: rise 0.16s ease;
+}
+.row.peer .who {
+	font-size: 12px;
+	color: var(--dim);
+	margin: 0 4px 3px;
+}
+.bubble.peer-msg {
+	max-width: 84%;
+	color: rgba(20, 18, 16, 0.96);
+	border-radius: var(--radius-bubble);
+	border-bottom-right-radius: 6px;
+	padding: 10px 14px;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
 /* ---------------- toast ---------------- */
 
 .toast {
