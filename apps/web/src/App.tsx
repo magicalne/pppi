@@ -39,6 +39,7 @@ export default function App() {
 	const wsRef = useRef<WebSocket | null>(null);
 	const recorderRef = useRef<VoiceRecorder | null>(null);
 	const listRef = useRef<HTMLDivElement | null>(null);
+	const levelRef = useRef(0);
 
 	// -------------------------------------------------------------- websocket
 
@@ -160,7 +161,13 @@ export default function App() {
 		}
 		try {
 			const rec = new VoiceRecorder();
-			rec.onLevel = setLevel;
+			// throttle: the meter re-renders the whole app — update only on real changes
+			rec.onLevel = (v) => {
+				if (Math.abs(v - levelRef.current) > 0.04) {
+					levelRef.current = v;
+					setLevel(v);
+				}
+			};
 			await rec.start();
 			recorderRef.current = rec;
 			setRecording(true);

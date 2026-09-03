@@ -172,7 +172,8 @@ export class RpcAgentDriver extends EventEmitter {
 				// Headless: never block the agent on dialogs; auto-dismiss.
 				const dialog = ["select", "confirm", "input", "editor"].includes(ev.method);
 				if (dialog) this.write({ type: "extension_ui_response", id: ev.id, cancelled: true });
-				this.emit("notify", ev.notifyType ?? "info", ev.message ?? ev.title ?? ev.method);
+				// Only real notifications reach clients; setStatus/setWidget/setTitle are TUI noise.
+				if (ev.method === "notify") this.emit("notify", ev.notifyType ?? "info", ev.message ?? "");
 				break;
 			}
 			case "agent_start":
