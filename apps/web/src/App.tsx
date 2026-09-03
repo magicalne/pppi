@@ -56,10 +56,8 @@ export default function App() {
 	const [toolLabel, setToolLabel] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
 	const [target, setTarget] = useState<Target>(OMNI);
-	const [sheetOpen, setSheetOpen] = useState(false);
+	const [drawerOpen, setDrawerOpen] = useState(false);
 	const [sessions, setSessions] = useState<SessionsResponse | null>(null);
-	const [showProjects, setShowProjects] = useState(() => localStorage.getItem("sspi.projects") === "1");
-	const [showWorktrees, setShowWorktrees] = useState(() => localStorage.getItem("sspi.worktrees") === "1");
 	const [recording, setRecording] = useState(false);
 	const [level, setLevel] = useState(0);
 	const [textInput, setTextInput] = useState("");
@@ -184,11 +182,11 @@ export default function App() {
 	}, [pairing]);
 
 	useEffect(() => {
-		if (!sheetOpen) return;
+		if (!drawerOpen) return;
 		refreshSessions();
 		const t = setInterval(refreshSessions, 5000);
 		return () => clearInterval(t);
-	}, [sheetOpen, refreshSessions]);
+	}, [drawerOpen, refreshSessions]);
 
 	// -------------------------------------------------------------- actions
 
@@ -257,25 +255,47 @@ export default function App() {
 
 	return (
 		<div className="app">
-			<header className="presence" onClick={() => setSheetOpen(true)} aria-label="Sessions">
-				<span className={`avatar ${!connected ? "" : busy ? "busy" : "on"}`} />
-				<span className="names">
-					<span className="name">
-						{targetName} <span className="chev">▾</span>
+			<div className="headwrap">
+				<header className="presence" onClick={() => setDrawerOpen(true)} aria-label="Sessions">
+					<span className={`avatar ${!connected ? "" : busy ? "busy" : "on"}`} />
+					<span className="names">
+						<span className="name">
+							{targetName} <span className="chev">▾</span>
+						</span>
+						{statusText && <span className="status">{statusText}</span>}
 					</span>
-					{statusText && <span className="status">{statusText}</span>}
-				</span>
-				<button
-					className="iconbtn"
-					aria-label="Appearance"
-					onClick={(e) => {
-						e.stopPropagation();
-						setTab("themes");
-					}}
-				>
-				◐
-				</button>
-			</header>
+					<button
+						className="iconbtn"
+						aria-label="Appearance"
+						onClick={(e) => {
+							e.stopPropagation();
+							setTab("themes");
+						}}
+					>
+					◐
+					</button>
+				</header>
+
+				{drawerOpen && (
+					<>
+						<div className="backdrop" onClick={() => setDrawerOpen(false)} />
+						<SessionDrawer
+							sessions={sessions}
+							target={target}
+							onPick={(t) => {
+								setTarget(t);
+								setDrawerOpen(false);
+							}}
+							onClose={() => setDrawerOpen(false)}
+							onUnpair={() => {
+								setDrawerOpen(false);
+								setPairing(null);
+								localStorage.removeItem("sspi.pairing");
+							}}
+						/>
+					</>
+				)}
+			</div>
 
 			<div className="list" ref={listRef}>
 				{visible.length === 0 && (
@@ -400,100 +420,55 @@ function peerStatus(sessions: SessionsResponse | null, id: string): string {
 	return "";
 }
 
-function SessionSheet(props: {
+function SessionDrawer(props: {
 	sessions: SessionsResponse | null;
 	target: Target;
-	showProjects: boolean;
-	showWorktrees: boolean;
 	onPick: (t: Target) => void;
-	onClose: () => void;
-	onToggleProjects: (v: boolean) => void;
-	onToggleWorktrees: (v: boolean) => void;
 	onUnpair: () => void;
 }) {
 	const { sessions, target } = props;
-	const peerRow = (
-		label: string,
-		id: string,
-		state: string,
-		depth: number,
-	): React.ReactNode => (
-		<button
-			key={id}
-			className={`srow ${target.id === id ? "active" : ""}`}
-			style={{ paddingLeft: 20 + depth * 22 }}
-			onClick={() => props.onPick({ id, label })}
-		>
+	const stateLabel = (state: string) => (state === "busy" ? "working…" : state === "unreachable" ? "unreachable" : "idle");
+	const peerRow = (label: string, id: string, state: string, depth: number): React.ReactNode => (
+		<button key={id} className={`srow ${target.id === id ? "active" : ""}`} onClick={() => props.onPick({ id, label })}>
+			{Array.from({ length: depth }).map((_, i) => (
+				<span key={i} className="guide" aria-hidden />
+			))}
 			<span className="ring" />
 			<span className="sname">{label}</span>
-			<span className="sstate">{state === "busy" ? "working…" : state === "unreachable" ? "unreachable" : "idle"}</span>
+			<span className="sstate">{stateLabel(state)}</span>
 		</button>
 	);
 
 	return (
-		<div className="sheet" onClick={(e) => e.stopPropagation()}>
+		<div className="drawer" onClick={(e) => e.stopPropagation()}>
 			<h3>Sessions</h3>
-			<button
-				className={`srow ${!target.id ? "active" : ""}`}
-				onClick={() => props.onPick(OMNI())}
-			>
+			<button className={`srow ${!target.id ? "active" : ""}`} onClick={() => props.onPick(OMNI())}>
 				<span className="ring" />
 				<span className="sname">Omni</span>
 				<span className="sstate">the whole fleet</span>
 			</button>
 
-			{props.showProjects && (
-				<>
-					<div className="sep" />
-					<h3>Projects</h3>
-					{(sessions?.projects ?? []).flatMap((p) => {
-						const rows = p.sessions
-							.filter((s) => !s.worktree)
-							.map((s) =>
-								peerRow(
-									s.name ? `${p.name} · ${s.name}` : `${p.name} · main`,
-									s.sessionId,
-									s.state,
-									1,
-								),
-							);
-						if (rows.length === 0)
-							rows.push(
-								<div key={`${p.name}-empty`} className="srow" style={{ paddingLeft: 42, color: "var(--dim)", fontSize: 14 }}>
-									<span className="sname" style={{ fontWeight: 400 }}>{p.name} — no open session</span>
-								</div>,
-							);
-						if (props.showWorktrees) {
-							for (const s of p.sessions) {
-								if (!s.worktree) continue;
-								rows.push(peerRow(`wt/${s.worktree}`, s.sessionId, s.state, 2));
-							}
-						}
-						return rows;
-					})}
-					{(sessions?.others ?? []).map((s) => peerRow(s.name ?? `#${s.sessionId.slice(0, 4)}`, s.sessionId, s.state, 1))}
-				</>
-			)}
+			{(sessions?.projects ?? []).map((p) => {
+				const mains = p.sessions.filter((s) => !s.worktree);
+				const wts = p.sessions.filter((s) => s.worktree);
+				return (
+					<div key={p.name}>
+						{mains.length === 0 && (
+							<div className="srow empty-row">
+								<span className="guide" aria-hidden />
+								<span className="sname">
+									{p.name} — no open session
+								</span>
+							</div>
+						)}
+						{mains.map((s, i) => peerRow(i === 0 ? p.name : (s.name ?? "main"), s.sessionId, s.state, 1))}
+						{wts.map((s) => peerRow(`wt/${s.worktree}`, s.sessionId, s.state, 2))}
+					</div>
+				);
+			})}
+			{(sessions?.others ?? []).map((s) => peerRow(s.name ?? `#${s.sessionId.slice(0, 4)}`, s.sessionId, s.state, 1))}
 
 			<div className="sep" />
-			<div className="toggle-row">
-				Show projects
-				<button
-					className={`switch ${props.showProjects ? "on" : ""}`}
-					aria-label="Show projects"
-					onClick={() => props.onToggleProjects(!props.showProjects)}
-				/>
-			</div>
-			{props.showProjects && (
-				<div className="toggle-row">
-					Show worktrees
-					<button
-						className={`switch ${props.showWorktrees ? "on" : ""}`}
-						aria-label="Show worktrees"
-						onClick={() => props.onToggleWorktrees(!props.showWorktrees)}
-					/>
-				</div>
-			)}
 			<div className="footer">
 				<button className="unpair" onClick={props.onUnpair}>
 					Unpair this device

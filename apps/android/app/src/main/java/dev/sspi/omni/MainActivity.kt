@@ -17,12 +17,15 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -32,18 +35,18 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.darkColorScheme
@@ -63,12 +66,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -318,8 +324,7 @@ fun ChatScreen(
 	var micGranted by remember { mutableStateOf(false) }
 	var selected by remember { mutableStateOf(UiTarget.OMNI) }
 	var sheetOpen by remember { mutableStateOf(false) }
-	var showProjects by remember { mutableStateOf(false) }
-	var showWorktrees by remember { mutableStateOf(false) }
+	var headerPx by remember { mutableIntStateOf(0) }
 	var sessions by remember { mutableStateOf<SessionsResponseDto?>(null) }
 
 	val chunks = remember { mutableListOf<ShortArray>() }
@@ -509,13 +514,14 @@ fun ChatScreen(
 
 	Column(modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
 		// ---- presence bar (PRD §3): tap = session switcher
-		Row(
-			modifier = Modifier
-				.fillMaxWidth()
-				.background(theme.bg)
-				.clickable { sheetOpen = true }
-				.semantics { contentDescription = "sessions" }
-				.padding(horizontal = 16.dp, vertical = 12.dp),
+			Row(
+				modifier = Modifier
+					.fillMaxWidth()
+					.background(theme.bg)
+					.clickable { sheetOpen = true }
+					.semantics { contentDescription = "sessions" }
+					.onGloballyPositioned { headerPx = it.size.height }
+					.padding(horizontal = 16.dp, vertical = 12.dp),
 			verticalAlignment = Alignment.CenterVertically,
 		) {
 			Box(
@@ -696,92 +702,71 @@ fun ChatScreen(
 		}
 	}
 
-	// ---- session switcher sheet (PRD §4)
+	// ---- target tree drawer (PRD §4): drops from the presence bar, in front of chat
 	if (sheetOpen) {
-		ModalBottomSheet(
-			onDismissRequest = { sheetOpen = false },
-			containerColor = theme.bg,
+		Box(
+			Modifier
+				.fillMaxSize()
+				.pointerInput(Unit) { detectTapGestures { sheetOpen = false } }
+				.background(Color.Black.copy(alpha = 0.45f)),
+		)
+		val headerDp = with(LocalDensity.current) { headerPx.toDp() }
+		Column(
+			Modifier
+				.padding(top = headerDp + 8.dp, start = 12.dp, end = 12.dp)
+				.widthIn(max = 340.dp)
+				.heightIn(max = 460.dp)
+				.verticalScroll(rememberScrollState())
+				.clip(RoundedCornerShape(18.dp))
+				.background(theme.bg)
+				.border(1.dp, theme.line, RoundedCornerShape(18.dp))
+				.padding(vertical = 8.dp),
 		) {
 			Text(
 				"SESSIONS",
 				color = theme.dim,
 				fontSize = 12.sp,
-				modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+				modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
 			)
-			SheetRow(theme, "Omni", "the whole fleet", selected.id == null) {
+			TreeRow(theme, "Omni", "the whole fleet", selected.id == null, depth = 0) {
 				selected = UiTarget.OMNI
 				sheetOpen = false
 			}
-			if (showProjects) {
-				Text(
-					"PROJECTS",
-					color = theme.dim,
-					fontSize = 12.sp,
-					modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-				)
-				val groups = sessions?.projects ?: emptyList()
-				for (p in groups) {
-					val mains = p.sessions.filter { it.worktree == null }
-					if (mains.isEmpty()) {
-						Text(
-							"${p.name} — no open session",
-							color = theme.dim,
-							fontSize = 14.sp,
-							modifier = Modifier.padding(horizontal = 42.dp, vertical = 8.dp),
-						)
-					}
-					for (s in mains) {
-						SheetRow(
-							theme,
-							if (s.name != null) "${p.name} · ${s.name}" else "${p.name} · main",
-							when (s.state) {
-								"busy" -> "working…"
-								"unreachable" -> "unreachable"
-								else -> "idle"
-							},
-							selected.id == s.sessionId,
-							depth = 1,
-						) {
-							selected = UiTarget(s.sessionId, if (s.name != null) "${p.name} · ${s.name}" else "${p.name} · main")
-							sheetOpen = false
-						}
-					}
-					if (showWorktrees) {
-						for (s in p.sessions) {
-							if (s.worktree == null) continue
-							SheetRow(theme, "wt/${s.worktree}", if (s.state == "busy") "working…" else "idle", selected.id == s.sessionId, depth = 2) {
-								selected = UiTarget(s.sessionId, "wt/${s.worktree}")
-								sheetOpen = false
-							}
-						}
+			for (p in sessions?.projects ?: emptyList()) {
+				val mains = p.sessions.filter { it.worktree == null }
+				if (mains.isEmpty()) {
+					TreeRow(theme, "${p.name} — no open session", "", depth = 1, dim = true)
+				}
+				for ((i, s) in mains.withIndex()) {
+					val label = if (i == 0) p.name else (s.name ?: "main")
+					TreeRow(theme, label, stateLabel(s.state), selected.id == s.sessionId, depth = 1) {
+						selected = UiTarget(s.sessionId, label)
+						sheetOpen = false
 					}
 				}
-				for (s in sessions?.others ?: emptyList()) {
-					SheetRow(theme, s.name ?: "#${s.sessionId.take(4)}", if (s.state == "busy") "working…" else "idle", selected.id == s.sessionId, depth = 1) {
-						selected = UiTarget(s.sessionId, s.name ?: "#${s.sessionId.take(4)}")
+				for (s in p.sessions) {
+					if (s.worktree == null) continue
+					TreeRow(theme, "wt/${s.worktree}", stateLabel(s.state), selected.id == s.sessionId, depth = 2) {
+						selected = UiTarget(s.sessionId, "wt/${s.worktree}")
 						sheetOpen = false
 					}
 				}
 			}
-			Row(
-				Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
-				horizontalArrangement = Arrangement.SpaceBetween,
-				verticalAlignment = Alignment.CenterVertically,
-			) {
-				Text("Show projects", color = theme.dim, fontSize = 14.5.sp)
-				Switch(checked = showProjects, onCheckedChange = { showProjects = it })
-			}
-			if (showProjects) {
-				Row(
-					Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
-					horizontalArrangement = Arrangement.SpaceBetween,
-					verticalAlignment = Alignment.CenterVertically,
-				) {
-					Text("Show worktrees", color = theme.dim, fontSize = 14.5.sp)
-					Switch(checked = showWorktrees, onCheckedChange = { showWorktrees = it })
+			for (s in sessions?.others ?: emptyList()) {
+				val label = s.name ?: "#${s.sessionId.take(4)}"
+				TreeRow(theme, label, stateLabel(s.state), selected.id == s.sessionId, depth = 1) {
+					selected = UiTarget(s.sessionId, label)
+					sheetOpen = false
 				}
 			}
-			Box(Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+			Box(
+				Modifier
+					.padding(horizontal = 16.dp, vertical = 6.dp)
+					.fillMaxWidth()
+					.height(1.dp)
+					.background(theme.line),
+			)
+			Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
 				Text(
 					"Unpair this device",
 					color = theme.dim,
@@ -795,7 +780,6 @@ fun ChatScreen(
 					textAlign = TextAlign.Center,
 				)
 			}
-			Spacer(Modifier.height(12.dp))
 		}
 	}
 
@@ -845,29 +829,54 @@ private fun TextFieldWithSend(
 	)
 }
 
+private fun stateLabel(state: String): String = when (state) {
+	"busy" -> "working…"
+	"unreachable" -> "unreachable"
+	else -> "idle"
+}
+
+/** One row of the target tree; draws a vertical guide cell per ancestor level. */
 @Composable
-private fun SheetRow(
+private fun TreeRow(
 	theme: SspiTheme,
 	name: String,
 	state: String,
-	active: Boolean,
+	active: Boolean = false,
 	depth: Int = 0,
-	onClick: () -> Unit,
+	dim: Boolean = false,
+	onClick: (() -> Unit)? = null,
 ) {
 	Row(
 		Modifier
 			.fillMaxWidth()
-			.clickable { onClick() }
-			.background(if (active) theme.surface else Color.Transparent)
-			.padding(start = (20 + depth * 22).dp, end = 20.dp, top = 12.dp, bottom = 12.dp),
-		verticalAlignment = Alignment.CenterVertically,
+			.height(IntrinsicSize.Min)
+			.then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
+			.background(if (active) theme.surface else Color.Transparent),
 	) {
-		if (active) {
-			Box(Modifier.width(3.dp).height(18.dp).background(theme.accent))
-			Spacer(Modifier.width(10.dp))
+		repeat(depth) {
+			Box(Modifier.width(18.dp).fillMaxHeight()) {
+				Box(Modifier.fillMaxHeight().width(1.dp).background(theme.line).align(Alignment.CenterEnd))
+			}
 		}
-		Text(name, color = theme.text, fontSize = 16.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-		Text(state, color = theme.dim, fontSize = 12.5.sp)
+		Box(Modifier.width(12.dp).fillMaxHeight()) {
+			if (active) {
+				Box(Modifier.width(3.dp).height(18.dp).background(theme.accent).align(Alignment.CenterStart))
+			}
+		}
+		Text(
+			name,
+			color = if (dim) theme.dim else theme.text,
+			fontSize = 16.sp,
+			fontWeight = if (dim) FontWeight.Normal else if (depth <= 1) FontWeight.SemiBold else FontWeight.Normal,
+			maxLines = 1,
+			overflow = TextOverflow.Ellipsis,
+			modifier = Modifier.weight(1f).padding(vertical = 12.dp),
+		)
+		if (state.isNotEmpty()) {
+			Text(state, color = theme.dim, fontSize = 12.5.sp, modifier = Modifier.padding(start = 8.dp, end = 16.dp))
+		} else {
+			Spacer(Modifier.width(16.dp))
+		}
 	}
 }
 

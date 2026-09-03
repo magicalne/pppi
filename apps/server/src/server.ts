@@ -31,9 +31,9 @@ export type ServerOptions = {
 
 type AuthedSocket = WebSocket & { authed?: boolean };
 
-function classify(omniSessionId: string, registryDir?: string): SessionsResponse {
+async function classify(omniSessionId: string, registryDir?: string): Promise<SessionsResponse> {
 	const empty: SessionsResponse = { omniSessionId, projects: [], others: [] };
-	const res = listSessions();
+	const res = await listSessions();
 	if (!Array.isArray(res)) return empty;
 	const reg = loadRegistry(registryDir);
 		const peer = (s: PigeonSession): PeerSession => {
@@ -57,7 +57,9 @@ function classify(omniSessionId: string, registryDir?: string): SessionsResponse
 			.map(peer),
 	}));
 	const claimed = new Set(projects.flatMap((p) => p.sessions.map((s) => s.sessionId)));
-	const others = res.filter((s) => !s.me && !claimed.has(s.sessionId)).map(peer);
+	const others = res
+		.filter((s) => !s.me && !claimed.has(s.sessionId) && s.sessionId !== omniSessionId)
+		.map(peer);
 	return { omniSessionId, projects, others };
 }
 
@@ -167,7 +169,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 	app.get("/api/sessions", async () => {
 		const omniId = opts.driver.info.sessionId ?? "omni";
 		if (sessionsCache && Date.now() - sessionsCache.at < 3_000) return sessionsCache.data;
-		const data = classify(omniId);
+		const data = await classify(omniId);
 		sessionsCache = { at: Date.now(), data };
 		return data;
 	});

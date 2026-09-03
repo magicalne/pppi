@@ -28,9 +28,9 @@ Anti-goals: IDE aesthetics, dashboards, log viewers, multi-pane layouts.
 ## 2. Information architecture
 
 ```
-Main screen (the only screen)          Overlays (bottom sheets)
+Main screen (the only screen)          Overlays (drawn in front of chat)
 ┌───────────────────────────┐
-│ presence bar  [target ⌄]  │──tap──► Session switcher sheet
+│ presence bar  [target ⌄]  │──tap──► Target tree drawer (from the pill)
 │ one-line live status      │
 ├───────────────────────────┤
 │                           │
@@ -67,34 +67,40 @@ Main screen (the only screen)          Overlays (bottom sheets)
 
 ---
 
-## 4. Session switcher (bottom sheet, mobile-first)
+## 4. Target tree drawer (from the pill, in front of chat)
 
 ```
-╭── Sessions ──────────────────────────╮
-│                                      │
-│  ◉ Omni                    ● idle    │  ← always pinned first
-│     the whole fleet                  │
-│  ──────────────────────────────────  │
-│  ▾ Projects                     (3)  │
-│    ├ sspi · main        writing…     │
-│    │   └ wt/fix-auth       idle     │
-│    │   └ wt/perf        reading…     │
-│    └ pigeon · main        idle       │
-│                                      │
-│  Show worktrees                (●)   │  ← toggle, default OFF
-│                                      │
-╰──────────────────────────────────────╯
+   tap the target pill ("Omni ⌄") and the tree drops from right below it:
+
+   ╭────────────────────────────────╮
+   │ SESSIONS                       │
+   │ ◉ Omni              the fleet  │   depth 0
+   │ │ ◉ sspi            working…   │   depth 1 = repo (= its main session)
+   │ │ │ ◉ wt/fix-auth   idle       │   depth 2 = worktrees
+   │ │ │ ◉ wt/perf       reading…   │
+   │ │ ◉ pigeon           idle      │
+   │ │ ◉ notes — no open session   │   dim, not tappable
+   │ ────────────────────────────── │
+   │ Unpair this device             │
+   ╰────────────────────────────────╯
+   (scrim over the conversation; tap outside closes)
 ```
 
-- **Sheet, not drawer**: thumb-reachable, dismissible by swipe/tap-out.
+- **A tree, always expanded** — a list of lists with indentation. No
+  visibility toggles: Omni first, repos under it, worktrees one level deeper.
+  Faint vertical guide lines mark each ancestor level.
+- A repo row **is** its main session (label = bare repo name); non-repo
+  sessions ("others") sit at depth 1.
 - Each row: name + **its own one-line live status** (same grammar as §5).
-- The active row gets an accent ring — you always know who you're talking to.
-- **Show worktrees toggle** (default off): collapses the tree to projects;
-  worktrees appear under their project when on. Omni is never hidden.
+- The active row gets an accent bar + surface tint — you always know who
+  you're talking to.
 - Selecting a row switches the conversation view to that session's transcript
-  and closes the sheet. *(Implementation note: the gateway will need a
+  and closes the drawer. *(Implementation note: the gateway will need a
   per-session mirroring API — out of scope for this PRD, tracked separately.)*
-- Empty states are honest: "No projects yet — Omni can register one for you."
+- Empty states are honest: "<repo> — no open session".
+- The drawer is anchored to the pill you tapped (web: absolute under the
+  header; Android: overlay below the presence bar) and floats **in front of
+  the chat history**.
 
 ---
 
@@ -269,7 +275,8 @@ until the user chooses once.
 ## 12. Android parity
 
 Same information architecture, native stack:
-- Presence bar → top app row; sheet → ModalBottomSheet; composer → pill with
+- Presence bar → top app row; target tree drawer → scrim + overlay panel
+  anchored below the presence bar; composer → pill with
   `KeyboardOptions(imeAction = Send)`; Appearance → full-screen page fed by
   the same five palettes as Compose `ColorScheme`s.
 - One design source of truth: tokens table in §8 is copied 1:1 into Compose.
@@ -284,8 +291,8 @@ Same information architecture, native stack:
 | D2 | Which themes to ship in v1 | all five / cut to three | ship all five — they're cheap once tokenized |
 | D3 | Assistant message style | open text (no bubble) vs bubble | **open text** (reads human) |
 | D4 | Chat font | Inter vs Manrope | **Inter** (safer at small sizes) |
-| D5 | Session switcher | bottom sheet vs side drawer | **bottom sheet** |
-| D6 | Worktrees hidden by default? | yes / no | **yes** — projects only, toggle to expand |
+| D5 | Session switcher | bottom sheet vs tree drawer from the pill | **tree drawer from the pill**, drawn in front of chat (revised after review) |
+| D6 | Worktrees hidden by default? | yes / no | **no — tree always expanded** (revised after review) |
 | D7 | Status detail | verbs only (`reading…`) vs verb+object (`reading src/agent.ts`) | **verb+object** — one line, but concrete |
 | D8 | Voice button side | right end of pill vs left | **right** (thumb reach, matches WeChat/WhatsApp instinct) |
 | D9 | Persona name in UI | "Omni" fixed / user-renameable | **"Omni" fixed** for v1 |
