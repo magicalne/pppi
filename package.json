@@ -19,7 +19,8 @@
 		"format": "biome format --write .",
 		"test": "vitest run",
 		"test:omni": "vitest run packages/omni",
-		"test:server": "vitest run apps/server"
+		"test:server": "vitest run apps/server",
+		"install:ext": "bun run packages/pi-ext/install.mjs"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",
