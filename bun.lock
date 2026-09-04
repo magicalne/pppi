@@ -29,6 +29,7 @@
         "@sspi/protocol": "workspace:*",
         "fastify": "^5.3.3",
         "kokoro-js": "^1.2.1",
+        "onnxruntime-node": "^1.21.0",
         "qrcode": "^1.5.4",
         "transcribe-cpp": "0.2.2",
         "ws": "^8.18.1",

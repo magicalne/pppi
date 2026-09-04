@@ -19,6 +19,7 @@ import type { RpcAgentDriver } from "./agent.ts";
 import { tokensMatch } from "./config.ts";
 import { buildProfiles } from "./profiles.ts";
 import type { Stt } from "./stt.ts";
+import { SileroVad, type VadTimings } from "./vad.ts";
 import { VoiceSession, type VoiceStt, type VoiceTts, voiceStt } from "./voice.ts";
 import { WavError, decodeWav } from "./wav.ts";
 
@@ -35,6 +36,10 @@ export type ServerOptions = {
 	voiceStt?: VoiceStt;
 	/** Interactive-mode TTS provider (tests); null/omitted = no spoken replies yet. */
 	tts?: VoiceTts | null;
+	/** Voice-activity model (tests); defaults to the bundled silero_vad.onnx, inert if missing. */
+	vad?: SileroVad;
+	/** Turn-taking timings override (tests); defaults are the tuned plan values. */
+	voiceTimings?: Partial<VadTimings>;
 };
 
 type AuthedSocket = WebSocket & { authed?: boolean };
@@ -325,6 +330,8 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 	// ------------------------------------------------------- interactive voice
 
 	const sttPort = opts.voiceStt ?? voiceStt(opts.stt);
+	// bundled silero model; a missing file leaves voice sessions connected but inert
+	const vad = opts.vad ?? (await SileroVad.create().catch(() => null));
 	const voiceSessions = new Set<VoiceSession>();
 	let voiceActiveCount = 0;
 	let voiceActive = false;
@@ -337,11 +344,14 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		}
 	};
 
+	const inertVad = { prob: async () => 0 };
 	app.get("/voice", { websocket: true }, (raw: WebSocket) => {
 		const session = new VoiceSession(raw, {
 			token: opts.token,
 			stt: sttPort,
 			tts: opts.tts ?? null,
+			vad: vad ?? inertVad,
+			timings: opts.voiceTimings,
 			submit: (text) => submitUserText(text, "voice"),
 			abortAgent: () => void opts.driver.abort(),
 			onAuthed: () => setVoiceActive(true),

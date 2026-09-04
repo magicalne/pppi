@@ -1,16 +1,19 @@
 // Interactive voice sessions (ws /voice): one VoiceSession per connected mic.
 //
-// Division of labor (docs/plan/interactive-mode.md): the client owns capture,
-// VAD and endpointing — it brackets each utterance with speech_start /
-// speech_end and streams raw PCM16 16 kHz mono frames in between. The server
-// owns STT, the agent and TTS. Barge-in: the client stops playback locally on
-// its own VAD and sends `interrupt`; the server aborts the agent and drains
-// whatever TTS is in flight.
+// The client streams raw PCM16 16 kHz mono continuously while the session is
+// open and sends nothing but hello/interrupt. THIS side owns the models and
+// the turn-taking: silero VAD (32 ms windows) feeds UtteranceDetector
+// (pre-roll → sustained-speech open → silence endpoint → grace merge →
+// dispatch), echo-aware because the server knows when TTS is playing.
+// STT is transcribe-cpp streaming (partials as the user speaks), replies are
+// spoken by the TTS provider, and barge-in ("talking over the agent") aborts
+// synthesis + the in-flight agent turn. See docs/plan/interactive-mode.md.
 
 import { randomUUID } from "node:crypto";
 import type { VoiceServerEvent } from "@sspi/protocol";
 import type { WebSocket } from "ws";
 import type { Stt } from "./stt.ts";
+import { DEFAULT_TIMINGS, UtteranceDetector, type VadTimings } from "./vad.ts";
 
 // ---------------------------------------------------------------- provider ports
 
@@ -57,6 +60,9 @@ export type VoiceSessionDeps = {
 	token: string;
 	stt: VoiceStt;
 	tts: VoiceTts | null;
+	/** anything with a per-window speech probability — SileroVad in prod, scripts in tests */
+	vad: { prob(window: Float32Array): Promise<number> };
+	timings?: Partial<VadTimings>;
 	/** Submit a finalized utterance into the conversation. */
 	submit(text: string): Promise<void>;
 	/** Barge-in: abort the in-flight agent turn. */
@@ -69,43 +75,63 @@ export type VoiceSessionDeps = {
 };
 
 const HELLO_TIMEOUT_MS = 10_000;
-const MIN_UTTERANCE_MS = 300;
-const MAX_UTTERANCE_MS = 25_000;
+const PRE_ROLL_MS = 300;
+const SAMPLE_RATE = 16_000;
+const VAD_WINDOW_SAMPLES = 512; // 32 ms @ 16 kHz
 
 /** Control phrases act immediately and never become turns (plan D1: keywords command, silence ends turns). */
 const CONTROL_PHRASES = /^(stop|cancel|abort|never\s?mind|forget it|scratch that)\s*[.!,?]*$/i;
 
-type Utterance = {
+type Capture = {
 	pcm: Float32Array[];
 	samples: number;
-	/** how many buffered chunks have been handed to the stream */
 	fed: number;
 	stream: UtteranceStream | null;
-	/** resolves once openUtterance() settles (stream may be null = batch fallback) */
 	opening: Promise<void>;
-	startedAt: number;
-	finalizing: boolean;
+	/** endpointed, inside the grace window — may still merge or dispatch */
+	pending: boolean;
 };
 
 export class VoiceSession {
 	private authed = false;
-	private utterance: Utterance | null = null;
 	private helloTimer: NodeJS.Timeout | undefined;
-	private maxTimer: NodeJS.Timeout | undefined;
 	private closed = false;
 	private readonly speaker: Speaker | null;
+	private readonly detector: UtteranceDetector;
+	private readonly timings: VadTimings;
+
+	// audio path state
+	private audioMs = 0; // audio-time clock (immune to processing/wall-clock jitter)
+	private windowBuf = new Float32Array(0); // samples awaiting a full VAD window
+	private vadBusy = Promise.resolve(); // serialize VAD window processing
+	private preRoll: Float32Array[] = [];
+	private preRollSamples = 0;
+	private capture: Capture | null = null;
 
 	constructor(
 		private readonly ws: WebSocket,
 		private readonly deps: VoiceSessionDeps,
 	) {
+		this.timings = { ...DEFAULT_TIMINGS, ...deps.timings };
 		this.speaker = deps.tts
 			? new Speaker(
 					deps.tts,
 					(c) => this.sendBinary(c),
 					(e) => this.send(e),
+					(playing) => this.detector.noteTts(playing, this.audioMs),
 				)
 			: null;
+		this.detector = new UtteranceDetector(this.timings, {
+			onSpeechStart: (merged) => this.onSpeechStart(merged),
+			onSpeechEnd: (totalMs) => this.onSpeechEnd(totalMs),
+			onGraceExpired: () => void this.dispatchCapture(),
+			onBargeIn: () => {
+				// talking over the agent: stop synthesis + agent NOW; the open
+				// capture becomes the next user turn when it endpoints
+				this.speaker?.abort();
+				this.deps.abortAgent();
+			},
+		});
 		this.helloTimer = setTimeout(() => this.close("hello timeout"), HELLO_TIMEOUT_MS);
 		ws.on("message", (data: Buffer, isBinary: boolean) => {
 			void this.onMessage(data, isBinary);
@@ -114,15 +140,7 @@ export class VoiceSession {
 		ws.on("error", () => this.onClose("socket error"));
 	}
 
-	/** Assistant text is streaming in (omni conversation) — speak it sentence by sentence. */
-	assistantDelta(id: string, delta: string): void {
-		this.speaker?.assistantDelta(id, delta);
-	}
-
-	/** Assistant turn finalized — speak the tail the deltas didn't cover. */
-	assistantFinal(id: string, text: string): void {
-		this.speaker?.assistantFinal(id, text);
-	}
+	// ------------------------------------------------------------- transport
 
 	private send(evt: VoiceServerEvent): void {
 		if (!this.closed && this.ws.readyState === this.ws.OPEN) this.ws.send(JSON.stringify(evt));
@@ -145,9 +163,8 @@ export class VoiceSession {
 		if (this.closed) return;
 		this.closed = true;
 		clearTimeout(this.helloTimer);
-		clearTimeout(this.maxTimer);
-		this.utterance?.stream?.dispose();
-		this.utterance = null;
+		this.capture?.stream?.dispose();
+		this.capture = null;
 		this.speaker?.abort();
 		if (this.authed) this.deps.onClosed();
 		this.deps.onGone?.(reason);
@@ -155,7 +172,7 @@ export class VoiceSession {
 
 	private async onMessage(data: Buffer, isBinary: boolean): Promise<void> {
 		if (isBinary) {
-			if (this.authed && this.utterance) this.feedAudio(data);
+			if (this.authed) this.onAudio(data);
 			return;
 		}
 		let msg: { type?: string; token?: string };
@@ -178,67 +195,64 @@ export class VoiceSession {
 				stt: this.deps.stt.status,
 				tts: this.deps.tts?.status ?? { ready: false, reason: "no tts provider" },
 			});
+			this.send({ type: "voice_state", state: "listening" });
 			return;
 		}
-		switch (msg.type) {
-			case "speech_start":
-				void this.startUtterance();
-				break;
-			case "speech_end":
-				void this.endUtterance(false);
-				break;
-			case "interrupt":
-				this.interrupt();
-				break;
-			default:
-				break;
-		}
+		if (msg.type === "interrupt") this.interrupt();
 	}
 
-	// ------------------------------------------------------------- utterances
+	// ------------------------------------------------------------- audio path
 
-	private async startUtterance(): Promise<void> {
-		if (this.utterance) return; // already open — ignore duplicate starts
-		const utt: Utterance = {
-			pcm: [],
-			samples: 0,
-			fed: 0,
-			stream: null,
-			opening: Promise.resolve(),
-			startedAt: Date.now(),
-			finalizing: false,
-		};
-		this.utterance = utt;
-		this.send({ type: "voice_state", state: "listening" });
-		utt.opening = (async () => {
-			try {
-				utt.stream = await this.deps.stt.openUtterance();
-				this.pumpStream(utt); // chunks that arrived while the stream was opening
-			} catch (err) {
-				this.send({ type: "voice_error", message: `stt: ${String((err as Error).message ?? err)}` });
-			}
-		})();
-		clearTimeout(this.maxTimer);
-		this.maxTimer = setTimeout(() => void this.endUtterance(true), MAX_UTTERANCE_MS);
-	}
-
-	private feedAudio(data: Buffer): void {
-		const utt = this.utterance;
-		if (!utt || utt.finalizing) return;
+	private onAudio(data: Buffer): void {
 		const frames = data.length >> 1;
 		const pcm = new Float32Array(frames);
 		for (let i = 0; i < frames; i++) pcm[i] = data.readInt16LE(i * 2) / 32768;
-		utt.pcm.push(pcm);
-		utt.samples += frames;
-		this.pumpStream(utt);
+
+		if (this.capture) {
+			this.appendCapture(pcm);
+		} else {
+			this.preRoll.push(pcm);
+			this.preRollSamples += frames;
+			const cap = (PRE_ROLL_MS * SAMPLE_RATE) / 1000;
+			while (this.preRollSamples > cap && this.preRoll.length > 1) {
+				const dropped = this.preRoll.shift()!;
+				this.preRollSamples -= dropped.length;
+			}
+		}
+
+		// VAD runs per 512-sample window, serialized to keep order
+		this.windowBuf = concat(this.windowBuf, pcm);
+		this.vadBusy = this.vadBusy.then(() => this.runVadWindows());
 	}
 
-	/** Feed every buffered-but-unfed chunk to the open stream; partials ride along. */
-	private pumpStream(utt: Utterance): void {
-		const stream = utt.stream;
+	private async runVadWindows(): Promise<void> {
+		const windowMs = (VAD_WINDOW_SAMPLES / SAMPLE_RATE) * 1000; // 32 ms
+		while (this.windowBuf.length >= VAD_WINDOW_SAMPLES && !this.closed) {
+			const win = this.windowBuf.subarray(0, VAD_WINDOW_SAMPLES);
+			this.windowBuf = this.windowBuf.slice(VAD_WINDOW_SAMPLES);
+			let prob = 0;
+			try {
+				prob = await this.deps.vad.prob(win);
+			} catch {
+				continue; // one bad window shouldn't kill the session
+			}
+			this.audioMs += windowMs;
+			this.detector.feed(prob, this.audioMs);
+		}
+	}
+
+	private appendCapture(pcm: Float32Array): void {
+		const cap = this.capture!;
+		cap.pcm.push(pcm);
+		cap.samples += pcm.length;
+		this.pumpStream(cap);
+	}
+
+	private pumpStream(cap: Capture): void {
+		const stream = cap.stream;
 		if (!stream) return;
-		while (utt.fed < utt.pcm.length) {
-			const pcm = utt.pcm[utt.fed++]!;
+		while (cap.fed < cap.pcm.length) {
+			const pcm = cap.pcm[cap.fed++]!;
 			void stream.feed(pcm).then(
 				({ committed, tentative }) => this.send({ type: "stt_partial", committed, tentative }),
 				() => this.send({ type: "voice_error", message: "stt stream failed" }),
@@ -246,33 +260,61 @@ export class VoiceSession {
 		}
 	}
 
-	private async endUtterance(forced: boolean): Promise<void> {
-		const utt = this.utterance;
-		clearTimeout(this.maxTimer);
-		if (!utt || utt.finalizing) return;
-		utt.finalizing = true;
-		const durationMs = (utt.samples / 16000) * 1000;
-		if (durationMs < MIN_UTTERANCE_MS && !forced) {
-			utt.stream?.dispose();
-			this.utterance = null;
-			this.send({ type: "voice_state", state: "listening" });
+	// ------------------------------------------------------------- turn events
+
+	private onSpeechStart(merged: boolean): void {
+		if (merged && this.capture) return; // same capture continues
+		const seeded = this.preRoll;
+		const seededSamples = this.preRollSamples;
+		this.preRoll = [];
+		this.preRollSamples = 0;
+		const cap: Capture = {
+			pcm: seeded,
+			samples: seededSamples,
+			fed: 0,
+			stream: null,
+			opening: Promise.resolve(),
+			pending: false,
+		};
+		this.capture = cap;
+		cap.opening = (async () => {
+			try {
+				cap.stream = await this.deps.stt.openUtterance();
+				this.pumpStream(cap); // pre-roll that buffered while the stream opened
+			} catch (err) {
+				this.send({ type: "voice_error", message: `stt: ${String((err as Error).message ?? err)}` });
+			}
+		})();
+		this.send({ type: "vad", speaking: true });
+	}
+
+	private onSpeechEnd(totalMs: number): void {
+		this.send({ type: "vad", speaking: false });
+		if (!this.capture) return;
+		if (totalMs === 0) {
+			// blip — discard, back to idle
+			this.capture.stream?.dispose();
+			this.capture = null;
 			return;
 		}
+		this.capture.pending = true; // grace window: may merge or dispatch
+	}
+
+	private async dispatchCapture(): Promise<void> {
+		const cap = this.capture;
+		this.capture = null;
+		if (!cap) return;
 		try {
-			await utt.opening; // the stream may still be opening when speech_end races in
-			this.pumpStream(utt);
+			await cap.opening; // stream may still be opening
+			this.pumpStream(cap);
 			let text = "";
-			if (utt.stream) text = await utt.stream.finalize();
-			else text = await this.deps.stt.transcribeBuffer(concatPcm(utt.pcm, utt.samples));
-			utt.stream?.dispose();
-			this.utterance = null;
+			if (cap.stream) text = await cap.stream.finalize();
+			else text = await this.deps.stt.transcribeBuffer(concatAll(cap.pcm, cap.samples));
+			cap.stream?.dispose();
 			text = text.trim();
 			if (text) await this.dispatchUtterance(text);
-			else this.send({ type: "voice_state", state: "listening" });
 		} catch (err) {
-			this.utterance = null;
 			this.send({ type: "voice_error", message: String((err as Error).message ?? err) });
-			this.send({ type: "voice_state", state: "listening" });
 		}
 	}
 
@@ -303,9 +345,32 @@ export class VoiceSession {
 		this.speaker?.abort();
 		this.deps.abortAgent();
 	}
+
+	/** Assistant text is streaming in (omni conversation) — speak it sentence by sentence. */
+	assistantDelta(id: string, delta: string): void {
+		this.speaker?.assistantDelta(id, delta);
+	}
+
+	/** Assistant turn finalized — speak the tail the deltas didn't cover. */
+	assistantFinal(id: string, text: string): void {
+		this.speaker?.assistantFinal(id, text);
+	}
+
+	/** Directly feed VAD probabilities (tests; bypasses the model). */
+	feedProbability(prob: number, advanceMs = 32): void {
+		this.audioMs += advanceMs;
+		this.detector.feed(prob, this.audioMs);
+	}
 }
 
-function concatPcm(chunks: Float32Array[], total: number): Float32Array {
+function concat(a: Float32Array, b: Float32Array): Float32Array {
+	const out = new Float32Array(a.length + b.length);
+	out.set(a);
+	out.set(b, a.length);
+	return out;
+}
+
+function concatAll(chunks: Float32Array[], total: number): Float32Array {
 	const out = new Float32Array(total);
 	let off = 0;
 	for (const c of chunks) {
@@ -333,6 +398,7 @@ export class Speaker {
 		private readonly tts: VoiceTts,
 		private readonly sendBinary: (chunk: Buffer) => void,
 		private readonly sendEvent: (evt: VoiceServerEvent) => void,
+		private readonly onPlayback?: (playing: boolean) => void,
 	) {}
 
 	/** A new user turn is going out — speaking may resume. */
@@ -377,10 +443,12 @@ export class Speaker {
 					if (!started) {
 						this.sendEvent({ type: "tts_start", id: item.id, rate: chunk.rate });
 						this.sendEvent({ type: "voice_state", state: "speaking" });
+						this.onPlayback?.(true);
 						started = true;
 					}
 					this.sendBinary(chunk.pcm);
 				}
+				if (started || this.aborted) this.onPlayback?.(false);
 				if (started) {
 					this.sendEvent({ type: "tts_end", id: item.id, interrupted: this.aborted || undefined });
 					this.sendEvent({ type: "voice_state", state: "listening" });
@@ -391,6 +459,7 @@ export class Speaker {
 		} catch (err) {
 			this.sendEvent({ type: "voice_error", message: `tts: ${String((err as Error).message ?? err)}` });
 			this.sendEvent({ type: "voice_state", state: "listening" });
+			this.onPlayback?.(false);
 		} finally {
 			this.queue.length = 0;
 			this.draining = false;

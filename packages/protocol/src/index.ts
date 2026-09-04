@@ -84,20 +84,20 @@ export type VoiceTtsStatus = { ready: true; provider: string; voice: string } | 
 
 /**
  * Client → server on /voice. Binary frames carry raw PCM16 16 kHz mono
- * (~100 ms chunks, only while an utterance is open); text frames carry this
- * JSON control protocol. The client owns VAD + endpointing; the server owns
- * STT, the agent and TTS.
+ * (~100 ms chunks, streamed continuously while the interactive session is
+ * open); text frames carry this JSON control protocol. The SERVER runs silero
+ * VAD + endpointing (it owns the models and knows when TTS is playing, so
+ * barge-in thresholds are echo-aware) and reports turns via `vad` events.
  */
 export type VoiceClientMessage =
 	| { type: "hello"; token: string; client: "web" | "android" | "test" }
-	| { type: "speech_start" }
-	| { type: "speech_end" }
 	| { type: "interrupt" };
 
 export type VoiceServerEvent =
 	| { type: "voice_hello_ok"; stt: VoiceSttStatus; tts: VoiceTtsStatus }
 	| { type: "voice_hello_fail"; error: string }
 	| { type: "voice_state"; state: VoiceState }
+	| { type: "vad"; speaking: boolean }
 	| { type: "stt_partial"; committed: string; tentative: string }
 	| { type: "stt_final"; id: string; text: string }
 	| { type: "tts_start"; id: string; rate: number }
