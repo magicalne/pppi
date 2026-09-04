@@ -38,34 +38,35 @@ export function resolveTtsProvider(): TtsProvider {
 const KOKORO_REPO_DIR = "models--onnx-community--Kokoro-82M-v1.0-ONNX";
 const DEFAULT_KOKORO_VOICE = "af_heart";
 
-export function resolveKokoroModel(): { onnxPath: string; voicesPath: string } | { reason: string } {
+export function resolveKokoroModel(): { dir: string } | { reason: string } {
 	const explicit = process.env.SSPI_TTS_MODEL;
 	if (explicit) {
-		const onnxPath = existsSync(explicit) && explicit.endsWith(".onnx") ? explicit : findOnnx(explicit);
-		const voicesPath = onnxPath ? join(onnxPath, "..", "voices.bin") : "";
-		if (onnxPath && voicesPath && existsSync(voicesPath)) return { onnxPath, voicesPath };
-		if (onnxPath) return { reason: `SSPI_TTS_MODEL dir is missing voices.bin next to ${onnxPath}` };
-		if (explicit) return { reason: `SSPI_TTS_MODEL points to a missing model: ${explicit}` };
+		const onnxPath = existsSync(explicit) ? findOnnx(explicit) : "";
+		if (onnxPath) return { dir: explicit };
+		if (explicit) return { reason: `SSPI_TTS_MODEL dir has no onnx/model*.onnx: ${explicit}` };
 	}
+	// HF cache snapshots (as laid out by `huggingface-cli download` or git lfs)
 	const hfCache = join(homedir(), ".cache", "huggingface", "hub", KOKORO_REPO_DIR, "snapshots");
 	try {
 		for (const snap of readdirSync(hfCache)) {
-			const onnxPath = findOnnx(join(hfCache, snap));
-			const voicesPath = onnxPath ? join(onnxPath, "..", "voices.bin") : "";
-			if (onnxPath && voicesPath && existsSync(voicesPath)) return { onnxPath, voicesPath };
+			const dir = join(hfCache, snap);
+			if (findOnnx(dir)) return { dir };
 		}
 	} catch {
 		// not cached
 	}
 	return {
-		reason: `no kokoro model cached — download ${KOKORO_REPO_DIR} (kokoro .onnx + voices.bin), or set SSPI_TTS_MODEL`,
+		reason: `no kokoro model cached — download ${KOKORO_REPO_DIR} (config.json, onnx/model_quantized.onnx, voices/<voice>.bin) and set SSPI_TTS_MODEL, or run: bunx --bun huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX --include "onnx/model_quantized.onnx" "voices/af_heart.bin" "config.json" "tokenizer*"`,
 	};
 }
 
+/** Any onnx/model*.onnx under `dir/onnx/` (the HF repo layout). */
 function findOnnx(dir: string): string {
+	const onnxDir = join(dir, "onnx");
 	try {
-		for (const f of readdirSync(dir)) {
-			if (f.endsWith(".onnx") && !f.includes("voices")) return join(dir, f);
+		const files = readdirSync(onnxDir);
+		for (const want of ["model_quantized.onnx", "model.onnx"]) {
+			if (files.includes(want)) return join(onnxDir, want);
 		}
 	} catch {
 		// missing dir
@@ -120,7 +121,8 @@ async function loadKokoroEngine(): Promise<KokoroEngine | null> {
 			}>;
 		};
 	};
-	const tts = await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
+	// local snapshot dir (SSPI_TTS_MODEL or the HF cache) — never the network
+	const tts = await mod.KokoroTTS.from_pretrained(model.dir, {
 		dtype: "q8",
 		device: "cpu",
 	});
