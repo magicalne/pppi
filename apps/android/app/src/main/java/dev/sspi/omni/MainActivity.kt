@@ -558,6 +558,16 @@ fun ChatScreen(
 	val keepRecording = remember { AtomicBoolean(false) }
 	var pendingVoiceId by remember { mutableStateOf<String?>(null) }
 
+	// ---- interactive voice mode (server-driven VAD/endpointing) ----
+	var voiceOn by remember { mutableStateOf(false) }
+	var voicePhase by remember { mutableStateOf(VoicePhase.LISTENING) }
+	var voiceRate by remember { mutableIntStateOf(24000) }
+	var voiceCommitted by remember { mutableStateOf("") }
+	var voiceTentative by remember { mutableStateOf("") }
+	val voiceMachine = remember { VoicePhaseMachine() }
+	val voiceClientRef = remember { java.util.concurrent.atomic.AtomicReference<VoiceClient?>(null) }
+	val voiceEngineRef = remember { java.util.concurrent.atomic.AtomicReference<VoiceAudioEngine?>(null) }
+
 	val client = remember {
 		clientFactory(
 			server,
@@ -726,10 +736,82 @@ fun ChatScreen(
 		}
 	}
 
+	fun startVoice() {
+		if (voiceOn) return
+		voiceCommitted = ""
+		voiceTentative = ""
+		voiceMachine.reset()
+		voicePhase = VoicePhase.LISTENING
+		thread(name = "sspi-voice") {
+			try {
+				val client = VoiceClient(
+					server,
+					token,
+					onEvent = { evt ->
+						when (evt) {
+							is VoiceServerEvent.Vad -> {
+								val stop = voiceMachine.onVad(evt.speaking)
+								voicePhase = voiceMachine.phase
+								if (stop) voiceEngineRef.get()?.stopPlayback()
+							}
+							is VoiceServerEvent.VoiceState -> {
+								voiceMachine.onServerState(evt.state)
+								voicePhase = voiceMachine.phase
+							}
+							is VoiceServerEvent.SttPartial -> {
+								voiceCommitted = evt.committed
+								voiceTentative = evt.tentative
+							}
+							is VoiceServerEvent.SttFinal -> {
+								voiceCommitted = evt.text
+								voiceTentative = ""
+							}
+							is VoiceServerEvent.TtsStart -> voiceRate = evt.rate
+							is VoiceServerEvent.TtsEnd -> {
+								voicePhase = VoicePhase.LISTENING
+								voiceClientRef.get()?.playbackDone()
+							}
+							is VoiceServerEvent.VoiceError -> notice = evt.message
+							else -> {}
+						}
+					},
+					onAudio = { pcm -> voiceEngineRef.get()?.playPcm(pcm.toByteArray(), voiceRate) },
+					onGone = {
+						voiceOn = false
+						voiceEngineRef.get()?.stop()
+						notice = "voice session ended"
+					},
+				)
+				val engine = VoiceAudioEngine(client)
+				voiceClientRef.set(client)
+				voiceEngineRef.set(engine)
+				client.start()
+				voiceOn = true
+				engine.startMic { msg -> notice = msg }
+			} catch (e: Exception) {
+				notice = e.message ?: "voice unavailable"
+				voiceOn = false
+			}
+		}
+	}
+
+	fun stopVoice() {
+		voiceClientRef.getAndSet(null)?.close()
+		voiceEngineRef.getAndSet(null)?.stop()
+		voiceOn = false
+		voicePhase = VoicePhase.LISTENING
+	}
+
+	fun interruptVoice() {
+		voiceEngineRef.get()?.stopPlayback()
+		voiceClientRef.get()?.interrupt()
+		voicePhase = VoicePhase.LISTENING
+	}
+
 	val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
 		if (granted) {
 			micGranted = true
-			startRecording()
+			startVoice()
 		} else notice = "microphone permission denied"
 	}
 
@@ -908,7 +990,43 @@ fun ChatScreen(
 					.padding(start = 18.dp, top = 4.dp, bottom = 4.dp, end = 6.dp),
 				verticalAlignment = Alignment.CenterVertically,
 			) {
-				if (recording) {
+				if (voiceOn) {
+					Row(
+						Modifier.weight(1f).height(44.dp),
+						verticalAlignment = Alignment.CenterVertically,
+					) {
+						Text(
+							when (voicePhase) {
+								VoicePhase.LISTENING -> "listening — just talk"
+								VoicePhase.THINKING -> "thinking…"
+								VoicePhase.AGENT_SPEAKING -> "talking… speak up to interrupt"
+								VoicePhase.USER_SPEAKING ->
+									if (voiceCommitted.isBlank() && voiceTentative.isBlank()) "…" else voiceCommitted + " " + voiceTentative
+							},
+							color = when (voicePhase) {
+								VoicePhase.AGENT_SPEAKING -> theme.accent
+								VoicePhase.USER_SPEAKING -> theme.text
+								else -> theme.dim
+							},
+							fontSize = 14.sp,
+							maxLines = 1,
+							overflow = TextOverflow.Ellipsis,
+							modifier = Modifier.weight(1f),
+						)
+						if (voicePhase == VoicePhase.AGENT_SPEAKING) {
+							Text(
+								"stop",
+								color = theme.text,
+								fontSize = 13.sp,
+								modifier = Modifier
+									.clip(RoundedCornerShape(999.dp))
+									.border(1.dp, theme.line, RoundedCornerShape(999.dp))
+									.padding(horizontal = 10.dp, vertical = 4.dp)
+									.clickable { interruptVoice() },
+							)
+						}
+					}
+				} else if (recording) {
 					Row(
 						Modifier.weight(1f).height(44.dp),
 						verticalAlignment = Alignment.CenterVertically,
@@ -942,19 +1060,22 @@ fun ChatScreen(
 						.size(44.dp)
 						.testTag("sspi.mic")
 						.clip(CircleShape)
-						.background(if (recording) theme.danger else theme.accent)
-						.pointerInput(Unit) {
+						.background(if (voiceOn || recording) theme.danger else theme.accent)
+						.pointerInput(voiceOn) {
 							detectTapGestures(
 								onPress = {
 									when {
+										voiceOn -> {
+											tryAwaitRelease()
+											stopVoice()
+										}
 										recording -> {
 											tryAwaitRelease()
 											stopRecordingAndSend()
 										}
 										micGranted -> {
-											startRecording()
+											startVoice()
 											tryAwaitRelease()
-											stopRecordingAndSend()
 										}
 										else -> permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
 									}
@@ -963,7 +1084,11 @@ fun ChatScreen(
 						},
 					contentAlignment = Alignment.Center,
 				) {
-					Text(if (recording) "■" else "●", color = if (recording) Color.White else theme.accentInk, fontSize = 16.sp)
+					Text(
+						if (voiceOn || recording) "■" else "●",
+						color = if (voiceOn) Color.White else theme.accentInk,
+						fontSize = 16.sp,
+					)
 				}
 			}
 			Spacer(Modifier.height(10.dp))

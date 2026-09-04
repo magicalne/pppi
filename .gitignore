@@ -10,3 +10,4 @@ apps/android/local.properties
 .DS_Store
 .pi/
 .worktrees/
+__pycache__/

@@ -139,3 +139,105 @@ val protocolJson = Json {
 	ignoreUnknownKeys = true
 	classDiscriminator = "type"
 }
+
+// ---- interactive voice (ws /voice, mirrors packages/protocol v4) ----
+
+@Serializable
+data class VoiceStatusDto(
+	val ready: Boolean = false,
+	val modelId: String? = null,
+	val reason: String? = null,
+	val provider: String? = null,
+	val voice: String? = null,
+)
+
+@Serializable
+sealed class VoiceServerEvent {
+
+	@Serializable
+	@SerialName("voice_hello_ok")
+	data class VoiceHelloOk(val stt: VoiceStatusDto, val tts: VoiceStatusDto) : VoiceServerEvent()
+
+	@Serializable
+	@SerialName("voice_hello_fail")
+	data class VoiceHelloFail(val error: String) : VoiceServerEvent()
+
+	@Serializable
+	@SerialName("voice_state")
+	data class VoiceState(val state: String) : VoiceServerEvent()
+
+	@Serializable
+	@SerialName("vad")
+	data class Vad(val speaking: Boolean) : VoiceServerEvent()
+
+	@Serializable
+	@SerialName("stt_partial")
+	data class SttPartial(val committed: String = "", val tentative: String = "") : VoiceServerEvent()
+
+	@Serializable
+	@SerialName("stt_final")
+	data class SttFinal(val id: String, val text: String) : VoiceServerEvent()
+
+	@Serializable
+	@SerialName("tts_start")
+	data class TtsStart(val id: String, val rate: Int = 24000) : VoiceServerEvent()
+
+	@Serializable
+	@SerialName("tts_end")
+	data class TtsEnd(val id: String = "", val interrupted: Boolean = false) : VoiceServerEvent()
+
+	@Serializable
+	@SerialName("voice_error")
+	data class VoiceError(val message: String) : VoiceServerEvent()
+}
+
+/** Voice client → server JSON (we only send these three; audio is binary frames). */
+object VoiceClientMessages {
+	fun hello(token: String): String =
+		"""{"type":"hello","token":"$token","client":"android"}"""
+
+	fun interrupt(): String = """{"type":"interrupt"}"""
+
+	fun playbackDone(): String = """{"type":"playback_done"}"""
+}
+
+/** UI-facing turn-taking state, mirroring the web pill. */
+enum class VoicePhase { LISTENING, USER_SPEAKING, THINKING, AGENT_SPEAKING }
+
+/**
+ * Pure phase reducer so the turn-taking UI logic is unit-testable without
+ * Android audio. Mirrors apps/web/src/voice/useVoice.ts.
+ */
+class VoicePhaseMachine {
+	var phase: VoicePhase = VoicePhase.LISTENING
+		private set
+
+	/** true when the reducer says local playback must stop right now (barge-in). */
+	var stopPlayback: Boolean = false
+		private set
+
+	fun onVad(speaking: Boolean): Boolean {
+		// barge-in: the user talked over the agent — caller must cut local playback
+		val stop = speaking && phase == VoicePhase.AGENT_SPEAKING
+		stopPlayback = false // one-shot; the return value carries it
+		if (speaking) {
+			phase = VoicePhase.USER_SPEAKING
+		} else if (phase == VoicePhase.USER_SPEAKING) {
+			phase = VoicePhase.LISTENING
+		}
+		return stop
+	}
+
+	fun onServerState(state: String) {
+		when (state) {
+			"thinking" -> phase = VoicePhase.THINKING
+			"speaking" -> phase = VoicePhase.AGENT_SPEAKING
+			"listening" -> if (phase != VoicePhase.USER_SPEAKING) phase = VoicePhase.LISTENING
+		}
+	}
+
+	fun reset() {
+		phase = VoicePhase.LISTENING
+		stopPlayback = false
+	}
+}
