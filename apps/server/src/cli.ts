@@ -15,6 +15,7 @@ import { RpcAgentDriver } from "./agent.ts";
 import { loadOrCreateConfig, sspiDir } from "./config.ts";
 import { createServer } from "./server.ts";
 import { Stt } from "./stt.ts";
+import { resolveTtsProvider } from "./tts.ts";
 
 function parseArgs(argv: string[]): Record<string, string | boolean> {
 	const out: Record<string, string | boolean> = {};
@@ -93,12 +94,14 @@ const stt = Stt.create({ disabled: args["no-stt"] === true });
 const sttStatus = stt.status;
 
 const webDist = join(repoRoot, "apps", "web", "dist");
+const tts = resolveTtsProvider();
 const app = await createServer({
 	token: cfg.token,
 	driver,
 	stt,
 	webDist: existsSync(webDist) ? webDist : undefined,
 	pair,
+	tts,
 });
 
 await app.listen({ port: cfg.port, host: cfg.host });
@@ -120,6 +123,7 @@ console.log(`
   omni      session ${omniSessionId}${markedOmniSession() ? " (marked via /omni)" : ""}
   agent     ${agentCmd.join(" ")}
   stt       ${sttStatus.ready ? `ready (${sttStatus.modelId})` : sttStatus.reason}
+  tts       ${tts.status.ready ? `ready (${tts.id} · ${tts.status.voice})` : tts.status.reason}
   clients   scan this on the android app, or open the pair link in a browser.
             web: enter the token at the URL below. Voice is the big button.
 ${qr ? `\n${qr}\n` : ""}

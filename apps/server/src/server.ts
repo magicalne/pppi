@@ -118,10 +118,20 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		}
 	}
 
-	// driver events are always the omni conversation (no target)
+	// driver events are always the omni conversation (no target).
+	// They also feed interactive voice: open mic sessions speak the answer.
+	const speakAssistant = (fn: (s: VoiceSession) => void): void => {
+		for (const s of voiceSessions) fn(s);
+	};
 	opts.driver.on("state", (state, toolName) => broadcast({ type: "agent_state", state, toolName }));
-	opts.driver.on("assistant-delta", (id, delta) => broadcast({ type: "assistant_delta", id, delta }));
-	opts.driver.on("assistant-final", (id, text) => broadcast({ type: "assistant_final", id, text }));
+	opts.driver.on("assistant-delta", (id, delta) => {
+		broadcast({ type: "assistant_delta", id, delta });
+		speakAssistant((s) => s.assistantDelta(id, delta));
+	});
+	opts.driver.on("assistant-final", (id, text) => {
+		broadcast({ type: "assistant_final", id, text });
+		speakAssistant((s) => s.assistantFinal(id, text));
+	});
 	opts.driver.on("tool", (toolName, phase, label) => broadcast({ type: "tool_event", toolName, phase, label }));
 	opts.driver.on("notify", (level, message) => broadcast({ type: "agent_notify", level, message }));
 	opts.driver.on("error", (message) => broadcast({ type: "error", message }));
@@ -158,6 +168,8 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 				const id = randomUUID();
 				broadcast({ type: "assistant_final", id, text: e.reply, profileId: e.fromSessionId });
 				peerLog.push({ id, role: "assistant", text: e.reply, ts: Date.now(), profileId: e.fromSessionId });
+				// a delegated answer lands in the omni conversation — say it too
+				speakAssistant((s) => s.assistantFinal(id, e.reply!));
 			}
 		} catch {
 			// no replies yet / non-JSON
@@ -313,6 +325,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 	// ------------------------------------------------------- interactive voice
 
 	const sttPort = opts.voiceStt ?? voiceStt(opts.stt);
+	const voiceSessions = new Set<VoiceSession>();
 	let voiceActiveCount = 0;
 	let voiceActive = false;
 	const setVoiceActive = (active: boolean): void => {
@@ -325,15 +338,19 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 	};
 
 	app.get("/voice", { websocket: true }, (raw: WebSocket) => {
-		new VoiceSession(raw, {
+		const session = new VoiceSession(raw, {
 			token: opts.token,
 			stt: sttPort,
 			tts: opts.tts ?? null,
 			submit: (text) => submitUserText(text, "voice"),
 			abortAgent: () => void opts.driver.abort(),
 			onAuthed: () => setVoiceActive(true),
-			onClosed: () => setVoiceActive(false),
+			onClosed: () => {
+				voiceSessions.delete(session);
+				setVoiceActive(false);
+			},
 		});
+		voiceSessions.add(session);
 	});
 
 	// ---------------------------------------------------------------- static web app

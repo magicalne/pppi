@@ -93,11 +93,19 @@ export class VoiceSession {
 	private helloTimer: NodeJS.Timeout | undefined;
 	private maxTimer: NodeJS.Timeout | undefined;
 	private closed = false;
+	private readonly speaker: Speaker | null;
 
 	constructor(
 		private readonly ws: WebSocket,
 		private readonly deps: VoiceSessionDeps,
 	) {
+		this.speaker = deps.tts
+			? new Speaker(
+					deps.tts,
+					(c) => this.sendBinary(c),
+					(e) => this.send(e),
+				)
+			: null;
 		this.helloTimer = setTimeout(() => this.close("hello timeout"), HELLO_TIMEOUT_MS);
 		ws.on("message", (data: Buffer, isBinary: boolean) => {
 			void this.onMessage(data, isBinary);
@@ -106,8 +114,22 @@ export class VoiceSession {
 		ws.on("error", () => this.onClose("socket error"));
 	}
 
+	/** Assistant text is streaming in (omni conversation) — speak it sentence by sentence. */
+	assistantDelta(id: string, delta: string): void {
+		this.speaker?.assistantDelta(id, delta);
+	}
+
+	/** Assistant turn finalized — speak the tail the deltas didn't cover. */
+	assistantFinal(id: string, text: string): void {
+		this.speaker?.assistantFinal(id, text);
+	}
+
 	private send(evt: VoiceServerEvent): void {
 		if (!this.closed && this.ws.readyState === this.ws.OPEN) this.ws.send(JSON.stringify(evt));
+	}
+
+	private sendBinary(data: Buffer): void {
+		if (!this.closed && this.ws.readyState === this.ws.OPEN) this.ws.send(data, { binary: true });
 	}
 
 	private close(reason: string): void {
@@ -126,6 +148,7 @@ export class VoiceSession {
 		clearTimeout(this.maxTimer);
 		this.utterance?.stream?.dispose();
 		this.utterance = null;
+		this.speaker?.abort();
 		if (this.authed) this.deps.onClosed();
 		this.deps.onGone?.(reason);
 	}
@@ -258,24 +281,26 @@ export class VoiceSession {
 		if (CONTROL_PHRASES.test(text)) {
 			this.send({ type: "stt_final", id: randomUUID(), text });
 			this.send({ type: "voice_state", state: "listening" });
-			this.deps.abortAgent();
+			this.interrupt();
 			return;
 		}
 		const id = randomUUID();
 		this.send({ type: "stt_final", id, text });
 		this.send({ type: "voice_state", state: "thinking" });
+		this.speaker?.beginTurn();
 		try {
 			await this.deps.submit(text);
 		} catch (err) {
 			this.send({ type: "voice_error", message: String((err as Error).message ?? err) });
 		}
-		// With no TTS the turn ends when submission does; with TTS the
-		// speaking/listening states are driven by tts_start/tts_end (Phase 2).
+		// With TTS the speaking/listening states are driven by the speaker's
+		// tts_start/tts_end; without it the turn ends when submission does.
 		if (!this.deps.tts) this.send({ type: "voice_state", state: "listening" });
 	}
 
-	/** Barge-in: abort the agent; TTS drain arrives with the provider wiring. */
+	/** Barge-in: stop talking NOW, abort the agent. */
 	interrupt(): void {
+		this.speaker?.abort();
 		this.deps.abortAgent();
 	}
 }
@@ -288,4 +313,129 @@ function concatPcm(chunks: Float32Array[], total: number): Float32Array {
 		off += c.length;
 	}
 	return out;
+}
+
+// ---------------------------------------------------------------- speaking
+
+/**
+ * Turns the assistant's streamed text into spoken audio: sentence chunking on
+ * the way in (first audio leaves ~as soon as the first sentence forms), FIFO
+ * queue, tts_start/binary/tts_end framing, and hard abort on barge-in.
+ */
+export class Speaker {
+	private queue: Array<{ id: string; text: string }> = [];
+	private draining = false;
+	private aborted = false;
+	/** per assistant message: how much of its final text has been enqueued */
+	private chunker = { id: "", pending: "", emitted: "" };
+
+	constructor(
+		private readonly tts: VoiceTts,
+		private readonly sendBinary: (chunk: Buffer) => void,
+		private readonly sendEvent: (evt: VoiceServerEvent) => void,
+	) {}
+
+	/** A new user turn is going out — speaking may resume. */
+	beginTurn(): void {
+		this.aborted = false;
+	}
+
+	assistantDelta(id: string, delta: string): void {
+		if (this.chunker.id !== id) this.chunker = { id, pending: "", emitted: "" };
+		this.chunker.pending += delta;
+		// an unclosed code fence isn't prose yet — hold until it closes
+		if ((this.chunker.pending.match(/```/g)?.length ?? 0) % 2 === 1) return;
+		const { sentences, rest } = takeSentences(this.chunker.pending);
+		this.chunker.pending = rest;
+		for (const s of sentences) this.enqueue(s);
+	}
+
+	assistantFinal(id: string, text: string): void {
+		if (this.chunker.id !== id) return;
+		if (!text.startsWith(this.chunker.emitted)) return; // rewritten mid-flight: the visible text is right, stay quiet
+		const tail = text.slice(this.chunker.emitted.length).trim();
+		if (tail) this.enqueue(tail);
+	}
+
+	private enqueue(text: string): void {
+		const prose = speakProse(text);
+		if (!prose) return;
+		this.chunker.emitted += text;
+		this.queue.push({ id: randomUUID(), text: prose });
+		void this.drain();
+	}
+
+	private async drain(): Promise<void> {
+		if (this.draining) return;
+		this.draining = true;
+		try {
+			while (this.queue.length > 0 && !this.aborted) {
+				const item = this.queue.shift()!;
+				let started = false;
+				for await (const chunk of this.tts.synthesize(item.text)) {
+					if (this.aborted) break;
+					if (!started) {
+						this.sendEvent({ type: "tts_start", id: item.id, rate: chunk.rate });
+						this.sendEvent({ type: "voice_state", state: "speaking" });
+						started = true;
+					}
+					this.sendBinary(chunk.pcm);
+				}
+				if (started) {
+					this.sendEvent({ type: "tts_end", id: item.id, interrupted: this.aborted || undefined });
+					this.sendEvent({ type: "voice_state", state: "listening" });
+				} else if (this.aborted) {
+					this.sendEvent({ type: "voice_state", state: "listening" });
+				}
+			}
+		} catch (err) {
+			this.sendEvent({ type: "voice_error", message: `tts: ${String((err as Error).message ?? err)}` });
+			this.sendEvent({ type: "voice_state", state: "listening" });
+		} finally {
+			this.queue.length = 0;
+			this.draining = false;
+		}
+	}
+
+	/** Barge-in: drop the queue, stop the in-flight synthesis between chunks. */
+	abort(): void {
+		this.aborted = true;
+		this.queue.length = 0;
+	}
+}
+
+/** Pull complete sentences off the front of the accumulating text. */
+export function takeSentences(buf: string): { sentences: string[]; rest: string } {
+	const sentences: string[] = [];
+	let start = 0;
+	for (;;) {
+		const m = /[.!?…](?=\s|$)/.exec(buf.slice(start));
+		if (!m) break;
+		const end = start + m.index + m[0].length;
+		const candidate = buf.slice(start, end).trim();
+		sentences.push(candidate);
+		start = end;
+	}
+	return { sentences, rest: buf.slice(start) };
+}
+
+/**
+ * Markdown / code → speakable prose. A coding agent's raw answer is garbage
+ * out loud: fences become a pointer at the screen, links and styling vanish.
+ */
+export function speakProse(text: string): string {
+	let t = text.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_m, code: string) =>
+		String(code).trim() ? " Code is on the screen. " : " ",
+	);
+	t = t.replace(/`([^`\n]+)`/g, "$1");
+	t = t.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1");
+	t = t.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
+	t = t.replace(/https?:\/\/\S+/g, " a link ");
+	t = t.replace(/^#{1,6}\s+/gm, "");
+	t = t.replace(/^\s*[-*+]\s+/gm, "");
+	t = t.replace(/^\s*>\s?/gm, "");
+	t = t.replace(/(\*\*|__)(.*?)\1/g, "$2");
+	t = t.replace(/(\*|_)([^*_\n]+)\1/g, "$2");
+	t = t.replace(/\s+/g, " ").trim();
+	return t;
 }
