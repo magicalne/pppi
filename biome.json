@@ -39,7 +39,8 @@
 			"apps/android",
 			".pi",
 			".worktrees",
-			"packages/pi-ext/vendor"
+			"packages/pi-ext/vendor",
+			"apps/web/public"
 		]
 	}
 }

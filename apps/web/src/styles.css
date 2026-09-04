@@ -696,3 +696,63 @@
 	font-size: 12px;
 	font-weight: 600;
 }
+
+/* ------------------------------------------------ interactive voice pill */
+
+.voice-state {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	padding: 0 6px;
+	font-size: 15px;
+	color: var(--dim);
+}
+
+.voice-state .hint-line {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	white-space: nowrap;
+	overflow: hidden;
+}
+
+.voice-state.user-speaking {
+	color: var(--text);
+}
+
+.voice-state .cap {
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.voice-state .cap b {
+	color: var(--text);
+	font-weight: 600;
+}
+
+.voice-state .cap i {
+	opacity: 0.5;
+}
+
+.voice-state.agent-speaking {
+	color: var(--accent);
+}
+
+.voice-state .stop {
+	border: 1px solid var(--line);
+	background: var(--surface);
+	color: var(--text);
+	border-radius: 999px;
+	padding: 2px 10px;
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.mic.rec {
+	background: var(--danger);
+	color: #fff;
+}

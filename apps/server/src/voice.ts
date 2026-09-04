@@ -198,7 +198,17 @@ export class VoiceSession {
 			this.send({ type: "voice_state", state: "listening" });
 			return;
 		}
-		if (msg.type === "interrupt") this.interrupt();
+		switch (msg.type) {
+			case "interrupt":
+				this.interrupt();
+				break;
+			case "playback_done":
+				// the client's speaker is idle — barge-in thresholds can relax
+				this.detector.noteTts(false, this.audioMs);
+				break;
+			default:
+				break;
+		}
 	}
 
 	// ------------------------------------------------------------- audio path
@@ -222,7 +232,12 @@ export class VoiceSession {
 
 		// VAD runs per 512-sample window, serialized to keep order
 		this.windowBuf = concat(this.windowBuf, pcm);
-		this.vadBusy = this.vadBusy.then(() => this.runVadWindows());
+		this.vadBusy = this.vadBusy
+			.then(() => this.runVadWindows())
+			.catch((err) => {
+				if (process.env.DBG) console.error("DBG vad chain error:", err);
+				this.send({ type: "voice_error", message: `vad: ${String((err as Error).message ?? err)}` });
+			});
 	}
 
 	private async runVadWindows(): Promise<void> {
@@ -391,6 +406,9 @@ export class Speaker {
 	private queue: Array<{ id: string; text: string }> = [];
 	private draining = false;
 	private aborted = false;
+	private everStarted = false;
+	private interruptedSent = false;
+	private lastStartedId: string | null = null;
 	/** per assistant message: how much of its final text has been enqueued */
 	private chunker = { id: "", pending: "", emitted: "" };
 
@@ -404,6 +422,9 @@ export class Speaker {
 	/** A new user turn is going out — speaking may resume. */
 	beginTurn(): void {
 		this.aborted = false;
+		this.everStarted = false;
+		this.interruptedSent = false;
+		this.lastStartedId = null;
 	}
 
 	assistantDelta(id: string, delta: string): void {
@@ -441,35 +462,48 @@ export class Speaker {
 				for await (const chunk of this.tts.synthesize(item.text)) {
 					if (this.aborted) break;
 					if (!started) {
+						this.lastStartedId = item.id;
 						this.sendEvent({ type: "tts_start", id: item.id, rate: chunk.rate });
 						this.sendEvent({ type: "voice_state", state: "speaking" });
-						this.onPlayback?.(true);
+						this.onPlayback?.(true); // stays on until the client reports playback_done
 						started = true;
+						this.everStarted = true;
 					}
 					this.sendBinary(chunk.pcm);
 				}
-				if (started || this.aborted) this.onPlayback?.(false);
-				if (started) {
-					this.sendEvent({ type: "tts_end", id: item.id, interrupted: this.aborted || undefined });
-					this.sendEvent({ type: "voice_state", state: "listening" });
-				} else if (this.aborted) {
-					this.sendEvent({ type: "voice_state", state: "listening" });
+				if (started && this.aborted) {
+					this.emitInterruptedEnd();
+				} else if (started) {
+					this.sendEvent({ type: "tts_end", id: item.id });
+					if (this.queue.length === 0) this.sendEvent({ type: "voice_state", state: "listening" });
 				}
 			}
 		} catch (err) {
 			this.sendEvent({ type: "voice_error", message: `tts: ${String((err as Error).message ?? err)}` });
 			this.sendEvent({ type: "voice_state", state: "listening" });
-			this.onPlayback?.(false);
 		} finally {
 			this.queue.length = 0;
 			this.draining = false;
 		}
 	}
 
-	/** Barge-in: drop the queue, stop the in-flight synthesis between chunks. */
+	/**
+	 * Barge-in: drop the queue, stop the in-flight synthesis between chunks,
+	 * and tell the client its playback was cut — whether the cut lands
+	 * mid-synthesis or between sentences (one interrupted tts_end, ever).
+	 */
 	abort(): void {
+		if (this.aborted) return;
 		this.aborted = true;
 		this.queue.length = 0;
+		if (this.everStarted && !this.interruptedSent) this.emitInterruptedEnd();
+	}
+
+	private emitInterruptedEnd(): void {
+		this.interruptedSent = true;
+		this.sendEvent({ type: "tts_end", id: this.lastStartedId ?? "", interrupted: true });
+		this.sendEvent({ type: "voice_state", state: "listening" });
+		this.onPlayback?.(false);
 	}
 }
 

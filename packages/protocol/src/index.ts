@@ -91,7 +91,9 @@ export type VoiceTtsStatus = { ready: true; provider: string; voice: string } | 
  */
 export type VoiceClientMessage =
 	| { type: "hello"; token: string; client: "web" | "android" | "test" }
-	| { type: "interrupt" };
+	| { type: "interrupt" }
+	/** the client's speaker went idle — echo-aware barge-in thresholds can relax */
+	| { type: "playback_done" };
 
 export type VoiceServerEvent =
 	| { type: "voice_hello_ok"; stt: VoiceSttStatus; tts: VoiceTtsStatus }

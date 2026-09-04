@@ -1,45 +1,92 @@
 // Voice activity detection + turn endpointing for interactive mode.
 //
-// Silero VAD v5 (ONNX, MIT) runs on onnxruntime-node in fixed 512-sample
-// (32 ms @16 kHz) windows; the exported graph requires exactly that window
-// size. On top of it, UtteranceDetector is the pure turn-taking state machine
-// from docs/plan/interactive-mode.md: pre-roll, sustained-speech start,
-// silence endpoint, grace-period merge, and echo-aware barge-in while the
-// agent's TTS is playing (the server knows playback state, which is why VAD
-// lives here and not on the client).
+// Silero VAD v5 (ONNX, MIT) runs in a dedicated worker thread (see
+// vadWorker.ts — sharing the main thread's ONNX runtime with the kokoro TTS
+// stack deadlocks inference) in fixed 512-sample (32 ms @16 kHz) windows; the
+// exported graph requires exactly that window size. On top of it,
+// UtteranceDetector is the pure turn-taking state machine from
+// docs/plan/interactive-mode.md: pre-roll, sustained-speech start, silence
+// endpoint, grace-period merge, and echo-aware barge-in while the agent's TTS
+// is playing (the server knows playback state, which is why VAD lives here
+// and not on the client).
 
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { dirname, join } from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import * as ort from "onnxruntime-node";
 
 export const VAD_WINDOW_SAMPLES = 512; // 32 ms @ 16 kHz
 
 export class SileroVad {
-	private session: ort.InferenceSession;
-	private state = new ort.Tensor("float32", new Float32Array(2 * 128), [2, 1, 128]);
-	private sr = new ort.Tensor("int64", BigInt64Array.from([16000n]), []);
+	private proc: ChildProcessWithoutNullStreams;
+	private nextId = 1;
+	private pending = new Map<number, { resolve: (p: number) => void; reject: (e: Error) => void }>();
 
-	private constructor(session: ort.InferenceSession) {
-		this.session = session;
+	private constructor(proc: ChildProcessWithoutNullStreams) {
+		this.proc = proc;
+		const rl = createInterface({ input: proc.stdout, terminal: false });
+		rl.on("line", (line) => {
+			let msg: { id?: number; prob?: number };
+			try {
+				msg = JSON.parse(line);
+			} catch {
+				return;
+			}
+			if (typeof msg.id === "number") {
+				const entry = this.pending.get(msg.id);
+				if (entry) {
+					this.pending.delete(msg.id);
+					entry.resolve(msg.prob ?? 0);
+				}
+			}
+		});
+		proc.on("error", (err) => {
+			for (const [, entry] of this.pending) entry.reject(err);
+			this.pending.clear();
+		});
 	}
 
 	static async create(modelPath?: string): Promise<SileroVad> {
 		const path = modelPath ?? defaultModelPath();
-		const session = await ort.InferenceSession.create(path);
-		return new SileroVad(session);
+		const entry = join(dirname(fileURLToPath(import.meta.url)), "vadProcess.ts");
+		const proc = spawn(process.execPath, [entry, path], {
+			stdio: ["pipe", "pipe", "inherit"],
+		}) as ChildProcessWithoutNullStreams;
+		const vad = new SileroVad(proc);
+		// one probe round-trip so callers fail fast if the model didn't load
+		await new Promise<void>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error("vad process did not become ready")), 15_000);
+			const onLine = (line: Buffer) => {
+				if (line.toString().includes("ready")) {
+					clearTimeout(timer);
+					proc.stdout.off("data", onLine);
+					resolve();
+				}
+			};
+			proc.stdout.on("data", onLine);
+			proc.on("exit", (code) => reject(new Error(`vad process exited ${code}`)));
+		});
+		await vad.prob(new Float32Array(VAD_WINDOW_SAMPLES));
+		return vad;
 	}
 
 	/** Speech probability for one 512-sample window @16 kHz. */
-	async prob(window: Float32Array): Promise<number> {
-		if (window.length !== VAD_WINDOW_SAMPLES) throw new Error(`vad window must be ${VAD_WINDOW_SAMPLES} samples`);
-		const input = new ort.Tensor("float32", Float32Array.from(window), [1, window.length]);
-		const out = await this.session.run({ input, state: this.state, sr: this.sr });
-		this.state = out.stateN as ort.Tensor;
-		return out.output.data[0] ?? 0;
+	prob(window: Float32Array): Promise<number> {
+		if (window.length !== VAD_WINDOW_SAMPLES)
+			return Promise.reject(new Error(`vad window must be ${VAD_WINDOW_SAMPLES} samples`));
+		const id = this.nextId++;
+		return new Promise<number>((resolve, reject) => {
+			this.pending.set(id, { resolve, reject });
+			this.proc.stdin.write(`${JSON.stringify({ id, type: "prob", pcm: Array.from(window) })}\n`);
+		});
 	}
 
 	reset(): void {
-		this.state = new ort.Tensor("float32", new Float32Array(2 * 128), [2, 1, 128]);
+		this.proc.stdin.write(`${JSON.stringify({ type: "reset" })}\n`);
+	}
+
+	dispose(): void {
+		this.proc.kill();
 	}
 }
 
@@ -66,6 +113,8 @@ export type VadTimings = {
 	ttsMuteMs: number;
 	/** probability threshold for "speech" */
 	threshold: number;
+	/** sub-threshold gaps up to this long don't reset the sustain counters */
+	gapToleranceMs: number;
 };
 
 export const DEFAULT_TIMINGS: VadTimings = {
@@ -77,6 +126,7 @@ export const DEFAULT_TIMINGS: VadTimings = {
 	bargeInMs: 400,
 	ttsMuteMs: 200,
 	threshold: 0.5,
+	gapToleranceMs: 180,
 };
 
 export type DetectorEvents = {
@@ -99,7 +149,7 @@ type Phase = "idle" | "open" | "grace";
  */
 export class UtteranceDetector {
 	private phase: Phase = "idle";
-	private speechSince = 0;
+	private sustainStart = 0;
 	private silenceSince = 0;
 	private openAt = 0;
 	private lastSpeechAt = 0;
@@ -119,6 +169,9 @@ export class UtteranceDetector {
 	}
 
 	feed(prob: number, nowMs: number): void {
+		if (process.env.DBG)
+			console.error(`DBG feed t=${nowMs} p=${prob.toFixed(2)} ph=${this.phase} tts=${this.ttsPlaying}`);
+
 		if (this.phase === "grace" && nowMs >= this.graceUntil) {
 			this.phase = "idle";
 			this.events.onGraceExpired();
@@ -129,9 +182,10 @@ export class UtteranceDetector {
 		const requiredMs = this.ttsPlaying ? this.timings.bargeInMs : this.timings.startMs;
 
 		if (speaking) {
-			if (!this.speechSince) this.speechSince = nowMs;
-			if (this.phase === "open") this.lastSpeechAt = nowMs;
-			const sustained = nowMs - this.speechSince >= requiredMs;
+			// micro-gaps between words shouldn't reset the sustain counters
+			if (nowMs - this.lastSpeechAt > this.timings.gapToleranceMs) this.sustainStart = nowMs;
+			this.lastSpeechAt = nowMs;
+			const sustained = nowMs - this.sustainStart >= requiredMs;
 			if (sustained) {
 				if (this.phase === "idle") {
 					this.phase = "open";
@@ -147,7 +201,6 @@ export class UtteranceDetector {
 				}
 			}
 		} else {
-			this.speechSince = 0;
 			if (this.phase === "open") {
 				if (!this.silenceSince) this.silenceSince = nowMs;
 				if (nowMs - this.silenceSince >= this.timings.endSilenceMs) {
@@ -180,7 +233,7 @@ export class UtteranceDetector {
 	noteTts(playing: boolean, nowMs: number): void {
 		if (playing === this.ttsPlaying) return;
 		this.ttsPlaying = playing;
-		this.speechSince = 0;
+		this.sustainStart = 0;
 		this.bargeInFired = false;
 		if (playing) this.ttsSince = nowMs;
 	}

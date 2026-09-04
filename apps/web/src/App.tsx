@@ -1,7 +1,7 @@
 import type { AgentState, ChatEntry, ServerEvent, SessionsResponse } from "@sspi/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { VoiceRecorder } from "./audio.ts";
 import { THEMES, type ThemeId, applyTheme, loadTheme } from "./theme.ts";
+import { useVoice } from "./voice/useVoice.ts";
 
 type Pairing = { server: string; token: string };
 type Target = { id: string | undefined; label: string };
@@ -96,13 +96,10 @@ export default function App() {
 	const [drawerOpen, setDrawerOpen] = useState(false);
 	const [connOpen, setConnOpen] = useState(false);
 	const [sessions, setSessions] = useState<SessionsResponse | null>(null);
-	const [recording, setRecording] = useState(false);
-	const [level, setLevel] = useState(0);
 	const [textInput, setTextInput] = useState("");
 	const wsRef = useRef<WebSocket | null>(null);
-	const recorderRef = useRef<VoiceRecorder | null>(null);
 	const listRef = useRef<HTMLDivElement | null>(null);
-	const levelRef = useRef(0);
+	const voice = useVoice();
 
 	const conn = connections.find((c) => c.id === activeId) ?? connections[0] ?? null;
 
@@ -320,37 +317,28 @@ export default function App() {
 		setTextInput("");
 	}, [textInput, target]);
 
-	const toggleMic = useCallback(async () => {
-		if (recording) {
-			const rec = recorderRef.current;
-			recorderRef.current = null;
-			setRecording(false);
-			if (!rec) return;
-			const { wav } = await rec.stop();
-			const res = await fetch(`${conn!.url.replace(/\/$/, "")}/api/voice`, {
-				method: "POST",
-				headers: { authorization: `Bearer ${conn!.token}`, "content-type": "audio/wav" },
-				body: wav,
-			});
-			const body = await res.json().catch(() => ({ error: "bad response" }));
-			if (!res.ok || !body.ok) showNotice(body.error ?? `voice failed (${res.status})`);
+	const toggleVoice = useCallback(() => {
+		if (!conn) return;
+		if (voice.on) {
+			void voice.stop();
 			return;
 		}
-		try {
-			const rec = new VoiceRecorder();
-			rec.onLevel = (v) => {
-				if (Math.abs(v - levelRef.current) > 0.04) {
-					levelRef.current = v;
-					setLevel(v);
-				}
-			};
-			await rec.start();
-			recorderRef.current = rec;
-			setRecording(true);
-		} catch {
-			showNotice("microphone unavailable — check permissions");
-		}
-	}, [recording, conn, showNotice]);
+		voice.start(conn.url, conn.token).catch(() => showNotice("microphone unavailable — check permissions"));
+	}, [conn, voice, showNotice]);
+
+	// leaving a machine (or unmount) ends its voice session
+	// biome-ignore lint/correctness/useExhaustiveDependencies: only the connection change should end a session
+	useEffect(() => {
+		return () => void voice.stop();
+	}, [conn?.id]);
+
+	// voice notices surface as the standard toast, then fade
+	const voiceNotice = voice.state.notice;
+	useEffect(() => {
+		if (!voiceNotice) return;
+		const t = setTimeout(() => voice.clearNotice(), 4000);
+		return () => clearTimeout(t);
+	}, [voiceNotice, voice.clearNotice]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the scroll container is a ref; msgs/agentState are what change the height
 	useEffect(() => {
@@ -510,45 +498,55 @@ export default function App() {
 			</div>
 
 			{notice && <div className="toast">{notice}</div>}
+			{voice.state.notice && <div className="toast">{voice.state.notice}</div>}
 
 			<div className="composer-wrap">
 				<div className="pill">
 					{busy && <div className="hairline" />}
-					{recording ? (
+					{voice.on ? (
 						<>
-							<div className="listen">
-								{[...Array(9).keys()].map((v) => (
-									<span
-										key={`bar-${v}`}
-										className="bar"
-										style={{ height: `${6 + Math.abs(Math.sin(v * 1.7 + level * 30)) * 22 * (0.3 + level * 4)}px` }}
-									/>
-								))}
-								<span style={{ marginLeft: 8 }}>listening… release to send</span>
+							<div className={`voice-state ${voice.state.phase}`}>
+								{voice.state.phase === "listening" && <span className="hint-line">listening — just talk</span>}
+								{voice.state.phase === "user-speaking" && (
+									<span className="cap">
+										{voice.state.committed && <b>{voice.state.committed} </b>}
+										{voice.state.tentative}
+										{!voice.state.committed && !voice.state.tentative && <i>…</i>}
+									</span>
+								)}
+								{voice.state.phase === "thinking" && <span className="hint-line">thinking…</span>}
+								{voice.state.phase === "agent-speaking" && (
+									<span className="hint-line">
+										talking… speak up to interrupt
+										<button type="button" className="stop" onClick={voice.interrupt}>
+											stop
+										</button>
+									</span>
+								)}
 							</div>
+							<button type="button" className="mic rec" onClick={toggleVoice} aria-label="end voice session">
+								■
+							</button>
 						</>
 					) : (
-						<input
-							value={textInput}
-							onChange={(e) => setTextInput(e.target.value)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter" && !e.shiftKey) {
-									e.preventDefault();
-									sendText();
-								}
-							}}
-							placeholder={`Message ${targetName}…`}
-							aria-label={`Message ${targetName}`}
-						/>
+						<>
+							<input
+								value={textInput}
+								onChange={(e) => setTextInput(e.target.value)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter" && !e.shiftKey) {
+										e.preventDefault();
+										sendText();
+									}
+								}}
+								placeholder={`Message ${targetName}…`}
+								aria-label={`Message ${targetName}`}
+							/>
+							<button type="button" className="mic" onClick={toggleVoice} aria-label="start voice conversation">
+								●
+							</button>
+						</>
 					)}
-					<button
-						type="button"
-						className={`mic ${recording ? "rec" : ""}`}
-						onClick={toggleMic}
-						aria-label={recording ? "stop and send" : "start recording"}
-					>
-						{recording ? "■" : "●"}
-					</button>
 				</div>
 			</div>
 		</div>
