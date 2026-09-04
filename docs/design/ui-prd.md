@@ -63,7 +63,8 @@ Main screen (the only screen)          Overlays (drawn in front of chat)
   This is the heartbeat of the whole design.
 - **Right:** small chevron. Tapping *anywhere on the bar* opens the session
   switcher. The bar also doubles as a breadcrumb: when you're talking to a
-  worktree session it reads `ss · wt/fix-auth`, not `Omni`.
+  worktree session it reads `ss · fix-auth`, not `Omni` (worktrees show their
+  bare worktree name — no `wt/` prefix in the UI; the git branch stays `wt/*`).
 - **Far left: the ☰ machines button.** It opens the *machines drawer* (§3b).
 
 ---
@@ -87,8 +88,8 @@ secrets rules unchanged (clients hold only pairing tokens).
    │ SESSIONS                       │
    │ ◉ Omni              the fleet  │   depth 0
    │ │ ◉ sspi            working…   │   depth 1 = repo (= its main session)
-   │ │ │ ◉ wt/fix-auth   idle       │   depth 2 = worktrees
-   │ │ │ ◉ wt/perf       reading…   │
+   │ │ │ ◉ fix-auth      idle       │   depth 2 = worktrees (bare name)
+   │ │ │ ◉ perf         reading…   │
    │ │ ◉ pigeon           idle      │
    │ │ ◉ notes — no open session   │   dim, not tappable
    │ ────────────────────────────── │

@@ -103,16 +103,16 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		if (res.code === 0) {
 			// stdout: "✉ accepted by X — msg id\n\n<reply text>"
 			const reply = res.stdout.split("\n\n").slice(1).join("\n\n").trim();
-			// profileId = target session id; clients tint via their profiles map
+			// direct 1:1 session: no tint needed there — profile colors attribute
+			// delegated work inside the omni conversation (see /api/peer-reply)
 			const replyId = randomUUID();
 			broadcast({
 				type: "assistant_final",
 				id: replyId,
 				text: reply || "(empty reply)",
 				target,
-				profileId: target,
 			});
-			peerLog.push({ id: replyId, role: "assistant", text: reply || "(empty reply)", ts: Date.now(), target, profileId: target });
+			peerLog.push({ id: replyId, role: "assistant", text: reply || "(empty reply)", ts: Date.now(), target });
 		} else {
 			const why = res.stderr.trim().split("\n")[0] || `pigeon exited ${res.code}`;
 			broadcast({ type: "error", message: why, target });
@@ -132,6 +132,39 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 			agent: { ...info, state: opts.driver.state },
 		}),
 	);
+
+	// Poll the omni session's pigeon mailbox: whenever a delegated peer answers,
+	// surface the reply into the omni conversation with the peer's profileId so
+	// clients render it in that agent's color. --keep leaves the entries for the
+	// omni's own omni_replies; seen msgIds prevent re-broadcasts.
+	const seenReplies = new Set<string>();
+	const mailboxPoll = setInterval(async () => {
+		if (clients.size === 0) return;
+		const res = await pigeon(["replies", "--json", "--keep", "--timeout", "1"], {
+			sessionId: opts.driver.info.sessionId,
+			timeoutMs: 15_000,
+		});
+		if (res.code !== 0) return;
+		try {
+			const entries = JSON.parse(res.stdout) as Array<{
+				kind?: string;
+				msgId?: string;
+				fromSessionId?: string;
+				reply?: string;
+			}>;
+			for (const e of entries) {
+				if (e.kind !== "reply" || !e.msgId || !e.fromSessionId || !e.reply) continue;
+				if (seenReplies.has(e.msgId)) continue;
+				seenReplies.add(e.msgId);
+				const id = randomUUID();
+				broadcast({ type: "assistant_final", id, text: e.reply, profileId: e.fromSessionId });
+				peerLog.push({ id, role: "assistant", text: e.reply, ts: Date.now(), profileId: e.fromSessionId });
+			}
+		} catch {
+			// no replies yet / non-JSON
+		}
+	}, 3_000);
+	void mailboxPoll;
 
 	async function submitUserText(text: string, source: "voice" | "text", target?: Target): Promise<{ id: string }> {
 		const id = randomUUID();
@@ -198,6 +231,22 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		const auth = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
 		if (!tokensMatch(auth, opts.token)) return reply.code(401).send({ ok: false, error: "bad token" });
 		return { ok: true, ...opts.pair };
+	});
+
+	// the omni extension calls this when it collects a delegated peer's reply
+	// (omni_replies): the answer is surfaced into the omni conversation with the
+	// peer's profileId, so clients render it in that agent's color
+	app.post("/api/peer-reply", async (req, reply) => {
+		const auth = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+		if (!tokensMatch(auth, opts.token)) return reply.code(401).send({ ok: false, error: "bad token" });
+		const body = req.body as { session?: string; text?: string };
+		const session = (body.session ?? "").trim();
+		const replyText = (body.text ?? "").trim();
+		if (!session || !replyText) return reply.code(400).send({ ok: false, error: "session and text are required" });
+		const id = randomUUID();
+		broadcast({ type: "assistant_final", id, text: replyText, profileId: session });
+		peerLog.push({ id, role: "assistant", text: replyText, ts: Date.now(), profileId: session });
+		return { ok: true };
 	});
 
 	// ---------------------------------------------------------------- websocket

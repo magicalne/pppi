@@ -637,7 +637,7 @@ function SessionDrawer(props: {
 							</div>
 						)}
 						{mains.map((s, i) => peerRow(i === 0 ? p.name : (s.name ?? "main"), s.sessionId, s.state, 1))}
-						{wts.map((s) => peerRow(`wt/${s.worktree}`, s.sessionId, s.state, 2))}
+						{wts.map((s) => peerRow(s.worktree ?? "", s.sessionId, s.state, 2))}
 					</div>
 				);
 			})}

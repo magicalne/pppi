@@ -1015,8 +1015,8 @@ fun ChatScreen(
 				}
 				for (s in p.sessions) {
 					if (s.worktree == null) continue
-					TreeRow(theme, "wt/${s.worktree}", stateLabel(s.state), selected.id == s.sessionId, depth = 2) {
-						selected = UiTarget(s.sessionId, "wt/${s.worktree}")
+					TreeRow(theme, s.worktree ?: "worktree", stateLabel(s.state), selected.id == s.sessionId, depth = 2) {
+						selected = UiTarget(s.sessionId, s.worktree ?: "worktree")
 						sheetOpen = false
 					}
 				}

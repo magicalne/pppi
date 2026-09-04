@@ -190,6 +190,51 @@ describe("pairing + profiles api", () => {
 		expect(body.profiles).toBeDefined();
 	});
 
+	it("surfaces omni-delegated peer replies as attributed messages", async () => {
+		await boot(true)();
+		const addr = app.server.address();
+		const port = typeof addr === "object" && addr?.port ? addr.port : 0;
+		const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+		let resolveFinal: (evt: any) => void = () => {};
+		const finalPromise = new Promise<any>((resolve) => (resolveFinal = resolve));
+		await new Promise<void>((r) => ws.on("open", r));
+		await new Promise<void>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error("no hello_ok within 10s")), 10_000);
+			ws.on("message", (raw) => {
+				const evt = JSON.parse(raw.toString());
+				if (evt.type === "hello_ok") {
+					clearTimeout(timer);
+					resolve();
+				} else if (evt.type === "assistant_final") {
+					resolveFinal(evt);
+				}
+			});
+			ws.send(JSON.stringify({ type: "hello", token, client: "test" }));
+		});
+		const res = await app.inject({
+			method: "POST",
+			url: "/api/peer-reply",
+			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+			payload: { session: "joe-1", text: "build is green" },
+		});
+		expect(res.statusCode).toBe(200);
+		const evt = await finalPromise;
+		expect(evt.profileId).toBe("joe-1");
+		expect(evt.text).toBe("build is green");
+		expect(evt.target).toBeUndefined(); // it lands in the omni conversation
+		// reconnecting clients see it again via history
+		const hist = await app.inject({ method: "GET", url: "/api/health" });
+		expect(hist.statusCode).toBe(200);
+		const bad = await app.inject({
+			method: "POST",
+			url: "/api/peer-reply",
+			headers: { authorization: "Bearer nope", "content-type": "application/json" },
+			payload: { session: "joe-1", text: "nope" },
+		});
+		expect(bad.statusCode).toBe(401);
+		ws.close();
+	});
+
 	it("buildProfiles prefers explicit files and derives the rest deterministically", async () => {
 		const { mkdirSync, writeFileSync } = await import("node:fs");
 		mkdirSync(join(tmpDir, "profiles"), { recursive: true });
