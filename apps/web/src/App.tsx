@@ -1,7 +1,7 @@
+import type { AgentState, ChatEntry, ServerEvent, SessionsResponse } from "@sspi/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { VoiceRecorder } from "./audio.ts";
-import { THEMES, applyTheme, loadTheme, type ThemeId } from "./theme.ts";
-import type { AgentState, ChatEntry, SessionsResponse, ServerEvent } from "@sspi/protocol";
+import { THEMES, type ThemeId, applyTheme, loadTheme } from "./theme.ts";
 
 type Pairing = { server: string; token: string };
 type Target = { id: string | undefined; label: string };
@@ -72,7 +72,7 @@ function omniStatus(state: AgentState, toolLabel: string | null, connected: bool
 		case "thinking":
 			return "thinking…";
 		case "tool":
-			return (toolLabel ?? "working") + "…";
+			return `${toolLabel ?? "working"}…`;
 		case "streaming":
 			return "typing…";
 		case "starting":
@@ -147,6 +147,7 @@ export default function App() {
 
 	// -------------------------------------------------------------- websocket
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reconnect only on connection change; handlers close over current state
 	useEffect(() => {
 		if (!conn) return;
 		const wsUrl = `${conn.url.replace(/^http/, "ws").replace(/\/$/, "")}/ws`;
@@ -221,7 +222,10 @@ export default function App() {
 					if (last && last.role === "assistant" && last.id === evt.id) {
 						return [...b.slice(0, -1), { ...last, text: last.text + evt.delta }];
 					}
-					return [...b, { id: evt.id, role: "assistant", text: evt.delta, target: evt.target, profileId: evt.profileId }];
+					return [
+						...b,
+						{ id: evt.id, role: "assistant", text: evt.delta, target: evt.target, profileId: evt.profileId },
+					];
 				});
 				break;
 			case "assistant_final":
@@ -233,14 +237,25 @@ export default function App() {
 						copy[idx] = patch(copy[idx]!);
 						return copy;
 					}
-					return [...b, { id: evt.id, role: "assistant", text: evt.text, target: evt.target, profileId: evt.profileId }];
+					return [
+						...b,
+						{ id: evt.id, role: "assistant", text: evt.text, target: evt.target, profileId: evt.profileId },
+					];
 				});
 				break;
 			case "tool_event":
 				if (evt.phase === "start") {
 					setAgentState("tool");
 					setToolLabel(evt.label ?? evt.toolName);
-					setMsgs((b) => [...b.slice(-40), { id: `tool-${evt.toolName}-${Date.now()}`, role: "assistant", text: "", tool: { phase: "start", label: evt.label } }]);
+					setMsgs((b) => [
+						...b.slice(-40),
+						{
+							id: `tool-${evt.toolName}-${Date.now()}`,
+							role: "assistant",
+							text: "",
+							tool: { phase: "start", label: evt.label },
+						},
+					]);
 				} else {
 					setToolLabel(null);
 				}
@@ -337,6 +352,7 @@ export default function App() {
 		}
 	}, [recording, conn, showNotice]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the scroll container is a ref; msgs/agentState are what change the height
 	useEffect(() => {
 		listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
 	}, [msgs, agentState]);
@@ -354,18 +370,9 @@ export default function App() {
 			/>
 		);
 
-	if (tab === "themes")
-		return (
-			<ThemesPage
-				theme={theme}
-				onPick={(id) => setTheme(id)}
-				onBack={() => setTab("chat")}
-			/>
-		);
+	if (tab === "themes") return <ThemesPage theme={theme} onPick={(id) => setTheme(id)} onBack={() => setTab("chat")} />;
 
-	const statusText = target.id
-		? peerStatus(sessions, target.id)
-		: omniStatus(agentState, toolLabel, connected);
+	const statusText = target.id ? peerStatus(sessions, target.id) : omniStatus(agentState, toolLabel, connected);
 	const busy = !target.id && (agentState === "thinking" || agentState === "tool" || agentState === "streaming");
 	const visible = msgs.filter((m) => (m.target ?? undefined) === target.id);
 	const targetName = target.label;
@@ -375,6 +382,7 @@ export default function App() {
 			<div className="headwrap">
 				<header className="presence" onClick={() => setDrawerOpen(true)} aria-label="Sessions">
 					<button
+						type="button"
 						className="iconbtn menu"
 						aria-label="Machines"
 						onClick={(e) => {
@@ -392,6 +400,7 @@ export default function App() {
 						{statusText && <span className="status">{statusText}</span>}
 					</span>
 					<button
+						type="button"
 						className="iconbtn"
 						aria-label="Appearance"
 						onClick={(e) => {
@@ -399,7 +408,7 @@ export default function App() {
 							setTab("themes");
 						}}
 					>
-					◐
+						◐
 					</button>
 				</header>
 
@@ -441,19 +450,19 @@ export default function App() {
 			</div>
 
 			<div className="list" ref={listRef}>
-					{visible.length === 0 && (
-						<div className="empty">
-							<p className="hi">Hey, it's {targetName}.</p>
-							<p className="hint">
-								Tell me what to build, ask about a repo, or hold the mic and just talk.
-							</p>
-						</div>
-					)}
+				{visible.length === 0 && (
+					<div className="empty">
+						<p className="hi">Hey, it's {targetName}.</p>
+						<p className="hint">Tell me what to build, ask about a repo, or hold the mic and just talk.</p>
+					</div>
+				)}
 				{visible.map((m) => {
 					const prof = m.profileId ? sessions?.profiles?.[m.profileId] : undefined;
 					if (m.tool) {
 						return (
-							<div key={m.id} className="toolchip">{m.tool.label ?? m.id}</div>
+							<div key={m.id} className="toolchip">
+								{m.tool.label ?? m.id}
+							</div>
 						);
 					}
 					if (m.role === "user") {
@@ -489,7 +498,11 @@ export default function App() {
 				{busy && (
 					<div className="working">
 						<span>{statusText || "thinking…"}</span>
-						<button className="stop" onClick={() => wsRef.current?.send(JSON.stringify({ type: "abort" }))}>
+						<button
+							type="button"
+							className="stop"
+							onClick={() => wsRef.current?.send(JSON.stringify({ type: "abort" }))}
+						>
 							stop
 						</button>
 					</div>
@@ -504,11 +517,11 @@ export default function App() {
 					{recording ? (
 						<>
 							<div className="listen">
-								{[...Array(9)].map((_, i) => (
+								{[...Array(9).keys()].map((v) => (
 									<span
-										key={i}
+										key={`bar-${v}`}
 										className="bar"
-										style={{ height: `${6 + Math.abs(Math.sin(i * 1.7 + level * 30)) * 22 * (0.3 + level * 4)}px` }}
+										style={{ height: `${6 + Math.abs(Math.sin(v * 1.7 + level * 30)) * 22 * (0.3 + level * 4)}px` }}
 									/>
 								))}
 								<span style={{ marginLeft: 8 }}>listening… release to send</span>
@@ -529,6 +542,7 @@ export default function App() {
 						/>
 					)}
 					<button
+						type="button"
 						className={`mic ${recording ? "rec" : ""}`}
 						onClick={toggleMic}
 						aria-label={recording ? "stop and send" : "start recording"}
@@ -575,12 +589,12 @@ function ConnectionsDrawer(props: {
 			{props.connections.length === 0 && <p className="conn-empty">No machines paired yet.</p>}
 			{props.connections.map((c) => (
 				<div key={c.id} className={`crow ${c.id === props.activeId ? "active" : ""}`}>
-					<button className="crow-main" onClick={() => props.onSwitch(c.id)}>
+					<button type="button" className="crow-main" onClick={() => props.onSwitch(c.id)}>
 						<span className="cdot" style={{ background: c.color ?? "var(--dim)" }} />
 						<span className="cname">{c.name}</span>
 						{c.id === props.activeId && <span className="ctag">{props.connected ? "online" : "offline"}</span>}
 					</button>
-					<button className="crow-x" aria-label={`Remove ${c.name}`} onClick={() => props.onRemove(c.id)}>
+					<button type="button" className="crow-x" aria-label={`Remove ${c.name}`} onClick={() => props.onRemove(c.id)}>
 						✕
 					</button>
 				</div>
@@ -602,11 +616,17 @@ function SessionDrawer(props: {
 	onUnpair: () => void;
 }) {
 	const { sessions, target } = props;
-	const stateLabel = (state: string) => (state === "busy" ? "working…" : state === "unreachable" ? "unreachable" : "idle");
+	const stateLabel = (state: string) =>
+		state === "busy" ? "working…" : state === "unreachable" ? "unreachable" : "idle";
 	const peerRow = (label: string, id: string, state: string, depth: number): React.ReactNode => (
-		<button key={id} className={`srow ${target.id === id ? "active" : ""}`} onClick={() => props.onPick({ id, label })}>
-			{Array.from({ length: depth }).map((_, i) => (
-				<span key={i} className="guide" aria-hidden />
+		<button
+			type="button"
+			key={id}
+			className={`srow ${target.id === id ? "active" : ""}`}
+			onClick={() => props.onPick({ id, label })}
+		>
+			{Array.from({ length: depth }, (_, i) => i).map((v) => (
+				<span key={`guide-${v}`} className="guide" aria-hidden />
 			))}
 			<span className="ring" />
 			<span className="sname">{label}</span>
@@ -617,7 +637,7 @@ function SessionDrawer(props: {
 	return (
 		<div className="drawer" onClick={(e) => e.stopPropagation()}>
 			<h3>Sessions</h3>
-			<button className={`srow ${!target.id ? "active" : ""}`} onClick={() => props.onPick(OMNI())}>
+			<button type="button" className={`srow ${!target.id ? "active" : ""}`} onClick={() => props.onPick(OMNI())}>
 				<span className="ring" />
 				<span className="sname">Omni</span>
 				<span className="sstate">the whole fleet</span>
@@ -631,9 +651,7 @@ function SessionDrawer(props: {
 						{mains.length === 0 && (
 							<div className="srow empty-row">
 								<span className="guide" aria-hidden />
-								<span className="sname">
-									{p.name} — no open session
-								</span>
+								<span className="sname">{p.name} — no open session</span>
 							</div>
 						)}
 						{mains.map((s, i) => peerRow(i === 0 ? p.name : (s.name ?? "main"), s.sessionId, s.state, 1))}
@@ -645,7 +663,7 @@ function SessionDrawer(props: {
 
 			<div className="sep" />
 			<div className="footer">
-				<button className="unpair" onClick={props.onUnpair}>
+				<button type="button" className="unpair" onClick={props.onUnpair}>
 					Unpair this device
 				</button>
 			</div>
@@ -669,8 +687,8 @@ function Pairing({ onDone, notice }: { onDone: (p: Pairing) => void; notice: str
    └──────┘        └──────┘        └──────┘`}</pre>
 			<h1 style={{ fontSize: 22 }}>Pair with your omni agent</h1>
 			<p style={{ color: "var(--dim)" }}>
-				Paste the pair link from <code style={{ fontFamily: "var(--font-mono)" }}>/pair</code> — or run the sspi server on
-				your Mac and enter its URL + token. Secrets never leave the machine.
+				Paste the pair link from <code style={{ fontFamily: "var(--font-mono)" }}>/pair</code> — or run the sspi server
+				on your Mac and enter its URL + token. Secrets never leave the machine.
 			</p>
 			<form
 				style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 22 }}
@@ -688,7 +706,13 @@ function Pairing({ onDone, notice }: { onDone: (p: Pairing) => void; notice: str
 					<input
 						name="server"
 						required
-						defaultValue={location.search.includes("pair=") ? location.href : location.origin.includes("5173") ? "http://localhost:8787" : location.origin}
+						defaultValue={
+							location.search.includes("pair=")
+								? location.href
+								: location.origin.includes("5173")
+									? "http://localhost:8787"
+									: location.origin
+						}
 						style={fieldStyle}
 					/>
 				</label>
@@ -739,7 +763,13 @@ function ThemesPage({
 	return (
 		<div className="themes">
 			<header>
-				<button className="presence iconbtn" aria-label="Back" onClick={onBack} style={{ padding: "4px 8px" }}>
+				<button
+					type="button"
+					className="presence iconbtn"
+					aria-label="Back"
+					onClick={onBack}
+					style={{ padding: "4px 8px" }}
+				>
 					←
 				</button>
 				<h1>Appearance</h1>
@@ -748,6 +778,7 @@ function ThemesPage({
 			<div className="grid">
 				{THEMES.map((t) => (
 					<button
+						type="button"
 						key={t.id}
 						className={`tcard ${theme === t.id ? "current" : ""}`}
 						data-theme={t.id}

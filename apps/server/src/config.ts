@@ -1,8 +1,8 @@
 // Server config + pairing token. The token is the only credential a phone or
 // browser needs: LLM provider keys and everything else stay on this machine.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -18,7 +18,9 @@ export function sspiDir(): string {
 	return process.env.SSPI_DIR ?? join(homedir(), ".sspi");
 }
 
-export function loadOrCreateConfig(opts: { port?: number; host?: string; token?: string; cwd?: string } = {}): ServerConfig {
+export function loadOrCreateConfig(
+	opts: { port?: number; host?: string; token?: string; cwd?: string } = {},
+): ServerConfig {
 	const dir = sspiDir();
 	const path = join(dir, "config.json");
 	let stored: { token?: string; port?: number; host?: string } = {};

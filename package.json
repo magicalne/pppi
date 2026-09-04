@@ -5,10 +5,7 @@
 	"description": "**pi — a pointer-pointer to pi. One omni agent managing your pi sessions: repos on main, worktrees as branches.",
 	"type": "module",
 	"packageManager": "bun@1.4.0",
-	"workspaces": [
-		"apps/*",
-		"packages/*"
-	],
+	"workspaces": ["apps/*", "packages/*"],
 	"scripts": {
 		"dev:server": "bun run apps/server/src/cli.ts",
 		"dev:web": "bun run --cwd apps/web dev",

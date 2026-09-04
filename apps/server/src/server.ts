@@ -7,19 +7,20 @@
 
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
-import type { WebSocket } from "ws";
-import type { PeerSession, SessionsResponse, Target } from "@sspi/protocol";
-import { RpcAgentDriver } from "./agent.ts";
-import { tokensMatch } from "./config.ts";
-import { Stt } from "./stt.ts";
-import { decodeWav, WavError } from "./wav.ts";
-import type { ChatEntry, ClientMessage, PairInfo, ServerEvent } from "@sspi/protocol";
-import { listSessions, pigeon, type PigeonSession } from "@sspi/omni/pigeon";
+import { type PigeonSession, listSessions, pigeon } from "@sspi/omni/pigeon";
 import { loadRegistry } from "@sspi/omni/repos";
+import type { PeerSession, SessionsResponse, Target } from "@sspi/protocol";
+import type { ChatEntry, ClientMessage, PairInfo, ServerEvent } from "@sspi/protocol";
+import fastify, { type FastifyInstance } from "fastify";
+import type { WebSocket } from "ws";
+import type { RpcAgentDriver } from "./agent.ts";
+import { tokensMatch } from "./config.ts";
 import { buildProfiles } from "./profiles.ts";
+import type { Stt } from "./stt.ts";
+import { VoiceSession, type VoiceStt, type VoiceTts, batchVoiceStt } from "./voice.ts";
+import { WavError, decodeWav } from "./wav.ts";
 
 export type ServerOptions = {
 	token: string;
@@ -30,6 +31,10 @@ export type ServerOptions = {
 	maxVoiceBytes?: number;
 	/** Pairing facts for this machine; enables GET /api/pair when present. */
 	pair?: PairInfo;
+	/** Interactive-mode STT override (tests); defaults to batch over `stt`. */
+	voiceStt?: VoiceStt;
+	/** Interactive-mode TTS provider (tests); null/omitted = no spoken replies yet. */
+	tts?: VoiceTts | null;
 };
 
 type AuthedSocket = WebSocket & { authed?: boolean };
@@ -39,30 +44,24 @@ async function classify(omniSessionId: string, registryDir?: string): Promise<Se
 	const res = await listSessions();
 	if (!Array.isArray(res)) return empty;
 	const reg = loadRegistry(registryDir);
-		const peer = (s: PigeonSession): PeerSession => {
-			const wtMatch = s.cwd.includes("/.worktrees/")
-				? s.cwd.split("/.worktrees/")[1]?.split("/")[0]
-				: undefined;
-			return {
-				sessionId: s.sessionId,
-				name: s.name,
-				state: s.state === "idle" ? "idle" : s.state === "unreach" ? "unreachable" : "busy",
-				cwd: s.cwd,
-				branch: wtMatch ? "worktree" : "main",
-				worktree: wtMatch ?? null,
-			};
+	const peer = (s: PigeonSession): PeerSession => {
+		const wtMatch = s.cwd.includes("/.worktrees/") ? s.cwd.split("/.worktrees/")[1]?.split("/")[0] : undefined;
+		return {
+			sessionId: s.sessionId,
+			name: s.name,
+			state: s.state === "idle" ? "idle" : s.state === "unreach" ? "unreachable" : "busy",
+			cwd: s.cwd,
+			branch: wtMatch ? "worktree" : "main",
+			worktree: wtMatch ?? null,
 		};
+	};
 	const projects = reg.repos.map((r) => ({
 		name: r.name,
 		path: r.path,
-		sessions: res
-			.filter((s) => !s.me && (s.cwd === r.path || s.cwd.startsWith(`${r.path}/`)))
-			.map(peer),
+		sessions: res.filter((s) => !s.me && (s.cwd === r.path || s.cwd.startsWith(`${r.path}/`))).map(peer),
 	}));
 	const claimed = new Set(projects.flatMap((p) => p.sessions.map((s) => s.sessionId)));
-	const others = res
-		.filter((s) => !s.me && !claimed.has(s.sessionId) && s.sessionId !== omniSessionId)
-		.map(peer);
+	const others = res.filter((s) => !s.me && !claimed.has(s.sessionId) && s.sessionId !== omniSessionId).map(peer);
 	const all = [...projects.flatMap((p) => p.sessions), ...others];
 	const profiles = buildProfiles(
 		[...all.map((s) => s.sessionId), omniSessionId],
@@ -201,7 +200,8 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		const sttStatus = opts.stt.status;
 		if (!sttStatus.ready) return reply.code(503).send({ ok: false, error: sttStatus.reason });
 		const body = req.body as Buffer;
-		if (!Buffer.isBuffer(body) || body.length === 0) return reply.code(400).send({ ok: false, error: "empty body; send a WAV" });
+		if (!Buffer.isBuffer(body) || body.length === 0)
+			return reply.code(400).send({ ok: false, error: "empty body; send a WAV" });
 
 		let transcript: string;
 		try {
@@ -256,7 +256,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 	app.get("/ws", { websocket: true }, (raw: WebSocket) => {
 		const socket = raw as AuthedSocket;
 		socket.authed = false;
-		let helloTimer: NodeJS.Timeout | undefined = setTimeout(() => socket.close(), 10_000);
+		const helloTimer: NodeJS.Timeout | undefined = setTimeout(() => socket.close(), 10_000);
 
 		socket.on("message", async (raw: Buffer) => {
 			let msg: ClientMessage;
@@ -277,9 +277,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 				let history: ChatEntry[] = [];
 				try {
 					const entries = await opts.driver.history();
-					history = [...entries, ...peerLog]
-						.map((h) => ({ ...h, id: randomUUID() }))
-						.sort((a, b) => a.ts - b.ts);
+					history = [...entries, ...peerLog].map((h) => ({ ...h, id: randomUUID() })).sort((a, b) => a.ts - b.ts);
 				} catch {
 					// keep empty history rather than failing the handshake
 				}
@@ -311,6 +309,32 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 	function send(ws: WebSocket, evt: ServerEvent): void {
 		if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(evt));
 	}
+
+	// ------------------------------------------------------- interactive voice
+
+	const voiceStt = opts.voiceStt ?? batchVoiceStt(opts.stt);
+	let voiceActiveCount = 0;
+	let voiceActive = false;
+	const setVoiceActive = (active: boolean): void => {
+		voiceActiveCount = Math.max(0, voiceActiveCount + (active ? 1 : -1));
+		const now = voiceActiveCount > 0;
+		if (now !== voiceActive) {
+			voiceActive = now;
+			broadcast({ type: "voice_active", active: now });
+		}
+	};
+
+	app.get("/voice", { websocket: true }, (raw: WebSocket) => {
+		new VoiceSession(raw, {
+			token: opts.token,
+			stt: voiceStt,
+			tts: opts.tts ?? null,
+			submit: (text) => submitUserText(text, "voice"),
+			abortAgent: () => void opts.driver.abort(),
+			onAuthed: () => setVoiceActive(true),
+			onClosed: () => setVoiceActive(false),
+		});
+	});
 
 	// ---------------------------------------------------------------- static web app
 

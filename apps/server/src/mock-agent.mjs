@@ -6,7 +6,7 @@
 import { StringDecoder } from "node:string_decoder";
 
 const reply = process.env.MOCK_REPLY ?? "mock ok";
-let lines = [];
+const _lines = [];
 
 const dec = new StringDecoder("utf8");
 let buf = "";
@@ -35,7 +35,7 @@ const state = {
 };
 
 function write(obj) {
-	process.stdout.write(JSON.stringify(obj) + "\n");
+	process.stdout.write(`${JSON.stringify(obj)}\n`);
 }
 
 const history = [];
@@ -65,7 +65,12 @@ function handle(cmd) {
 					assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: part },
 				});
 			}
-			const assistant = { role: "assistant", content: [{ type: "text", text }], stopReason: "stop", timestamp: Date.now() };
+			const assistant = {
+				role: "assistant",
+				content: [{ type: "text", text }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+			};
 			write({ type: "message_end", message: assistant });
 			history.push(assistant);
 			write({ type: "agent_end", messages: [assistant], willRetry: false });
@@ -73,6 +78,12 @@ function handle(cmd) {
 			break;
 		}
 		default:
-			write({ id: cmd.id, type: "response", command: String(cmd.type ?? "unknown"), success: false, error: "mock: unsupported" });
+			write({
+				id: cmd.id,
+				type: "response",
+				command: String(cmd.type ?? "unknown"),
+				success: false,
+				error: "mock: unsupported",
+			});
 	}
 }

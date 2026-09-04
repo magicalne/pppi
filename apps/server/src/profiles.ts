@@ -6,11 +6,11 @@
 // before anyone has run /profile. The JSON shape here is the contract the
 // pi extension writes; keep the two in sync.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { sspiDir } from "./config.ts";
 import type { Profile } from "@sspi/protocol";
+import { sspiDir } from "./config.ts";
 
 export const PROFILE_COLORS = [
 	"#e8b14a", // amber
@@ -62,10 +62,7 @@ export function buildProfiles(
 			continue;
 		}
 		const s = byId.get(id);
-		const fallback =
-			s?.name ??
-			(s?.cwd ? s.cwd.split("/").filter(Boolean).at(-1) : undefined) ??
-			`#${id.slice(0, 4)}`;
+		const fallback = s?.name ?? (s?.cwd ? s.cwd.split("/").filter(Boolean).at(-1) : undefined) ?? `#${id.slice(0, 4)}`;
 		out[id] = {
 			id,
 			name: fallback,

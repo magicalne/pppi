@@ -10,11 +10,11 @@
 //
 // Load with: pi -e <this file>  (or via extensions/omni.ts)
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { listSessions, pigeon, sessionsForRepo, type PigeonSession } from "./pigeon.ts";
-import { addRepo, displayPath, findRepo, loadRegistry, removeRepo, type RepoRegistry } from "./repos.ts";
+import { type PigeonSession, listSessions, pigeon, sessionsForRepo } from "./pigeon.ts";
+import { type RepoRegistry, addRepo, displayPath, findRepo, loadRegistry, removeRepo } from "./repos.ts";
 import { addWorktree, listWorktrees, parseWorktrees, removeWorktree } from "./worktree.ts";
 
 const OMNI_SYSTEM_PROMPT = `## sspi — the omni agent
@@ -62,7 +62,10 @@ function selfSessionId(ctx: ExtensionContext): string | undefined {
 		// fall through to basename
 	}
 	const base = file.split("/").pop() ?? file;
-	const id = base.replace(/\.jsonl$/, "").split("_").pop();
+	const id = base
+		.replace(/\.jsonl$/, "")
+		.split("_")
+		.pop();
 	return id || undefined;
 }
 
@@ -105,7 +108,9 @@ export default function sspiOmniExtension(pi: ExtensionAPI) {
 				const sessions = await listSessions();
 				const lines = reg.repos.map((r) => {
 					const inRepo = Array.isArray(sessions) ? sessionsForRepo(sessions, r.path) : [];
-					const live = Array.isArray(sessions) ? inRepo.map((s) => `#${s.sessionId.slice(0, 4)} ${s.name ?? "unnamed"} (${s.state})`).join(", ") : "";
+					const live = Array.isArray(sessions)
+						? inRepo.map((s) => `#${s.sessionId.slice(0, 4)} ${s.name ?? "unnamed"} (${s.state})`).join(", ")
+						: "";
 					return `- ${r.name}  ${displayPath(r.path)}${live ? `\n    sessions: ${live}` : "\n    (no open sessions)"}`;
 				});
 				if (!Array.isArray(sessions)) lines.push(`(could not list sessions: ${sessions.error})`);
@@ -114,7 +119,9 @@ export default function sspiOmniExtension(pi: ExtensionAPI) {
 			if (params.action === "add") {
 				if (!params.path) return text("add needs a repository path");
 				const res = addRepo(reg, params.path, params.name);
-				return text(res.ok ? `registered repo "${res.repo.name}" at ${displayPath(res.repo.path)}` : `error: ${res.error}`);
+				return text(
+					res.ok ? `registered repo "${res.repo.name}" at ${displayPath(res.repo.path)}` : `error: ${res.error}`,
+				);
 			}
 			if (!params.name && !params.path) return text("remove needs a repo name or path");
 			const res = removeRepo(reg, params.name ?? params.path!);
@@ -160,14 +167,20 @@ export default function sspiOmniExtension(pi: ExtensionAPI) {
 				const sessions = await listSessions();
 				if (!Array.isArray(sessions)) return text(`error: ${sessions.error}`);
 				const inRepo = sessionsForRepo(sessions, repo.path).filter((s) => !s.me);
-				if (inRepo.length === 0) return text(`no open session is working in repo "${repo.name}" (${displayPath(repo.path)}). Start one there, or pick another target.`);
+				if (inRepo.length === 0)
+					return text(
+						`no open session is working in repo "${repo.name}" (${displayPath(repo.path)}). Start one there, or pick another target.`,
+					);
 				const best = inRepo.find((s) => s.cwd === repo.path) ?? inRepo[0];
 				if (!best) return text(`no open session is working in repo "${repo.name}"`);
 				target = best.name ?? `#${best.sessionId.slice(0, 4)}`;
 			}
 			const args = ["send", target, params.message];
 			if (params.wait) args.push("--wait", "--timeout", String(params.timeout ?? 120));
-			const res = await pigeon(args, { sessionId: selfSessionId(ctx), timeoutMs: (params.wait ? (params.timeout ?? 120) : 30) * 1000 + 5_000 });
+			const res = await pigeon(args, {
+				sessionId: selfSessionId(ctx),
+				timeoutMs: (params.wait ? (params.timeout ?? 120) : 30) * 1000 + 5_000,
+			});
 			const out = [res.stdout, res.stderr].filter(Boolean).join("\n").trim();
 			return text(out || (res.code === 0 ? "sent" : `pigeon exited ${res.code}`));
 		},
@@ -186,7 +199,10 @@ export default function sspiOmniExtension(pi: ExtensionAPI) {
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const args = ["replies", "--json", "--timeout", String(params.timeout ?? 5)];
 			if (params.keep) args.push("--keep");
-			const res = await pigeon(args, { sessionId: selfSessionId(ctx), timeoutMs: (params.timeout ?? 5) * 1000 + 10_000 });
+			const res = await pigeon(args, {
+				sessionId: selfSessionId(ctx),
+				timeoutMs: (params.timeout ?? 5) * 1000 + 10_000,
+			});
 			const out = [res.stdout, res.stderr].filter(Boolean).join("\n").trim();
 			return text(out || "(no replies yet)");
 		},
@@ -219,9 +235,7 @@ export default function sspiOmniExtension(pi: ExtensionAPI) {
 				if (!res.ok) return text(`error: ${res.error}`);
 				const wts = parseWorktrees(res.output);
 				return text(
-					wts
-						.map((w) => `- ${w.name}  ${w.branch ? w.branch : "(detached)"}  ${displayPath(w.path)}`)
-						.join("\n"),
+					wts.map((w) => `- ${w.name}  ${w.branch ? w.branch : "(detached)"}  ${displayPath(w.path)}`).join("\n"),
 				);
 			}
 			if (params.action === "add") {
@@ -258,7 +272,9 @@ export default function sspiOmniExtension(pi: ExtensionAPI) {
 				const wts = wtRes.ok ? parseWorktrees(wtRes.output) : [];
 				for (const s of inRepo) {
 					const onMain = !s.cwd.includes("/.worktrees/");
-					lines.push(`  │   ├─ session #${s.sessionId.slice(0, 4)} ${s.name ?? "unnamed"} (${s.state}) ${onMain ? "[main]" : "[worktree]"}`);
+					lines.push(
+						`  │   ├─ session #${s.sessionId.slice(0, 4)} ${s.name ?? "unnamed"} (${s.state}) ${onMain ? "[main]" : "[worktree]"}`,
+					);
 				}
 				for (const w of wts) {
 					if (w.name === ".worktrees" || w.path === r.path) continue;

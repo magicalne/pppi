@@ -5,7 +5,7 @@
 // Framing note from pi's docs: strict JSONL — split on "\n" only, strip a
 // trailing "\r". Do NOT use readline (it also splits on U+2028/U+2029).
 
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 
@@ -57,7 +57,7 @@ export function toolLabel(toolName: string, args: any): string {
 		case "edit":
 			return `writing ${p(a.path ?? a.file_path)}`;
 		case "bash":
-			return `running ${(String(a.command ?? "shell") .split(/\s+/)[0] || "shell").slice(0, 24)}`;
+			return `running ${(String(a.command ?? "shell").split(/\s+/)[0] || "shell").slice(0, 24)}`;
 		case "glob":
 		case "grep":
 			return `searching ${String(a.pattern ?? "").slice(0, 24)}`;

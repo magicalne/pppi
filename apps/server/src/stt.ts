@@ -7,10 +7,10 @@
 //   2. pi-transcribe's configured model (~/.pi/agent/pi-transcribe.json)
 //   3. pi-transcribe's recommended model in the HuggingFace cache
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { toMono16k, type DecodedWav } from "./wav.ts";
+import { type DecodedWav, toMono16k } from "./wav.ts";
 
 const RECOMMENDED_REPO_DIR = "models--handy-computer--parakeet-unified-en-0.6b-gguf";
 const RECOMMENDED_FILE = "parakeet-unified-en-0.6b-Q8_0.gguf";
@@ -46,16 +46,15 @@ export function resolveSttModel(): SttStatus {
 
 	return {
 		ready: false,
-		reason:
-			`no local STT model found. Run /transcribe once in pi (pi-transcribe) to download the ` +
-			`recommended model (${RECOMMENDED_FILE}), or set SSPI_STT_MODEL=/path/to/model.gguf`,
+		reason: `no local STT model found. Run /transcribe once in pi (pi-transcribe) to download the recommended model (${RECOMMENDED_FILE}), or set SSPI_STT_MODEL=/path/to/model.gguf`,
 	};
 }
 
 export class Stt {
-	private model:
-		| { transcribe(pcm: Float32Array, opts?: Record<string, unknown>): Promise<{ text: string }>; dispose?(): void }
-		| null = null;
+	private model: {
+		transcribe(pcm: Float32Array, opts?: Record<string, unknown>): Promise<{ text: string }>;
+		dispose?(): void;
+	} | null = null;
 	private loading: Promise<void> | null = null;
 	readonly status: SttStatus;
 	private queue: Promise<unknown> = Promise.resolve();

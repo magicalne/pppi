@@ -49,7 +49,7 @@ export class VoiceRecorder {
 		this.source?.disconnect();
 		this.processor?.disconnect();
 		await this.ctx?.close();
-		this.stream?.getTracks().forEach((t) => t.stop());
+		for (const t of this.stream?.getTracks() ?? []) t.stop();
 		this.stream = null;
 		this.ctx = null;
 

@@ -1,7 +1,7 @@
 // sspi paths + profile store shared by the pi extension commands.
 // Keep the JSON shapes in sync with apps/server/src/profiles.ts.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -86,5 +86,10 @@ export function selfSessionId(sessionFile?: string): string | undefined {
 		// fall through
 	}
 	const base = sessionFile.split("/").pop() ?? sessionFile;
-	return base.replace(/\.jsonl$/, "").split("_").pop() || undefined;
+	return (
+		base
+			.replace(/\.jsonl$/, "")
+			.split("_")
+			.pop() || undefined
+	);
 }

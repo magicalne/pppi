@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeWav, encodeWav16k, toMono16k, WavError } from "../src/wav.ts";
+import { WavError, decodeWav, encodeWav16k, toMono16k } from "../src/wav.ts";
 
 describe("wav", () => {
 	it("round-trips 16k mono PCM16", () => {

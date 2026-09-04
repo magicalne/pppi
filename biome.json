@@ -17,6 +17,9 @@
 			},
 			"suspicious": {
 				"noExplicitAny": "off"
+			},
+			"a11y": {
+				"useKeyWithClickEvents": "off"
 			}
 		}
 	},
@@ -28,6 +31,15 @@
 		}
 	},
 	"files": {
-		"ignore": ["dist", "coverage", "node_modules", "apps/web/dist", "apps/android", ".pi"]
+		"ignore": [
+			"dist",
+			"coverage",
+			"node_modules",
+			"apps/web/dist",
+			"apps/android",
+			".pi",
+			".worktrees",
+			"packages/pi-ext/vendor"
+		]
 	}
 }

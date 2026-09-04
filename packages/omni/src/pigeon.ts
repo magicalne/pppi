@@ -28,10 +28,7 @@ export type PigeonSession = {
 export type PigeonResult = { code: number; stdout: string; stderr: string };
 
 export function pigeonBin(): string | null {
-	const candidates = [
-		process.env.PIGEON_BIN,
-		join(homedir(), ".local", "bin", "pigeon"),
-	];
+	const candidates = [process.env.PIGEON_BIN, join(homedir(), ".local", "bin", "pigeon")];
 	for (const c of candidates) {
 		if (c && existsSync(c)) return c;
 	}

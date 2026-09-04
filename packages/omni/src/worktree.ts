@@ -86,9 +86,7 @@ export function parseWorktrees(porcelain: string): WorktreeInfo[] {
 	return out;
 }
 
-export type AddWorktreeResult =
-	| { ok: true; path: string; branch: string }
-	| { ok: false; error: string };
+export type AddWorktreeResult = { ok: true; path: string; branch: string } | { ok: false; error: string };
 
 export async function addWorktree(
 	repo: string,

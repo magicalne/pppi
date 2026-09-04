@@ -3,6 +3,8 @@
 // v2: targets (omni default, or a peer session id) + rich tool labels.
 // v3: session profiles (name/color/description), reply attribution via
 //     profileId, and machine pairing info (multi-machine connections).
+// v4: interactive voice mode (ws /voice) — hands-free conversation with
+//     streaming STT partials, spoken replies (local TTS) and barge-in.
 
 export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming";
 
@@ -68,7 +70,39 @@ export type ServerEvent =
 	| { type: "assistant_final"; id: string; text: string; target?: Target; profileId?: string }
 	| { type: "tool_event"; toolName: string; phase: "start" | "end"; label?: string }
 	| { type: "agent_notify"; level: "info" | "warning" | "error"; message: string }
-	| { type: "error"; message: string; target?: Target };
+	| { type: "error"; message: string; target?: Target }
+	// interactive voice mode is (no longer) live on this gateway
+	| { type: "voice_active"; active: boolean };
+
+// ---------------------------------------------------------------- interactive voice (ws /voice)
+
+/** One voice state machine shared by both ends: what the conversation is doing. */
+export type VoiceState = "listening" | "thinking" | "speaking";
+
+export type VoiceSttStatus = { ready: true; modelId: string } | { ready: false; reason: string };
+export type VoiceTtsStatus = { ready: true; provider: string; voice: string } | { ready: false; reason: string };
+
+/**
+ * Client → server on /voice. Binary frames carry raw PCM16 16 kHz mono
+ * (~100 ms chunks, only while an utterance is open); text frames carry this
+ * JSON control protocol. The client owns VAD + endpointing; the server owns
+ * STT, the agent and TTS.
+ */
+export type VoiceClientMessage =
+	| { type: "hello"; token: string; client: "web" | "android" | "test" }
+	| { type: "speech_start" }
+	| { type: "speech_end" }
+	| { type: "interrupt" };
+
+export type VoiceServerEvent =
+	| { type: "voice_hello_ok"; stt: VoiceSttStatus; tts: VoiceTtsStatus }
+	| { type: "voice_hello_fail"; error: string }
+	| { type: "voice_state"; state: VoiceState }
+	| { type: "stt_partial"; committed: string; tentative: string }
+	| { type: "stt_final"; id: string; text: string }
+	| { type: "tts_start"; id: string; rate: number }
+	| { type: "tts_end"; id: string; interrupted?: boolean }
+	| { type: "voice_error"; message: string };
 
 // ---------------------------------------------------------------- session tree (GET /api/sessions)
 

@@ -13,7 +13,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { pairUrl, qrText } from "./pair.ts";
-import { loadPair, readProfile, selfSessionId, writeOmniMark, writeProfile, listProfiles } from "./store.ts";
+import { listProfiles, loadPair, readProfile, selfSessionId, writeOmniMark, writeProfile } from "./store.ts";
 
 // same palette the gateway derives colors from — /profile just picks among these
 const COLORS = [
@@ -104,10 +104,7 @@ export default function sspiExtension(pi: ExtensionAPI) {
 				description = parts.slice(2).join(" ");
 			} else if (ctx.hasUI) {
 				name = (await ctx.ui.input("Profile name", existing?.name ?? suggestedName(ctx))) ?? name;
-				const picked = await ctx.ui.select(
-					`Color for "${name}" (now ${color})`,
-					COLORS,
-				);
+				const picked = await ctx.ui.select(`Color for "${name}" (now ${color})`, COLORS);
 				if (picked) {
 					const hex = picked.match(/#[0-9a-f]{6}/i);
 					if (hex) color = hex[0];
@@ -134,7 +131,10 @@ export default function sspiExtension(pi: ExtensionAPI) {
 		execute: async (_toolCallId: string) => {
 			const profiles = listProfiles();
 			if (profiles.length === 0) {
-				return { content: [{ type: "text", text: "no profiles yet — sessions can create one with /profile" }], details: {} };
+				return {
+					content: [{ type: "text", text: "no profiles yet — sessions can create one with /profile" }],
+					details: {},
+				};
 			}
 			const body = profiles
 				.map((p) => `${p.name} (${p.color}) — ${p.description} [id: ${p.id.slice(0, 8)}…]`)

@@ -6,11 +6,11 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { networkInterfaces, hostname } from "node:os";
+import { hostname, networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import QRCode from "qrcode";
 import type { PairInfo } from "@sspi/protocol";
+import QRCode from "qrcode";
 import { RpcAgentDriver } from "./agent.ts";
 import { loadOrCreateConfig, sspiDir } from "./config.ts";
 import { createServer } from "./server.ts";
@@ -104,7 +104,7 @@ const app = await createServer({
 await app.listen({ port: cfg.port, host: cfg.host });
 driver.start();
 
-const shownHost = cfg.host === "0.0.0.0" || cfg.host === "::" ? pair.ips[0] ?? "<this-mac>" : cfg.host;
+const shownHost = cfg.host === "0.0.0.0" || cfg.host === "::" ? (pair.ips[0] ?? "<this-mac>") : cfg.host;
 const pairUrl = pair.urls[0] ?? `http://localhost:${cfg.port}`;
 const qr = await QRCode.toString(pairUrl, { type: "terminal", small: true }).catch(() => null);
 console.log(`

@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { realpathSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { addRepo, findRepo, loadRegistry, removeRepo } from "../src/repos.ts";
 import { addWorktree, listWorktrees, parseWorktrees, removeWorktree, validateName } from "../src/worktree.ts";

@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { RpcAgentDriver } from "../src/agent.ts";
 import { createServer } from "../src/server.ts";
@@ -145,7 +145,14 @@ describe("pairing + profiles api", () => {
 				driver,
 				stt: Stt.create({ disabled: true }),
 				pair: withPair
-					? { machine: "test-box", port: 8787, token, ips: ["192.168.1.9"], urls: ["http://192.168.1.9:8787"], fingerprint: "abcdef12" }
+					? {
+							machine: "test-box",
+							port: 8787,
+							token,
+							ips: ["192.168.1.9"],
+							urls: ["http://192.168.1.9:8787"],
+							fingerprint: "abcdef12",
+						}
 					: undefined,
 			});
 			await app.listen({ port: 0, host: "127.0.0.1" });
@@ -159,7 +166,7 @@ describe("pairing + profiles api", () => {
 		if (app) await app.close();
 		const { rmSync } = await import("node:fs");
 		rmSync(tmpDir, { recursive: true, force: true });
-		delete process.env.SSPI_DIR;
+		process.env.SSPI_DIR = undefined;
 	});
 
 	it("serves /api/pair with the right token and 401s otherwise", async () => {
@@ -196,7 +203,9 @@ describe("pairing + profiles api", () => {
 		const port = typeof addr === "object" && addr?.port ? addr.port : 0;
 		const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
 		let resolveFinal: (evt: any) => void = () => {};
-		const finalPromise = new Promise<any>((resolve) => (resolveFinal = resolve));
+		const finalPromise = new Promise<any>((resolve) => {
+			resolveFinal = resolve;
+		});
 		await new Promise<void>((r) => ws.on("open", r));
 		await new Promise<void>((resolve, reject) => {
 			const timer = setTimeout(() => reject(new Error("no hello_ok within 10s")), 10_000);
