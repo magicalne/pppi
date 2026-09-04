@@ -52,6 +52,18 @@ sessions. Read README.md for the full picture.
 - `apps/server/src/profiles.ts` — profile palette + explicit/derived profile
   merge (keep the JSON shape in sync with packages/pi-ext/src/store.ts).
 - `apps/server/src/stt.ts` — model resolution: `SSPI_STT_MODEL` →
-  `~/.pi/agent/pi-transcribe.json` → HF-cache parakeet.
+  `~/.pi/agent/pi-transcribe.json` → HF-cache parakeet. `openUtterance()`
+  exposes parakeet's buffered streaming for live partials.
+- `apps/server/src/tts.ts` — TTS providers behind `TtsProvider`
+  (kokoro first via `kokoro-js`, `macos-say` fallback;
+  `SSPI_TTS_PROVIDER=kokoro|macos-say|auto`).
+- `apps/server/src/vad.ts` + `vadProcess.ts` — silero VAD in a host process
+  (worker threads deadlock against kokoro's runtime) + the turn-taking state
+  machine (`UtteranceDetector`, timings in `DEFAULT_TIMINGS`).
+- `apps/server/src/voice.ts` — the /voice websocket: streaming utterances,
+  keyword commands, sentence-chunked speaking (`Speaker`, speak-prose
+  transform), barge-in.
+- `apps/web/src/voice/` — web interactive mode (mic, ws client, WebAudio
+  playback, `useVoice` state machine).
 - `packages/protocol/src/index.ts` — the wire protocol; keep TS and Kotlin
   sides in sync (Kotlin mirror: apps/android/.../Protocol.kt).

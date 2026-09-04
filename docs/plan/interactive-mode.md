@@ -1,7 +1,29 @@
 # Plan — Interactive mode (hands-free voice conversation)
 
-**Date:** 2026-09-04 · **Status:** plan pending approval. No code touched yet.
+**Date:** 2026-09-04 · **Status:** implemented (phases 0–4 committed, live-verified). See deviations below.
 **Scope:** a full-duplex voice mode: talk to the omni (or any target) continuously — no button to hold, agent answers out loud, either side can interrupt. Web first, Android after web is verified live.
+
+## As-built deviations (agreed during implementation)
+
+1. **VAD runs server-side, in its own host process** (`vadProcess.ts`) —
+   not in the browser. Sharing native ONNX state between silero and the
+   kokoro/transformers.js stack deadlocked inference (worker threads did not
+   help); a child process also fixes event-loop jank from synthesis. LAN
+   round-trip (~15 ms) keeps barge-in effectively instant, and the server
+   knowing TTS state makes the echo-aware thresholds exact. Clients stream
+   PCM continuously and react to `vad` events; `speech_start/end` client
+   messages were replaced by this.
+2. **playback_done** (client → server): the echo-aware window now tracks
+   the client's *audible playback* (it sends `playback_done` when its
+   speaker drains), not server synthesis time.
+3. **Streaming STT** uses parakeet-unified's published buffered-streaming
+   operating point (L=5600, C=560, R=560 ms): live committed text ~1.6 s
+   into an utterance, full-accuracy finals.
+4. **Web mic tap toggles the interactive session** (hold-to-talk remains
+   the fallback whenever the session is off; on Android the press-and-hold
+   button is untouched beside it).
+5. Keywords act as server-side control phrases on the finalized text
+   ("stop", "cancel", …) — never turn-enders.
 
 ## The feature
 

@@ -75,6 +75,7 @@ export type VoiceSessionDeps = {
 };
 
 const HELLO_TIMEOUT_MS = 10_000;
+const IDLE_TIMEOUT_MS = 10 * 60_000; // no turns for 10 min → close (client falls back to hold-to-talk)
 const PRE_ROLL_MS = 300;
 const SAMPLE_RATE = 16_000;
 const VAD_WINDOW_SAMPLES = 512; // 32 ms @ 16 kHz
@@ -102,6 +103,7 @@ export class VoiceSession {
 
 	// audio path state
 	private audioMs = 0; // audio-time clock (immune to processing/wall-clock jitter)
+	private idleTimer: NodeJS.Timeout | undefined;
 	private windowBuf = new Float32Array(0); // samples awaiting a full VAD window
 	private vadBusy = Promise.resolve(); // serialize VAD window processing
 	private preRoll: Float32Array[] = [];
@@ -133,6 +135,7 @@ export class VoiceSession {
 			},
 		});
 		this.helloTimer = setTimeout(() => this.close("hello timeout"), HELLO_TIMEOUT_MS);
+		this.armIdleTimer();
 		ws.on("message", (data: Buffer, isBinary: boolean) => {
 			void this.onMessage(data, isBinary);
 		});
@@ -159,10 +162,22 @@ export class VoiceSession {
 		}
 	}
 
+	/** Long silent sessions close themselves; the client falls back to hold-to-talk. */
+	private armIdleTimer(): void {
+		clearTimeout(this.idleTimer);
+		this.idleTimer = setTimeout(() => {
+			if (!this.closed) {
+				this.send({ type: "voice_error", message: "voice session idle — paused" });
+				this.close("idle timeout");
+			}
+		}, IDLE_TIMEOUT_MS);
+	}
+
 	private onClose(reason: string): void {
 		if (this.closed) return;
 		this.closed = true;
 		clearTimeout(this.helloTimer);
+		clearTimeout(this.idleTimer);
 		this.capture?.stream?.dispose();
 		this.capture = null;
 		this.speaker?.abort();
@@ -214,6 +229,7 @@ export class VoiceSession {
 	// ------------------------------------------------------------- audio path
 
 	private onAudio(data: Buffer): void {
+		this.armIdleTimer(); // audio (even silence) = the client is still with us
 		const frames = data.length >> 1;
 		const pcm = new Float32Array(frames);
 		for (let i = 0; i < frames; i++) pcm[i] = data.readInt16LE(i * 2) / 32768;

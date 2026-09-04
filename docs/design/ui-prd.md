@@ -192,6 +192,35 @@ sessions show theirs only inside the switcher.
   empty state, never while typing).
 - Max height ~5 lines, then internal scroll.
 
+### 7b. Interactive mode (hands-free conversation)
+
+Tapping the mic opens a **voice session**: the field is replaced by the
+conversation's state, in the live-status grammar. Tap ■ (or leave it idle
+long enough) to end.
+
+```
+╭──────────────────────────────────────────╮
+│  listening — just talk              (■)  │
+│  I heard you say some of it …       (■)  │   live caption while speaking
+│  thinking…                          (■)  │
+│  talking… speak up to interrupt ⏹   (■)  │
+╰──────────────────────────────────────────╯
+```
+
+- States mirror the person grammar: `listening` → user caption →
+  `thinking…` → `talking…` → `listening`. The caption renders the settled
+  words bold and the in-flight tail dim — what the machine hears is never a
+  secret.
+- **Talking over the agent is the interrupt.** Speech during `talking…`
+  cuts the audio instantly (the server decides; thresholds are echo-aware)
+  and the cut answer is discarded — "if it didn't finish saying it, it
+  never said it". A `stop` button is also there for noisy rooms.
+- Spoken answers are prose only: fenced code is announced as "code is on
+  the screen"; the full answer still renders in the thread.
+- Turn-taking constants (silence endpoint, grace merge, blip filter) live in
+  `apps/server/src/vad.ts` — the UI renders whatever the state machine says,
+  never its own timer.
+
 ---
 
 ## 8. Theme system — five schemes, one picker page

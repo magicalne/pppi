@@ -52,6 +52,26 @@ recommended models as [pi-transcribe](https://github.com/earendil-works/pi-trans
 voice never leaves the machine, and there is no cloud STT bill. Text input
 exists as a fallback, but the big round button is the point.
 
+### Interactive mode (hands-free)
+
+Tap the mic once and just talk. The gateway runs silero VAD (in its own
+process) for turn-taking, streams your speech through parakeet's
+**buffered streaming mode** so live captions appear while you speak, and
+answers **out loud** through local TTS — kokoro-82M (q8 ONNX) when its model
+is cached, else macOS `say`. Talk over the agent and it stops instantly
+(barge-in with echo-aware thresholds); say "stop" and the same thing happens
+without becoming a chat turn. Fenced code is never spoken — the voice says
+"code is on the screen" and the full answer stays in the bubble.
+
+- TTS provider is pluggable: `SSPI_TTS_PROVIDER=kokoro|macos-say|auto`,
+  model dir via `SSPI_TTS_MODEL` (layout: `config.json`, `onnx/
+  model_quantized.onnx`, `voices/af_heart.bin`). Download:
+  `huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX --include
+  "onnx/model_quantized.onnx" "voices/af_heart.bin" "config.json" "tokenizer*"`
+- Timing knobs live in `apps/server/src/vad.ts` (`DEFAULT_TIMINGS`).
+- Sessions auto-pause after 10 idle minutes; hold-to-talk stays as the
+  fallback whenever the session is off.
+
 ## Layout
 
 ```
