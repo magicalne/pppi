@@ -19,7 +19,7 @@ import type { RpcAgentDriver } from "./agent.ts";
 import { tokensMatch } from "./config.ts";
 import { buildProfiles } from "./profiles.ts";
 import type { Stt } from "./stt.ts";
-import { VoiceSession, type VoiceStt, type VoiceTts, batchVoiceStt } from "./voice.ts";
+import { VoiceSession, type VoiceStt, type VoiceTts, voiceStt } from "./voice.ts";
 import { WavError, decodeWav } from "./wav.ts";
 
 export type ServerOptions = {
@@ -312,7 +312,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 
 	// ------------------------------------------------------- interactive voice
 
-	const voiceStt = opts.voiceStt ?? batchVoiceStt(opts.stt);
+	const sttPort = opts.voiceStt ?? voiceStt(opts.stt);
 	let voiceActiveCount = 0;
 	let voiceActive = false;
 	const setVoiceActive = (active: boolean): void => {
@@ -327,7 +327,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 	app.get("/voice", { websocket: true }, (raw: WebSocket) => {
 		new VoiceSession(raw, {
 			token: opts.token,
-			stt: voiceStt,
+			stt: sttPort,
 			tts: opts.tts ?? null,
 			submit: (text) => submitUserText(text, "voice"),
 			abortAgent: () => void opts.driver.abort(),

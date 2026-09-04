@@ -51,10 +51,7 @@ export function resolveSttModel(): SttStatus {
 }
 
 export class Stt {
-	private model: {
-		transcribe(pcm: Float32Array, opts?: Record<string, unknown>): Promise<{ text: string }>;
-		dispose?(): void;
-	} | null = null;
+	private model: TranscribeModelLike | null = null;
 	private loading: Promise<void> | null = null;
 	readonly status: SttStatus;
 	private queue: Promise<unknown> = Promise.resolve();
@@ -78,7 +75,7 @@ export class Stt {
 			const mod = (await import("transcribe-cpp")) as {
 				TranscribeModel: { load(path: string): Promise<unknown> };
 			};
-			this.model = (await mod.TranscribeModel.load(this.status.modelPath)) as Stt["model"];
+			this.model = (await mod.TranscribeModel.load(this.status.modelPath)) as TranscribeModelLike;
 		})();
 		await this.loading;
 	}
@@ -96,9 +93,111 @@ export class Stt {
 		return run;
 	}
 
+	/**
+	 * Open a streaming utterance (interactive mode): feed PCM chunks as the user
+	 * speaks, read committed/tentative partials, finalize on endpoint. Returns
+	 * null when the loaded model has no streaming mode — callers fall back to
+	 * batch transcribe().
+	 */
+	async openUtterance(): Promise<SttUtterance | null> {
+		await this.ensureLoaded();
+		const model = this.model!;
+		if (!model.capabilities.supportsStreaming) return null;
+		const session = model.createSession();
+		try {
+			// parakeet-unified's buffered streaming: the (L=5600, C=560, R=560)ms
+			// operating point from the model's published menu — 1.12s lookahead,
+			// full-accuracy finals, live committed text ~1.6s into an utterance.
+			// Other streaming families (moonshine, voxtral, …) take no family
+			// extension, so fall back to a plain stream.
+			let stream: TranscribeStreamLike;
+			try {
+				stream = await session.stream({
+					family: { kind: "parakeet_buffered", leftMs: 5600, chunkMs: 560, rightMs: 560 },
+				});
+			} catch {
+				stream = await session.stream();
+			}
+			return new TranscribeUtterance(session, stream);
+		} catch (err) {
+			session.dispose();
+			throw err;
+		}
+	}
+
 	async dispose(): Promise<void> {
 		this.model?.dispose?.();
 		this.model = null;
 		this.loading = null;
+	}
+}
+
+/** One streaming utterance; structurally compatible with voice.ts's UtteranceStream. */
+export type SttUtterance = {
+	feed(pcm: Float32Array): Promise<{ committed: string; tentative: string }>;
+	finalize(): Promise<string>;
+	dispose(): void;
+};
+
+// transcribe-cpp surface we rely on (koffi-backed; typed here to keep stt.ts standalone)
+type StreamTextLike = { full: string; committed: string; tentative: string };
+type TranscribeStreamLike = {
+	feed(pcm: Float32Array): Promise<unknown>;
+	finalize(): Promise<unknown>;
+	readonly text: StreamTextLike;
+	reset(): void;
+};
+type TranscribeSessionLike = {
+	stream(opts?: Record<string, unknown>): Promise<TranscribeStreamLike>;
+	dispose(): void;
+};
+type TranscribeModelLike = {
+	transcribe(pcm: Float32Array, opts?: Record<string, unknown>): Promise<{ text: string }>;
+	createSession(opts?: Record<string, unknown>): TranscribeSessionLike;
+	capabilities: { supportsStreaming: boolean };
+	dispose?(): void;
+};
+
+/**
+ * One spoken utterance over transcribe-cpp's streaming API. Feeds are
+ * serialized (the native side decodes on a worker thread; overlapping feeds
+ * could reorder audio), and partials ride along with each feed's snapshot.
+ */
+class TranscribeUtterance implements SttUtterance {
+	private queue: Promise<void> = Promise.resolve();
+	private text: StreamTextLike = { full: "", committed: "", tentative: "" };
+	private done = false;
+
+	constructor(
+		private readonly session: TranscribeSessionLike,
+		private readonly stream: TranscribeStreamLike,
+	) {}
+
+	async feed(pcm: Float32Array): Promise<{ committed: string; tentative: string }> {
+		const run = this.queue.then(async () => {
+			if (this.done) return;
+			await this.stream.feed(pcm);
+			this.text = this.stream.text;
+		});
+		this.queue = run.catch(() => undefined);
+		await run;
+		return { committed: this.text.committed, tentative: this.text.tentative };
+	}
+
+	async finalize(): Promise<string> {
+		await this.queue;
+		this.done = true;
+		await this.stream.finalize();
+		return this.stream.text.full;
+	}
+
+	dispose(): void {
+		this.done = true;
+		try {
+			this.stream.reset();
+		} catch {
+			// already failed
+		}
+		this.session.dispose();
 	}
 }

@@ -40,13 +40,13 @@ export interface VoiceTts {
 	synthesize(text: string): AsyncIterable<{ pcm: Buffer; rate: number }>;
 }
 
-/** Adapter: the hold-to-talk batch Stt as a (non-streaming) VoiceStt. */
-export function batchVoiceStt(stt: Stt): VoiceStt {
+/** Adapter: the shared Stt (streaming when the model supports it, batch otherwise) as the VoiceStt port. */
+export function voiceStt(stt: Stt): VoiceStt {
 	return {
 		status: stt.status.ready
 			? { ready: true, modelId: stt.status.modelId }
 			: { ready: false, reason: stt.status.reason },
-		openUtterance: () => Promise.resolve(null),
+		openUtterance: () => stt.openUtterance(),
 		transcribeBuffer: (pcm) => stt.transcribe({ sampleRate: 16000, channels: 1, samples: pcm }),
 	};
 }
@@ -72,10 +72,17 @@ const HELLO_TIMEOUT_MS = 10_000;
 const MIN_UTTERANCE_MS = 300;
 const MAX_UTTERANCE_MS = 25_000;
 
+/** Control phrases act immediately and never become turns (plan D1: keywords command, silence ends turns). */
+const CONTROL_PHRASES = /^(stop|cancel|abort|never\s?mind|forget it|scratch that)\s*[.!,?]*$/i;
+
 type Utterance = {
 	pcm: Float32Array[];
 	samples: number;
+	/** how many buffered chunks have been handed to the stream */
+	fed: number;
 	stream: UtteranceStream | null;
+	/** resolves once openUtterance() settles (stream may be null = batch fallback) */
+	opening: Promise<void>;
 	startedAt: number;
 	finalizing: boolean;
 };
@@ -169,13 +176,25 @@ export class VoiceSession {
 
 	private async startUtterance(): Promise<void> {
 		if (this.utterance) return; // already open — ignore duplicate starts
-		this.utterance = { pcm: [], samples: 0, stream: null, startedAt: Date.now(), finalizing: false };
+		const utt: Utterance = {
+			pcm: [],
+			samples: 0,
+			fed: 0,
+			stream: null,
+			opening: Promise.resolve(),
+			startedAt: Date.now(),
+			finalizing: false,
+		};
+		this.utterance = utt;
 		this.send({ type: "voice_state", state: "listening" });
-		try {
-			this.utterance.stream = await this.deps.stt.openUtterance();
-		} catch (err) {
-			this.send({ type: "voice_error", message: `stt: ${String((err as Error).message ?? err)}` });
-		}
+		utt.opening = (async () => {
+			try {
+				utt.stream = await this.deps.stt.openUtterance();
+				this.pumpStream(utt); // chunks that arrived while the stream was opening
+			} catch (err) {
+				this.send({ type: "voice_error", message: `stt: ${String((err as Error).message ?? err)}` });
+			}
+		})();
 		clearTimeout(this.maxTimer);
 		this.maxTimer = setTimeout(() => void this.endUtterance(true), MAX_UTTERANCE_MS);
 	}
@@ -188,12 +207,20 @@ export class VoiceSession {
 		for (let i = 0; i < frames; i++) pcm[i] = data.readInt16LE(i * 2) / 32768;
 		utt.pcm.push(pcm);
 		utt.samples += frames;
+		this.pumpStream(utt);
+	}
+
+	/** Feed every buffered-but-unfed chunk to the open stream; partials ride along. */
+	private pumpStream(utt: Utterance): void {
 		const stream = utt.stream;
-		if (stream)
+		if (!stream) return;
+		while (utt.fed < utt.pcm.length) {
+			const pcm = utt.pcm[utt.fed++]!;
 			void stream.feed(pcm).then(
 				({ committed, tentative }) => this.send({ type: "stt_partial", committed, tentative }),
 				() => this.send({ type: "voice_error", message: "stt stream failed" }),
 			);
+		}
 	}
 
 	private async endUtterance(forced: boolean): Promise<void> {
@@ -209,6 +236,8 @@ export class VoiceSession {
 			return;
 		}
 		try {
+			await utt.opening; // the stream may still be opening when speech_end races in
+			this.pumpStream(utt);
 			let text = "";
 			if (utt.stream) text = await utt.stream.finalize();
 			else text = await this.deps.stt.transcribeBuffer(concatPcm(utt.pcm, utt.samples));
@@ -225,6 +254,13 @@ export class VoiceSession {
 	}
 
 	private async dispatchUtterance(text: string): Promise<void> {
+		// "stop" while the agent talks: abort now, no turn, back to listening
+		if (CONTROL_PHRASES.test(text)) {
+			this.send({ type: "stt_final", id: randomUUID(), text });
+			this.send({ type: "voice_state", state: "listening" });
+			this.deps.abortAgent();
+			return;
+		}
 		const id = randomUUID();
 		this.send({ type: "stt_final", id, text });
 		this.send({ type: "voice_state", state: "thinking" });

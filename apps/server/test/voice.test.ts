@@ -18,6 +18,35 @@ function fakeStt(text: string): VoiceStt {
 	};
 }
 
+/** A VoiceStt with a streaming utterance: partials grow with each feed, finalize returns the text. */
+function fakeStreamingStt(text: string) {
+	const rec = { feedCalls: [] as Float32Array[], finalized: 0, disposed: 0 };
+	const words = text.split(" ");
+	const stt: VoiceStt = {
+		status: { ready: true, modelId: "fake-stream" },
+		openUtterance: () =>
+			Promise.resolve({
+				feed: async (pcm: Float32Array) => {
+					rec.feedCalls.push(pcm);
+					const n = Math.min(rec.feedCalls.length, words.length);
+					return {
+						committed: words.slice(0, Math.max(0, n - 1)).join(" "),
+						tentative: words.slice(Math.max(0, n - 1), n).join(" "),
+					};
+				},
+				finalize: async () => {
+					rec.finalized++;
+					return text;
+				},
+				dispose: () => {
+					rec.disposed++;
+				},
+			}),
+		transcribeBuffer: () => Promise.resolve(""),
+	};
+	return { stt, rec };
+}
+
 /** `seconds` of 16 kHz PCM16 sine — a stand-in for mic audio. */
 function pcmChunk(seconds: number): Buffer {
 	const n = Math.round(seconds * 16000);
@@ -205,6 +234,82 @@ describe("interactive voice websocket", () => {
 		voice.close();
 		await new Promise<void>((r) => voice.on("close", r));
 		expect((await inactive).active).toBe(false);
+		chat.close();
+	});
+
+	it("streams partials and finalizes a streaming utterance in feed order", async () => {
+		const { stt, rec } = fakeStreamingStt("what is the status");
+		await boot(stt);
+		const voice = await voiceConnect(token);
+		const hello = await nextEvent(voice, "voice_hello_ok");
+		expect(hello.stt.modelId).toBe("fake-stream");
+
+		const partials: Array<{ committed: string; tentative: string }> = [];
+		const onPartial = (raw: Buffer) => {
+			const evt = JSON.parse(raw.toString()) as any;
+			if (evt.type === "stt_partial") partials.push({ committed: evt.committed, tentative: evt.tentative });
+		};
+		voice.on("message", onPartial);
+
+		voice.send(JSON.stringify({ type: "speech_start" }));
+		voice.send(pcmChunk(0.3));
+		voice.send(pcmChunk(0.3));
+		voice.send(pcmChunk(0.3));
+		voice.send(JSON.stringify({ type: "speech_end" }));
+
+		const sttFinal = await nextEvent(voice, "stt_final");
+		expect(sttFinal.text).toBe("what is the status");
+		await new Promise((r) => setTimeout(r, 100));
+
+		expect(rec.feedCalls.length).toBe(3);
+		expect(rec.feedCalls[0]!.length).toBe(rec.feedCalls[1]!.length);
+		expect(rec.finalized).toBe(1);
+		expect(rec.disposed).toBe(1);
+		expect(partials.length).toBe(3);
+		expect(partials[0]).toEqual({ committed: "", tentative: "what" });
+		expect(partials[2]).toEqual({ committed: "what is", tentative: "the" });
+
+		voice.off("message", onPartial);
+		voice.close();
+	});
+
+	it("treats a bare control phrase as a command, not a turn", async () => {
+		await boot(fakeStt("stop"));
+		let aborted = 0;
+		driver.abort = async () => {
+			aborted++;
+		};
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+		const chat = await chatConnect();
+		await nextEvent(chat, "hello_ok");
+
+		const stray = nextEvent(chat, "transcript");
+		voice.send(JSON.stringify({ type: "speech_start" }));
+		voice.send(pcmChunk(0.5));
+		voice.send(JSON.stringify({ type: "speech_end" }));
+
+		const sttFinal = await nextEvent(voice, "stt_final");
+		expect(sttFinal.text).toBe("stop");
+		expect(aborted).toBe(1);
+		await expect(stray).rejects.toThrow(); // nothing dispatched to the agent
+		voice.close();
+		chat.close();
+	});
+
+	it("dispatches sentences that merely contain a control word", async () => {
+		await boot(fakeStt("stop the build"));
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+		const chat = await chatConnect();
+		await nextEvent(chat, "hello_ok");
+
+		const transcript = nextEvent(chat, "transcript");
+		voice.send(JSON.stringify({ type: "speech_start" }));
+		voice.send(pcmChunk(0.6));
+		voice.send(JSON.stringify({ type: "speech_end" }));
+		expect((await transcript).text).toBe("stop the build");
+		voice.close();
 		chat.close();
 	});
 });
