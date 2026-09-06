@@ -37,9 +37,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -61,28 +64,29 @@ import kotlin.math.roundToInt
 
 private val TICK_LABEL = mapOf("minimal" to "min", "medium" to "med")
 
-/** One brain hemisphere in 24-unit space; drawn twice (right one mirrored). */
-private fun lobePath(size: Float): Path = Path().apply {
-	fun f(v: Float) = v * size / 24f
-	moveTo(f(11.4f), f(20.9f))
-	cubicTo(f(9f), f(20.9f), f(7f), f(19.2f), f(6.6f), f(16.9f))
-	cubicTo(f(4.9f), f(15.8f), f(4f), f(13.8f), f(4.3f), f(11.7f))
-	cubicTo(f(4.6f), f(9.6f), f(4.7f), f(7.4f), f(5.6f), f(5.9f))
-	cubicTo(f(6.5f), f(4.4f), f(9.5f), f(3.8f), f(11.4f), f(4.6f))
-	close()
-}
+/** Lucide "brain" (ISC license) — stroke paths in the 24-unit viewBox. */
+private val BRAIN_PATHS = listOf(
+	"M12 18V5",
+	"M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4",
+	"M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5",
+	"M17.997 5.125a4 4 0 0 1 2.526 5.77",
+	"M18 18a4 4 0 0 0 2-7.464",
+	"M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517",
+	"M6 18a4 4 0 0 1-2-7.464",
+	"M6.003 5.125a4 4 0 0 0-2.526 5.77",
+)
 
 @Composable
 private fun BrainGlyph(level: String, theme: SspiTheme) {
 	val alpha = brainAlpha(level)
+	val paths = remember { BRAIN_PATHS.map { PathParser().parsePathString(it).toPath() } }
 	Canvas(Modifier.size(20.dp)) {
-		val stroke = Stroke(width = 1.3.dp.toPx(), join = StrokeJoin.Round)
-		val lobe = lobePath(this.size.width)
-		drawPath(lobe, color = theme.dim, style = stroke)
-		if (alpha > 0f) drawPath(lobe, color = theme.accent.copy(alpha = alpha))
-		withTransform({ scale(-1f, 1f, pivot = center) }) {
-			drawPath(lobe, color = theme.dim, style = stroke)
-			if (alpha > 0f) drawPath(lobe, color = theme.accent.copy(alpha = alpha))
+		val stroke = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+		val s = this.size.width / 24f
+		withTransform({ scale(s, s, pivot = Offset.Zero) }) {
+			// dim base strokes = "off"; accent strokes fade in with the level
+			for (p in paths) drawPath(p, color = theme.dim, style = stroke)
+			if (alpha > 0f) for (p in paths) drawPath(p, color = theme.accent.copy(alpha = alpha), style = stroke)
 		}
 	}
 }

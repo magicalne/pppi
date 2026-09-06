@@ -29,23 +29,40 @@ export function formatTokens(n: number | null): string {
 	return `${m >= 10 || m % 1 === 0 ? Math.round(m) : m.toFixed(1)}m`;
 }
 
-// one brain hemisphere; rendered twice (right one mirrored) for the two-lobe glyph
-const LOBE =
-	"M11.4 20.9 C9 20.9 7 19.2 6.6 16.9 A4.8 4.8 0 0 1 4.3 11.7 A4.8 4.8 0 0 1 5.6 5.9 A4.1 4.1 0 0 1 11.4 4.6 Z";
+// Lucide "brain" (ISC license) — stroke paths in the 24-unit viewBox
+const BRAIN_PATHS = [
+	"M12 18V5",
+	"M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4",
+	"M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5",
+	"M17.997 5.125a4 4 0 0 1 2.526 5.77",
+	"M18 18a4 4 0 0 0 2-7.464",
+	"M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517",
+	"M6 18a4 4 0 0 1-2-7.464",
+	"M6.003 5.125a4 4 0 0 0-2.526 5.77",
+];
 
 function BrainIcon({ level }: { level: string }) {
 	const alpha = FILL_ALPHA[level] ?? 0;
+	// dim base strokes = "off"; accent strokes fade in with the level
+	const layer = (stroke: string, opacity: number | undefined, transition: string | undefined) => (
+		<g
+			fill="none"
+			stroke={stroke}
+			strokeWidth={1.5}
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			style={{ strokeOpacity: opacity, transition }}
+		>
+			{BRAIN_PATHS.map((d) => (
+				<path key={d} d={d} />
+			))}
+		</g>
+	);
 	return (
 		<svg viewBox="0 0 24 24" width={19} height={19} aria-hidden focusable="false">
 			<title>thinking effort</title>
-			<g fill="none" stroke="var(--dim)" strokeWidth={1.3} strokeLinejoin="round">
-				<path d={LOBE} />
-				<path d={LOBE} transform="matrix(-1 0 0 1 24 0)" />
-			</g>
-			<g fill="var(--accent)" stroke="none" style={{ fillOpacity: alpha, transition: "fill-opacity 120ms ease" }}>
-				<path d={LOBE} />
-				<path d={LOBE} transform="matrix(-1 0 0 1 24 0)" />
-			</g>
+			{layer("var(--dim)", 1, undefined)}
+			{layer("var(--accent)", alpha, "stroke-opacity 120ms ease")}
 		</svg>
 	);
 }

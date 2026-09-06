@@ -95,13 +95,13 @@ its own) and the model slot shows the target name instead. Context reads
 
 ## 3. Brain icon — brightness = thinking effort
 
-A single brain glyph, `accent` color when lit, `text-dim` when off. Seven
-canonical levels → seven luminance steps. "The light should be lighter as
+A single brain glyph (Lucide's brain icon), `accent` strokes when lit,
+`text-dim` underneath. Seven canonical levels → seven luminance steps. "The light should be lighter as
 the thinking effort [rises]; max = fully lit":
 
-| level | fill | icon state |
+| level | lit strokes | icon state |
 |---|---|---|
-| off | `text-dim` @ 15% | bare outline — "no thinking" |
+| off | accent @ 0% | dim outline only — "no thinking" |
 | minimal | accent @ 25% | faint glow |
 | low | accent @ 40% | |
 | medium | accent @ 55% | |
@@ -109,9 +109,9 @@ the thinking effort [rises]; max = fully lit":
 | xhigh | accent @ 85% | |
 | max | accent @ 100% | fully lit |
 
-Implementation: one SVG path, `fill-opacity` steps on web; Compose
-`Image` with `alpha` (or two-tone vector: outline `text-dim` always +
-fill whose alpha ramps — keeps the glyph legible at low brightness).
+Implementation: the icon's stroke paths drawn twice — a `text-dim` base
+layer (always visible) plus an accent layer whose `stroke-opacity` ramps;
+web uses two `<g>` layers, Android the same paths via `PathParser`.
 Model without `reasoning` → icon pinned to the "off" look; pressing it
 toasts "this model doesn't do thinking" instead of opening the slider.
 
