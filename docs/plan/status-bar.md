@@ -272,3 +272,26 @@ client just keeps the latest).
 - **Brain brightness = fill-opacity steps** on one glyph, not seven distinct icons.
 - **Context format exactly `used/total (used%)`** with k/m abbreviation; danger tint ≥ 85%.
 - **Peers (repo/worktree targets) show no controls** — the gateway has no RPC into pigeon sessions, so model/thinking for peers stays out of scope (say the word if you want `pigeon`-based control later).
+
+---
+
+## As-built deviations
+
+Shipped across `d05d47e` (protocol+server), `71ceb41` (web), `6d66dae`
+(android). Everything else built as designed.
+
+- **Android skips provider group headers** in the model sheet (the web
+  groups when >6 models). Enabled lists are short; a flat sheet matched the
+  platform's sheet idiom better.
+- **Chip lingers 1.2s** after commit (design said ~1s) — enough to read
+  `off · none` comfortably.
+- **`list_models` is requested fresh on every sheet open**; the server
+  answers from the driver's 5-minute cache of pi's `get_available_models`,
+  so pattern edits in pi settings are picked up without re-auth latency.
+- **The enabled-pattern matcher** implements pi's semantics for the listing
+  case (exact `provider/id`, bare `id`, or glob over either, `:level`
+  suffix stripped) — it does not reproduce pi's alias-over-dated-version
+  preference, which only matters when one pattern resolves several models.
+- Web `setPointerCapture` failures are swallowed (synthetic/inactive pointer
+  ids throw); touch pointers capture implicitly, so the gesture is
+  unaffected.

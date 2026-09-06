@@ -221,6 +221,36 @@ long enough) to end.
   `apps/server/src/vad.ts` — the UI renders whatever the state machine says,
   never its own timer.
 
+### 7c. Status bar — context · model · thinking effort
+
+One quiet row under the composer, always visible. It describes the agent
+that will answer: when a repo/worktree peer is targeted, the model and brain
+controls disable and context reads "—".
+
+```
+│  🧠  37.2k/400k (9%)                      Claude Opus 4.8  ›  │
+```
+
+- **Context** in `used/total (used%)` — k/m units, `—` right after
+  compaction, percent turns `danger` at ≥ 85% (auto-compaction handles the
+  rest; the bar only hints).
+- **Brain = thinking effort.** Brightness IS the level: dim outline at
+  `off`, accent fill ramping 25% → 100%, fully lit at `max`. pi's canonical
+  ladder (`off minimal low medium high xhigh max`) drives everything;
+  per-model support comes from the server, unsupported levels never render.
+- **Adjusting is one gesture: press-hold, swipe, release.** The track slides
+  out over the context text; the thumb snaps between the model's supported
+  stops (tick haptic on Android); the brain live-previews the stop under the
+  finger; a chip names the level (with the provider-native value dimmed when
+  it differs, e.g. `off · none`). Release commits. A plain tap commits
+  nothing — a stray tap must not silently wrap `max → off`.
+- **Model name opens the enabled-models sheet** — exactly pi's own list
+  (auth-available ∩ `enabledModels` in pi settings), `name` + dim
+  `provider · context`, current model checked. Picking switches the omni
+  session's model; pi's own validation is the source of truth.
+- Everything reaches the client as one `status` snapshot (protocol v5);
+  clients are dumb mirrors that re-render on each push.
+
 ---
 
 ## 8. Theme system — five schemes, one picker page

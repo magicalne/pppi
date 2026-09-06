@@ -48,7 +48,15 @@ sessions. Read README.md for the full picture.
 - `packages/omni/src/extension.ts` — the omni tools the agent sees.
 - `packages/pi-ext/` — the /omni /pair /profile commands + sspi_profiles tool
   (install: `bun run install:ext` → `~/.pi/agent/extensions/sspi/`).
-- `apps/server/src/agent.ts` — pi RPC driver (framing, events, restart).
+- `apps/server/src/agent.ts` — pi RPC driver (framing, events, restart) plus
+  the status-bar controls: `setModel`/`setThinkingLevel`/`availableModels`,
+  context from `get_session_stats`, `status` events on hello/turn/set.
+- `apps/server/src/server.ts` — broadcast plumbing; the model popup's list =
+  `availableModels` ∩ pi's `enabledModels` (SettingsManager + minimatch,
+  pi's own semantics; tests inject `enabledModelsProvider`).
+- `apps/web/src/status/StatusBar.tsx` + `apps/android/.../StatusBar.kt` —
+  the status bar (context, model sheet, brain slider; brightness = thinking
+  level). Wire shapes live in packages/protocol (v5) and Protocol.kt.
 - `apps/server/src/profiles.ts` — profile palette + explicit/derived profile
   merge (keep the JSON shape in sync with packages/pi-ext/src/store.ts).
 - `apps/server/src/stt.ts` — model resolution: `SSPI_STT_MODEL` →

@@ -72,6 +72,17 @@ without becoming a chat turn. Fenced code is never spoken — the voice says
 - Sessions auto-pause after 10 idle minutes; hold-to-talk stays as the
   fallback whenever the session is off.
 
+### Status bar (context · model · thinking effort)
+
+Under the composer on web and Android: context usage as
+`used/total (used%)`, the current model, and a brain icon whose brightness
+is the thinking effort (dim = off, fully lit = max). Press-hold the brain
+and swipe to change effort; tap the model name to pick from **your pi
+enabled models** — the same list pi's own picker builds from
+`enabledModels` in `~/.pi/agent/settings.json`. Switching model or effort
+goes through the omni session's pi over RPC and is echoed back as one
+`status` snapshot (protocol v5), so every screen updates together.
+
 ## Layout
 
 ```
