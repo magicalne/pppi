@@ -131,7 +131,7 @@ export function StatusBar(props: {
 		if (!sliding) return;
 		const idx = stopFromX(e.clientX);
 		setSliding(false);
-		if (idx !== curIdx) stepTo(idx); // a plain tap commits nothing (anti-footgun)
+		if (e.type !== "pointercancel" && idx !== curIdx) stepTo(idx); // a plain tap commits nothing (anti-footgun)
 	};
 
 	const onBrainKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -183,6 +183,7 @@ export function StatusBar(props: {
 				onPointerDown={onBrainDown}
 				onPointerMove={onBrainMove}
 				onPointerUp={onBrainUp}
+				onPointerCancel={onBrainUp}
 				onKeyDown={onBrainKey}
 			>
 				<BrainIcon level={sliding ? (stops[shownIdx] ?? level) : level} />
