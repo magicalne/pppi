@@ -292,6 +292,11 @@ Shipped across `d05d47e` (protocol+server), `71ceb41` (web), `6d66dae`
   case (exact `provider/id`, bare `id`, or glob over either, `:level`
   suffix stripped) — it does not reproduce pi's alias-over-dated-version
   preference, which only matters when one pattern resolves several models.
+- **Commit follows the last previewed stop, never the raw release point**
+  (bug found by hand-testing: the brain sits left of the track, so a tap's
+  up-x clamps to stop 0 = `off` and would silently commit it; a tap has no
+  moves, so committing `preview` makes it a no-op — matching the Android
+  gesture, which was already correct).
 - Web `setPointerCapture` failures are swallowed (synthetic/inactive pointer
   ids throw); touch pointers capture implicitly, so the gesture is
   unaffected.

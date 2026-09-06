@@ -127,11 +127,17 @@ export function StatusBar(props: {
 		setPreview(stopFromX(e.clientX));
 	};
 
-	const onBrainUp = (e: React.PointerEvent<HTMLDivElement>) => {
+	// commit what the user last saw under their finger — never the raw up
+	// position (the brain sits left of the track, so a tap's x would clamp to
+	// stop 0 = "off"; a tap has no moves, so preview is still curIdx → no-op)
+	const onBrainUp = () => {
 		if (!sliding) return;
-		const idx = stopFromX(e.clientX);
 		setSliding(false);
-		if (e.type !== "pointercancel" && idx !== curIdx) stepTo(idx); // a plain tap commits nothing (anti-footgun)
+		if (preview !== curIdx) stepTo(preview);
+	};
+
+	const onBrainCancel = () => {
+		if (sliding) setSliding(false);
 	};
 
 	const onBrainKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -183,7 +189,7 @@ export function StatusBar(props: {
 				onPointerDown={onBrainDown}
 				onPointerMove={onBrainMove}
 				onPointerUp={onBrainUp}
-				onPointerCancel={onBrainUp}
+				onPointerCancel={onBrainCancel}
 				onKeyDown={onBrainKey}
 			>
 				<BrainIcon level={sliding ? (stops[shownIdx] ?? level) : level} />
