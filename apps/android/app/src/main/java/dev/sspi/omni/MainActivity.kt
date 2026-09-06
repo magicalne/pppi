@@ -554,6 +554,11 @@ fun ChatScreen(
 	var headerPx by remember { mutableIntStateOf(0) }
 	var sessions by remember { mutableStateOf<SessionsResponseDto?>(null) }
 
+	// ---- status bar (protocol v5) ----
+	var agentStatus by remember { mutableStateOf<AgentStatusDto?>(null) }
+	var modelList by remember { mutableStateOf<List<ModelInfoDto>>(emptyList()) }
+	var modelsOpen by remember { mutableStateOf(false) }
+
 	val chunks = remember { mutableListOf<ShortArray>() }
 	val keepRecording = remember { AtomicBoolean(false) }
 	var pendingVoiceId by remember { mutableStateOf<String?>(null) }
@@ -632,6 +637,8 @@ fun ChatScreen(
 					is ServerEvent.AgentNotify -> notice = evt.message
 					is ServerEvent.ErrorEvt -> notice = evt.message
 					is ServerEvent.AgentInfoEvt -> {}
+					is ServerEvent.StatusEvt -> agentStatus = evt.status
+					is ServerEvent.ModelListEvt -> modelList = evt.models
 				}
 			},
 		) { ok -> connected = ok }
@@ -1093,6 +1100,19 @@ fun ChatScreen(
 			}
 			Spacer(Modifier.height(10.dp))
 		}
+
+		// ---- status bar (context · model · thinking effort) ----
+		StatusBarRow(
+			theme = theme,
+			status = agentStatus,
+			active = selected.id == null,
+			targetLabel = selected.label,
+			onSetThinking = { client.setThinkingLevel(it) },
+			onOpenModels = {
+				client.listModels()
+				modelsOpen = true
+			},
+		)
 	}
 
 	// ---- target tree drawer (PRD §4): drops from the presence bar, in front of chat
@@ -1176,6 +1196,20 @@ fun ChatScreen(
 			}
 		}
 		}
+	}
+
+	// ---- model sheet (enabled models from pi settings) ----
+	if (modelsOpen) {
+		ModelSheet(
+			theme = theme,
+			models = modelList,
+			current = agentStatus?.model,
+			onPick = { m ->
+				modelsOpen = false
+				client.setModel(m.provider, m.id)
+			},
+			onDismiss = { modelsOpen = false },
+		)
 	}
 
 	notice?.let { n ->

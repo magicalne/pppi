@@ -5,6 +5,9 @@ interface SspiConnection {
 	fun connect()
 	fun sendChat(text: String, target: String? = null)
 	fun abort()
+	fun setModel(provider: String, modelId: String)
+	fun setThinkingLevel(level: String)
+	fun listModels()
 	fun uploadVoice(wav: ByteArray, onDone: (Boolean, String) -> Unit)
 	fun close()
 }

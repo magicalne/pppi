@@ -55,6 +55,16 @@ sealed class ServerEvent {
 	@Serializable
 	@SerialName("error")
 	data class ErrorEvt(val message: String, val target: String? = null) : ServerEvent()
+
+	// ---- status bar (protocol v5) ----
+
+	@Serializable
+	@SerialName("status")
+	data class StatusEvt(val status: AgentStatusDto) : ServerEvent()
+
+	@Serializable
+	@SerialName("model_list")
+	data class ModelListEvt(val models: List<ModelInfoDto> = emptyList()) : ServerEvent()
 }
 
 @Serializable
@@ -90,7 +100,49 @@ sealed class ClientMessage {
 	@Serializable
 	@SerialName("abort")
 	class Abort : ClientMessage()
+
+	@Serializable
+	@SerialName("set_model")
+	data class SetModel(val provider: String, val modelId: String) : ClientMessage()
+
+	@Serializable
+	@SerialName("set_thinking_level")
+	data class SetThinkingLevel(val level: String) : ClientMessage()
+
+	@Serializable
+	@SerialName("list_models")
+	class ListModels : ClientMessage()
 }
+
+// ---- status bar (mirrors packages/protocol v5) ----
+
+/** A model the omni pi session can run, as pi reports it. */
+@Serializable
+data class ModelInfoDto(
+	val provider: String,
+	val id: String,
+	val name: String,
+	val reasoning: Boolean = false,
+	val contextWindow: Long = 0,
+	/** pi canonical level → provider-native value; null marks a level unsupported for this model */
+	val thinkingLevelMap: Map<String, String?> = emptyMap(),
+)
+
+@Serializable
+data class ContextInfoDto(
+	val tokens: Long? = null,
+	val contextWindow: Long = 0,
+	val percent: Double? = null,
+)
+
+/** Full status-bar snapshot: everything the bar renders, so clients are dumb mirrors. */
+@Serializable
+data class AgentStatusDto(
+	val model: ModelInfoDto? = null,
+	val thinkingLevel: String = "off",
+	val thinkingLevels: List<String> = emptyList(),
+	val context: ContextInfoDto? = null,
+)
 
 // ---- GET /api/sessions (mirrors packages/protocol) ----
 
