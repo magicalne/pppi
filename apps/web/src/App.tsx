@@ -1,5 +1,6 @@
-import type { AgentState, ChatEntry, ServerEvent, SessionsResponse } from "@sspi/protocol";
+import type { AgentState, AgentStatus, ChatEntry, ModelInfo, ServerEvent, SessionsResponse } from "@sspi/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { StatusBar } from "./status/StatusBar.tsx";
 import { THEMES, type ThemeId, applyTheme, loadTheme } from "./theme.ts";
 import { useVoice } from "./voice/useVoice.ts";
 
@@ -93,6 +94,8 @@ export default function App() {
 	const [toolLabel, setToolLabel] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
 	const [target, setTarget] = useState<Target>(OMNI);
+	const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
+	const [modelList, setModelList] = useState<ModelInfo[]>([]);
 	const [drawerOpen, setDrawerOpen] = useState(false);
 	const [connOpen, setConnOpen] = useState(false);
 	const [sessions, setSessions] = useState<SessionsResponse | null>(null);
@@ -263,6 +266,12 @@ export default function App() {
 				break;
 			case "agent_notify":
 				showNotice(evt.message);
+				break;
+			case "status":
+				setAgentStatus(evt.status);
+				break;
+			case "model_list":
+				setModelList(evt.models);
 				break;
 			case "error":
 				showNotice(evt.message);
@@ -549,6 +558,15 @@ export default function App() {
 					)}
 				</div>
 			</div>
+
+			<StatusBar
+				status={agentStatus}
+				models={modelList}
+				active={!target.id}
+				targetLabel={targetName}
+				send={(msg) => wsRef.current?.send(JSON.stringify(msg))}
+				notify={showNotice}
+			/>
 		</div>
 	);
 }
