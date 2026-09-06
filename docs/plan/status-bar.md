@@ -112,6 +112,11 @@ the thinking effort [rises]; max = fully lit":
 Implementation: the icon's stroke paths drawn twice — a `text-dim` base
 layer (always visible) plus an accent layer whose `stroke-opacity` ramps;
 web uses two `<g>` layers, Android the same paths via `PathParser`.
+On top sits a soft **aura** that makes it read as light, not just color: a
+blurred bloom of the accent strokes (drop-shadow on web, a blurred copy on
+Android) plus a radial halo behind the glyph — both scale with the same
+level table, so there is zero glow at `off` and a full warm halo at `max`.
+During a swipe the aura live-previews the stop under the finger.
 Model without `reasoning` → icon pinned to the "off" look; pressing it
 toasts "this model doesn't do thinking" instead of opening the slider.
 

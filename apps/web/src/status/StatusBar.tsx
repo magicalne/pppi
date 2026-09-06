@@ -43,15 +43,22 @@ const BRAIN_PATHS = [
 
 function BrainIcon({ level }: { level: string }) {
 	const alpha = FILL_ALPHA[level] ?? 0;
-	// dim base strokes = "off"; accent strokes fade in with the level
-	const layer = (stroke: string, opacity: number | undefined, transition: string | undefined) => (
+	// dim base strokes = "off"; accent strokes fade in with the level and
+	// carry a drop-shadow bloom — the shadow mask inherits the stroke alpha,
+	// so the glow scales with the level for free (no light at "off")
+	const layer = (
+		stroke: string,
+		opacity: number | undefined,
+		transition: string | undefined,
+		extra?: React.CSSProperties,
+	) => (
 		<g
 			fill="none"
 			stroke={stroke}
 			strokeWidth={1.5}
 			strokeLinecap="round"
 			strokeLinejoin="round"
-			style={{ strokeOpacity: opacity, transition }}
+			style={{ strokeOpacity: opacity, transition, ...extra }}
 		>
 			{BRAIN_PATHS.map((d) => (
 				<path key={d} d={d} />
@@ -59,10 +66,12 @@ function BrainIcon({ level }: { level: string }) {
 		</g>
 	);
 	return (
-		<svg viewBox="0 0 24 24" width={19} height={19} aria-hidden focusable="false">
+		<svg viewBox="0 0 24 24" width={19} height={19} aria-hidden focusable="false" style={{ overflow: "visible" }}>
 			<title>thinking effort</title>
 			{layer("var(--dim)", 1, undefined)}
-			{layer("var(--accent)", alpha, "stroke-opacity 120ms ease")}
+			{layer("var(--accent)", alpha, "stroke-opacity 120ms ease", {
+				filter: alpha > 0 ? "drop-shadow(0 0 2px var(--accent)) drop-shadow(0 0 6px var(--accent))" : undefined,
+			})}
 		</svg>
 	);
 }
@@ -190,6 +199,7 @@ export function StatusBar(props: {
 	const shownIdx = sliding ? preview : curIdx;
 	const frac = stops.length > 1 ? shownIdx / (stops.length - 1) : 0;
 	const chipShown = sliding ? chipText(stops[shownIdx] ?? level) : linger;
+	const aura = FILL_ALPHA[stops[shownIdx] ?? level] ?? 0;
 
 	return (
 		<div className="status-bar">
@@ -203,6 +213,7 @@ export function StatusBar(props: {
 				aria-valuetext={stops[shownIdx] ?? level}
 				aria-disabled={brainDisabled || undefined}
 				className={`brain ${brainDisabled ? "off" : ""}`}
+				style={{ "--aura": aura } as React.CSSProperties}
 				onPointerDown={onBrainDown}
 				onPointerMove={onBrainMove}
 				onPointerUp={onBrainUp}

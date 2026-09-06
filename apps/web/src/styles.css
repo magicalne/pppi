@@ -959,3 +959,16 @@
 	color: var(--dim);
 	margin: 10px 4px 2px;
 }
+
+/* brain aura — the halo reads as ambient light; intensity rides the --aura
+   custom property (0 at off → 1 at max), set from the same level table */
+.status-bar .brain::before {
+	content: "";
+	position: absolute;
+	inset: -7px;
+	border-radius: 50%;
+	background: radial-gradient(circle, color-mix(in srgb, var(--accent) 65%, transparent) 0%, transparent 68%);
+	opacity: calc(var(--aura, 0) * 0.65);
+	transition: opacity 120ms ease;
+	pointer-events: none;
+}

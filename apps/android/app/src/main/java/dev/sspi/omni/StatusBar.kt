@@ -36,6 +36,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -80,13 +83,36 @@ private val BRAIN_PATHS = listOf(
 private fun BrainGlyph(level: String, theme: SspiTheme) {
 	val alpha = brainAlpha(level)
 	val paths = remember { BRAIN_PATHS.map { PathParser().parsePathString(it).toPath() } }
-	Canvas(Modifier.size(20.dp)) {
-		val stroke = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-		val s = this.size.width / 24f
-		withTransform({ scale(s, s, pivot = Offset.Zero) }) {
-			// dim base strokes = "off"; accent strokes fade in with the level
-			for (p in paths) drawPath(p, color = theme.dim, style = stroke)
-			if (alpha > 0f) for (p in paths) drawPath(p, color = theme.accent.copy(alpha = alpha), style = stroke)
+	Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+		if (alpha > 0f) {
+			// ambient halo — a soft accent disc behind the glyph
+			Canvas(Modifier.size(34.dp)) {
+				drawCircle(
+					brush = Brush.radialGradient(
+						colors = listOf(theme.accent.copy(alpha = 0.45f * alpha), Color.Transparent),
+						center = center,
+						radius = this.size.minDimension / 2f,
+					),
+					radius = this.size.minDimension / 2f,
+					center = center,
+				)
+			}
+			// bloom — the accent strokes, blurred; intensity rides the level
+			Canvas(Modifier.size(20.dp).blur((alpha * 4).dp)) {
+				val stroke = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+				val s = this.size.width / 24f
+				withTransform({ scale(s, s, pivot = Offset.Zero) }) {
+					for (p in paths) drawPath(p, color = theme.accent.copy(alpha = alpha), style = stroke)
+				}
+			}
+		}
+		Canvas(Modifier.size(20.dp)) {
+			val stroke = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+			val s = this.size.width / 24f
+			withTransform({ scale(s, s, pivot = Offset.Zero) }) {
+				for (p in paths) drawPath(p, color = theme.dim, style = stroke)
+				if (alpha > 0f) for (p in paths) drawPath(p, color = theme.accent.copy(alpha = alpha), style = stroke)
+			}
 		}
 	}
 }
