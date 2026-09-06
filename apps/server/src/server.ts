@@ -7,13 +7,24 @@
 
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
 import { type PigeonSession, listSessions, pigeon } from "@sspi/omni/pigeon";
 import { loadRegistry } from "@sspi/omni/repos";
-import type { PeerSession, SessionsResponse, Target } from "@sspi/protocol";
-import type { ChatEntry, ClientMessage, PairInfo, ServerEvent } from "@sspi/protocol";
+import type {
+	AgentInfo,
+	ChatEntry,
+	ClientMessage,
+	ModelInfo,
+	PairInfo,
+	PeerSession,
+	ServerEvent,
+	SessionsResponse,
+	Target,
+} from "@sspi/protocol";
 import fastify, { type FastifyInstance } from "fastify";
+import { minimatch } from "minimatch";
 import type { WebSocket } from "ws";
 import type { RpcAgentDriver } from "./agent.ts";
 import { tokensMatch } from "./config.ts";
@@ -40,9 +51,42 @@ export type ServerOptions = {
 	vad?: SileroVad;
 	/** Turn-taking timings override (tests); defaults are the tuned plan values. */
 	voiceTimings?: Partial<VadTimings>;
+	/** Enabled-model patterns override (tests); default reads pi's settings (global + project). */
+	enabledModelsProvider?: () => string[] | undefined;
 };
 
 type AuthedSocket = WebSocket & { authed?: boolean };
+
+// pi's canonical thinking ladder (pi-agent-core ThinkingLevel) — pattern
+// suffixes like "openai/gpt-5.2:high" are stripped before matching.
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+function stripLevelSuffix(pattern: string): string {
+	const idx = pattern.lastIndexOf(":");
+	if (idx === -1) return pattern;
+	return THINKING_LEVELS.includes(pattern.slice(idx + 1)) ? pattern.slice(0, idx) : pattern;
+}
+
+/** pi's enabledModels semantics: exact `provider/id` or bare `id`, or a glob over either. */
+function matchesEnabledPattern(model: ModelInfo, rawPattern: string): boolean {
+	const pattern = stripLevelSuffix(rawPattern.trim()).toLowerCase();
+	if (!pattern) return false;
+	const full = `${model.provider}/${model.id}`.toLowerCase();
+	if (/[*?[]/.test(pattern)) {
+		return minimatch(full, pattern, { nocase: true }) || minimatch(model.id, pattern, { nocase: true });
+	}
+	return full === pattern || model.id.toLowerCase() === pattern;
+}
+
+/** Read enabledModels from pi's settings the same way pi's own model picker does. */
+function enabledPatternsFromPi(cwd: string): string[] | undefined {
+	try {
+		const patterns = SettingsManager.create(cwd).getEnabledModels();
+		return Array.isArray(patterns) && patterns.length > 0 ? patterns.filter((p) => typeof p === "string") : undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 async function classify(omniSessionId: string, registryDir?: string): Promise<SessionsResponse> {
 	const empty: SessionsResponse = { omniSessionId, projects: [], others: [], profiles: {} };
@@ -128,7 +172,20 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 	const speakAssistant = (fn: (s: VoiceSession) => void): void => {
 		for (const s of voiceSessions) fn(s);
 	};
+	// the wire AgentInfo keeps `model` as a display string; full model facts
+	// travel in `status` (below)
+	const agentInfo = (): AgentInfo => {
+		const info = opts.driver.info;
+		return {
+			model: info.model ? `${info.model.provider}/${info.model.id}` : null,
+			sessionName: info.sessionName,
+			sessionId: info.sessionId,
+			state: opts.driver.state,
+		};
+	};
+
 	opts.driver.on("state", (state, toolName) => broadcast({ type: "agent_state", state, toolName }));
+	opts.driver.on("status", (status) => broadcast({ type: "status", status }));
 	opts.driver.on("assistant-delta", (id, delta) => {
 		broadcast({ type: "assistant_delta", id, delta });
 		speakAssistant((s) => s.assistantDelta(id, delta));
@@ -140,12 +197,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 	opts.driver.on("tool", (toolName, phase, label) => broadcast({ type: "tool_event", toolName, phase, label }));
 	opts.driver.on("notify", (level, message) => broadcast({ type: "agent_notify", level, message }));
 	opts.driver.on("error", (message) => broadcast({ type: "error", message }));
-	opts.driver.on("info", (info) =>
-		broadcast({
-			type: "agent_info",
-			agent: { ...info, state: opts.driver.state },
-		}),
-	);
+	opts.driver.on("info", () => broadcast({ type: "agent_info", agent: agentInfo() }));
 
 	// Poll the omni session's pigeon mailbox: whenever a delegated peer answers,
 	// surface the reply into the omni conversation with the peer's profileId so
@@ -194,6 +246,16 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		return { id };
 	}
 
+	/** Available models filtered by pi's enabledModels settings — the model popup's list. */
+	async function listModels(): Promise<void> {
+		const models = await opts.driver.availableModels();
+		const patterns = opts.enabledModelsProvider ? opts.enabledModelsProvider() : enabledPatternsFromPi(opts.driver.cwd);
+		const filtered = patterns?.length
+			? models.filter((m) => patterns.some((p) => matchesEnabledPattern(m, p)))
+			: models;
+		broadcast({ type: "model_list", models: filtered });
+	}
+
 	// ---------------------------------------------------------------- rest
 
 	app.addContentTypeParser(/^audio\//, { parseAs: "buffer" }, (_req, body, done) => done(null, body));
@@ -204,7 +266,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		return {
 			ok: true,
 			name: "sspi",
-			agent: { ...opts.driver.info, state: opts.driver.state },
+			agent: agentInfo(),
 			stt: status.ready ? { ready: true, modelId: status.modelId } : { ready: false, reason: status.reason },
 		};
 	});
@@ -298,7 +360,9 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 				} catch {
 					// keep empty history rather than failing the handshake
 				}
-				send(socket, { type: "hello_ok", agent: { ...opts.driver.info, state: opts.driver.state }, history });
+				send(socket, { type: "hello_ok", agent: agentInfo(), history });
+				// status-bar snapshot for this client (fresh ones arrive via broadcast)
+				send(socket, { type: "status", status: opts.driver.status });
 				return;
 			}
 			if (msg.type === "chat") {
@@ -310,6 +374,16 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 				}
 			} else if (msg.type === "abort") {
 				opts.driver.abort();
+			} else if (msg.type === "set_model") {
+				opts.driver
+					.setModel(String(msg.provider ?? ""), String(msg.modelId ?? ""))
+					.catch((err) => send(socket, { type: "error", message: String(err.message ?? err) }));
+			} else if (msg.type === "set_thinking_level") {
+				opts.driver
+					.setThinkingLevel(String(msg.level ?? ""))
+					.catch((err) => send(socket, { type: "error", message: String(err.message ?? err) }));
+			} else if (msg.type === "list_models") {
+				listModels().catch((err) => send(socket, { type: "error", message: String(err.message ?? err) }));
 			}
 		});
 

@@ -8,11 +8,16 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import type { AgentStatus, ContextInfo, ModelInfo } from "@sspi/protocol";
 
 export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming";
 
 export type AgentSnapshot = {
-	model: string | null;
+	model: ModelInfo | null;
+	/** pi canonical level of the current model: "off"…"max" */
+	thinkingLevel: string;
+	/** levels the current model supports (canonical order); empty until first refresh */
+	thinkingLevels: string[];
 	sessionName?: string;
 	sessionId?: string;
 };
@@ -33,6 +38,7 @@ type RpcEvent = { type: string } & Record<string, any>;
 export type DriverEvents = {
 	info: (info: AgentSnapshot) => void;
 	state: (state: AgentState) => void;
+	status: (status: AgentStatus) => void;
 	"assistant-delta": (id: string, delta: string) => void;
 	"assistant-final": (id: string, text: string) => void;
 	tool: (toolName: string, phase: "start" | "end", label?: string) => void;
@@ -40,6 +46,28 @@ export type DriverEvents = {
 	error: (message: string) => void;
 	ready: () => void;
 };
+
+/** Map pi's Model (pi-ai) to the wire ModelInfo; tolerant of partial data (mock/tests). */
+function toModelInfo(m: any): ModelInfo | null {
+	if (!m || typeof m !== "object" || !m.provider || !m.id) return null;
+	return {
+		provider: String(m.provider),
+		id: String(m.id),
+		name: String(m.name ?? `${m.provider}/${m.id}`),
+		reasoning: m.reasoning === true,
+		contextWindow: Number(m.contextWindow ?? 0) || 0,
+		thinkingLevelMap: m.thinkingLevelMap && typeof m.thinkingLevelMap === "object" ? { ...m.thinkingLevelMap } : {},
+	};
+}
+
+function toContextInfo(cu: any): ContextInfo | null {
+	if (!cu || typeof cu !== "object") return null;
+	return {
+		tokens: typeof cu.tokens === "number" ? cu.tokens : null,
+		contextWindow: Number(cu.contextWindow ?? 0) || 0,
+		percent: typeof cu.percent === "number" ? cu.percent : null,
+	};
+}
 
 /** One-line "verb + object" status copy for a tool call (PRD §5). */
 export function toolLabel(toolName: string, args: any): string {
@@ -80,7 +108,9 @@ export class RpcAgentDriver extends EventEmitter {
 	private assistantText = "";
 	private restartDelay = 1_000;
 	private _state: AgentState = "starting";
-	private snapshot: AgentSnapshot = { model: null };
+	private snapshot: AgentSnapshot = { model: null, thinkingLevel: "off", thinkingLevels: [] };
+	private context: ContextInfo | null = null;
+	private modelsCache: { at: number; models: ModelInfo[] } | null = null;
 
 	readonly command: string[];
 	readonly cwd: string;
@@ -97,6 +127,16 @@ export class RpcAgentDriver extends EventEmitter {
 
 	get info(): AgentSnapshot {
 		return this.snapshot;
+	}
+
+	/** Last known status-bar snapshot; safest read is the `status` event. */
+	get status(): AgentStatus {
+		return {
+			model: this.snapshot.model,
+			thinkingLevel: this.snapshot.thinkingLevel,
+			thinkingLevels: this.snapshot.thinkingLevels,
+			context: this.context,
+		};
 	}
 
 	start(): void {
@@ -125,19 +165,23 @@ export class RpcAgentDriver extends EventEmitter {
 		});
 
 		this.request("get_state", 15_000)
-			.then((res) => {
-				if (res.success) {
-					const d = res.data ?? {};
-					this.snapshot = {
-						model: d.model ? `${d.model.provider ?? "?"}/${d.model.id ?? "?"}` : null,
-						sessionName: d.sessionName,
-						sessionId: d.sessionId,
-					};
-					this.emit("info", this.snapshot);
-					this.setState(d.isStreaming ? "streaming" : "idle");
-					this.restartDelay = 1_000;
-					this.emit("ready");
-				}
+			.then(async (res) => {
+				if (!res.success) return;
+				const d = res.data ?? {};
+				this.snapshot = {
+					model: toModelInfo(d.model),
+					thinkingLevel: typeof d.thinkingLevel === "string" ? d.thinkingLevel : "off",
+					thinkingLevels: [],
+					sessionName: d.sessionName,
+					sessionId: d.sessionId,
+				};
+				await this.refreshLevels().catch(() => {});
+				await this.refreshStats().catch(() => {});
+				this.emit("info", this.snapshot);
+				this.emitStatus();
+				this.setState(d.isStreaming ? "streaming" : "idle");
+				this.restartDelay = 1_000;
+				this.emit("ready");
 			})
 			.catch((err) => this.emit("error", `get_state failed: ${err.message}`));
 	}
@@ -213,6 +257,10 @@ export class RpcAgentDriver extends EventEmitter {
 			case "agent_settled":
 				this.isStreaming = false;
 				this.setState("idle");
+				// context usage changed (the assistant just answered) — refresh the bar
+				void this.refreshStats()
+					.then(() => this.emitStatus())
+					.catch(() => {});
 				break;
 			case "tool_execution_start":
 				this.setState("tool", ev.toolName);
@@ -271,6 +319,77 @@ export class RpcAgentDriver extends EventEmitter {
 
 	async abort(): Promise<void> {
 		this.write({ type: "abort" });
+	}
+
+	// ------------------------------------------------------------- status bar
+
+	private emitStatus(): void {
+		this.emit("status", this.status);
+	}
+
+	private applyState(d: any): void {
+		this.snapshot = {
+			model: toModelInfo(d.model),
+			thinkingLevel: typeof d.thinkingLevel === "string" ? d.thinkingLevel : "off",
+			thinkingLevels: this.snapshot.thinkingLevels,
+			sessionName: d.sessionName,
+			sessionId: d.sessionId,
+		};
+	}
+
+	private async refreshState(): Promise<void> {
+		const res = await this.request("get_state", 15_000);
+		if (res.success) this.applyState(res.data ?? {});
+	}
+
+	private async refreshLevels(): Promise<void> {
+		const res = await this.request("get_available_thinking_levels", 15_000);
+		if (res.success && Array.isArray(res.data?.levels)) {
+			this.snapshot.thinkingLevels = res.data.levels.filter((l: unknown): l is string => typeof l === "string");
+		}
+	}
+
+	private async refreshStats(): Promise<void> {
+		const res = await this.request("get_session_stats", 15_000);
+		if (res.success) this.context = toContextInfo(res.data?.contextUsage);
+	}
+
+	/** Re-read everything the status bar shows; individual misses keep prior values. */
+	private async refreshStatus(): Promise<void> {
+		await Promise.all([
+			this.refreshState().catch(() => {}),
+			this.refreshLevels().catch(() => {}),
+			this.refreshStats().catch(() => {}),
+		]);
+	}
+
+	/** Switch the omni session's model (pi validates against available models). */
+	async setModel(provider: string, modelId: string): Promise<void> {
+		const res = await this.request("set_model", 30_000, { provider, modelId });
+		if (!res.success) throw new Error(res.error ?? "set_model failed");
+		await this.refreshStatus();
+		this.emit("info", this.snapshot);
+		this.emitStatus();
+	}
+
+	/** Set thinking effort (pi clamps to what the model supports; we mirror the clamped value). */
+	async setThinkingLevel(level: string): Promise<void> {
+		const res = await this.request("set_thinking_level", 15_000, { level });
+		if (!res.success) throw new Error(res.error ?? "set_thinking_level failed");
+		await this.refreshState().catch(() => {});
+		this.emitStatus();
+	}
+
+	/** Models pi can run (auth-configured providers), cached — the enabled filter lives in server.ts. */
+	async availableModels(): Promise<ModelInfo[]> {
+		if (this.modelsCache && Date.now() - this.modelsCache.at < 5 * 60_000) return this.modelsCache.models;
+		const res = await this.request("get_available_models", 30_000);
+		if (!res.success) throw new Error(res.error ?? "get_available_models failed");
+		const models = (Array.isArray(res.data?.models) ? res.data.models : [])
+			.map(toModelInfo)
+			.filter((m: ModelInfo | null): m is ModelInfo => m !== null);
+		this.modelsCache = { at: Date.now(), models };
+		return models;
 	}
 
 	async history(): Promise<HistoryEntry[]> {

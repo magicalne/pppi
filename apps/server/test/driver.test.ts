@@ -26,8 +26,52 @@ describe("rpc agent driver", () => {
 			});
 			driver.start();
 		});
-		expect(info.model).toBe("mock/mock-1");
+		expect(info.model).toMatchObject({ provider: "mock", id: "mock-1" });
 		expect(info.sessionName).toBe("omni");
+	});
+
+	it("broadcasts a status snapshot with model, levels and context", async () => {
+		const status = await new Promise<any>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error("no status")), 10_000);
+			driver.on("status", (s) => {
+				clearTimeout(timer);
+				resolve(s);
+			});
+			driver.start();
+		});
+		expect(status.model).toMatchObject({ provider: "mock", id: "mock-1", reasoning: true, contextWindow: 100_000 });
+		expect(status.thinkingLevel).toBe("low");
+		expect(status.thinkingLevels).toEqual(["off", "low", "medium", "high"]);
+		expect(status.context).toMatchObject({ contextWindow: 100_000 });
+		expect(status.context.tokens).toBeGreaterThan(0);
+	});
+
+	it("set_thinking_level echoes the clamped level", async () => {
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		await driver.setThinkingLevel("max"); // mock supports up to high
+		expect(driver.status.thinkingLevel).toBe("high");
+	});
+
+	it("set_model switches model and its supported levels", async () => {
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		await driver.setModel("other", "other-1");
+		expect(driver.status.model).toMatchObject({ provider: "other", id: "other-1" });
+		// other-1's map omits minimal → pi's default marks it supported
+		expect(driver.status.thinkingLevels).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+		await expect(driver.setModel("mock", "nope")).rejects.toThrow(/Model not found/);
+	});
+
+	it("refreshes context usage after each settled turn", async () => {
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		const before = driver.status.context?.tokens ?? 0;
+		const settled = new Promise<void>((r) => driver.on("status", () => r()));
+		await driver.prompt("hello");
+		await new Promise<void>((r) => driver.once("assistant-final", r));
+		await settled;
+		expect(driver.status.context?.tokens ?? 0).toBeGreaterThan(before);
 	});
 
 	it("streams deltas and a final assistant message", async () => {

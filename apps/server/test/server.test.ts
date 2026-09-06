@@ -120,6 +120,105 @@ describe("gateway server", () => {
 		// STT is disabled in this suite → 503 before 422; assert the auth+pipeline path
 		expect([422, 503]).toContain(res.statusCode);
 	});
+
+	it("pushes a status snapshot right after hello", async () => {
+		const ws = await connect(token);
+		const status = nextEvent(ws, "status");
+		await nextEvent(ws, "hello_ok");
+		const evt = await status;
+		expect(evt.status.model).toMatchObject({ provider: "mock", id: "mock-1", reasoning: true });
+		expect(evt.status.thinkingLevels).toEqual(["off", "low", "medium", "high"]);
+		expect(evt.status.context).toMatchObject({ contextWindow: 100_000 });
+		ws.close();
+	});
+
+	it("echoes a status snapshot after set_thinking_level", async () => {
+		const ws = await connect(token);
+		// hello_ok and the status push can land in the same TCP segment —
+		// attach the collector before the handshake resolves
+		const push = nextEvent(ws, "status");
+		await nextEvent(ws, "hello_ok");
+		await push;
+		ws.send(JSON.stringify({ type: "set_thinking_level", level: "high" }));
+		const evt = await nextEvent(ws, "status");
+		expect(evt.status.thinkingLevel).toBe("high");
+		ws.close();
+	});
+});
+
+describe("model list (enabled patterns)", () => {
+	const token = "models-test-token";
+	const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "mock-agent.mjs");
+
+	function connect(address: string, tokenValue: string): Promise<WebSocket> {
+		return new Promise((resolve, reject) => {
+			const ws = new WebSocket(address);
+			ws.on("open", () => {
+				ws.send(JSON.stringify({ type: "hello", token: tokenValue, client: "test" }));
+				resolve(ws);
+			});
+			ws.on("error", reject);
+		});
+	}
+
+	function nextEvent(ws: WebSocket, type: string): Promise<any> {
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error(`no ${type} within 10s`)), 10_000);
+			ws.on("message", (raw) => {
+				const evt = JSON.parse(raw.toString());
+				if (evt.type === type) {
+					clearTimeout(timer);
+					resolve(evt);
+				}
+			});
+		});
+	}
+
+	it("filters available models by enabled patterns before broadcasting model_list", async () => {
+		process.env.MOCK_REPLY = "ack from omni";
+		const driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
+		const patterns: string[] = ["mock/mock-1"];
+		const app = await createServer({
+			token,
+			driver,
+			stt: Stt.create({ disabled: true }),
+			enabledModelsProvider: () => patterns,
+		});
+		await app.listen({ port: 0, host: "127.0.0.1" });
+		const addr = app.server.address();
+		const port = typeof addr === "object" && addr?.port ? addr.port : 0;
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+
+		const ws = await connect(`ws://127.0.0.1:${port}/ws`, token);
+		await nextEvent(ws, "hello_ok");
+
+		ws.send(JSON.stringify({ type: "list_models" }));
+		let evt = await nextEvent(ws, "model_list");
+		expect(evt.models.map((m: any) => m.id)).toEqual(["mock-1"]);
+
+		patterns.splice(0, patterns.length, "other/*");
+		ws.send(JSON.stringify({ type: "list_models" }));
+		evt = await nextEvent(ws, "model_list");
+		expect(evt.models.map((m: any) => m.id)).toEqual(["other-1"]);
+		expect(evt.models[0].thinkingLevelMap).toMatchObject({ max: "max" });
+
+		patterns.splice(0, patterns.length);
+		ws.send(JSON.stringify({ type: "list_models" }));
+		evt = await nextEvent(ws, "model_list");
+		expect(evt.models.map((m: any) => m.id)).toEqual(["mock-1", "mock-2", "other-1"]);
+
+		// model switch via the same socket: status reflects the new model
+		ws.send(JSON.stringify({ type: "set_model", provider: "other", modelId: "other-1" }));
+		evt = await nextEvent(ws, "status");
+		expect(evt.status.model).toMatchObject({ provider: "other", id: "other-1" });
+		// other-1's map omits minimal → supported by default (pi semantics)
+		expect(evt.status.thinkingLevels).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+		ws.close();
+		driver.dispose();
+		await app.close();
+	});
 });
 
 describe("pairing + profiles api", () => {

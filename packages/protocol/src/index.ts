@@ -5,6 +5,8 @@
 //     profileId, and machine pairing info (multi-machine connections).
 // v4: interactive voice mode (ws /voice) — hands-free conversation with
 //     streaming STT partials, spoken replies (local TTS) and barge-in.
+// v5: status bar — context usage, current model, thinking effort; clients can
+//     switch model / thinking level and list the enabled models (pi settings).
 
 export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming";
 
@@ -39,6 +41,36 @@ export type AgentInfo = {
 	state: AgentState;
 };
 
+/** A model the omni pi session can run, as pi reports it. */
+export type ModelInfo = {
+	provider: string;
+	id: string;
+	/** display name, e.g. "Claude Opus 4.8" */
+	name: string;
+	/** false → thinking is not supported at all (brain pinned dim) */
+	reasoning: boolean;
+	contextWindow: number;
+	/** pi's canonical level → provider-native value; null marks a level unsupported for this model */
+	thinkingLevelMap: Record<string, string | null>;
+};
+
+/** Context usage of the omni session. `tokens`/`percent` are null briefly after compaction. */
+export type ContextInfo = {
+	tokens: number | null;
+	contextWindow: number;
+	percent: number | null;
+};
+
+/** Full status-bar snapshot: everything the bar renders, so clients are dumb mirrors. */
+export type AgentStatus = {
+	model: ModelInfo | null;
+	/** pi canonical level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" */
+	thinkingLevel: string;
+	/** levels the current model supports, canonical order — the slider's stops */
+	thinkingLevels: string[];
+	context: ContextInfo | null;
+};
+
 export type ChatEntry = {
 	id: string;
 	role: "user" | "assistant";
@@ -55,7 +87,10 @@ export type ChatEntry = {
 export type ClientMessage =
 	| { type: "hello"; token: string; client: "web" | "android" | "test" }
 	| { type: "chat"; text: string; source?: MessageSource; target?: Target }
-	| { type: "abort"; target?: Target };
+	| { type: "abort"; target?: Target }
+	| { type: "set_model"; provider: string; modelId: string }
+	| { type: "set_thinking_level"; level: string }
+	| { type: "list_models" };
 
 // ---------------------------------------------------------------- server → client
 
@@ -72,7 +107,10 @@ export type ServerEvent =
 	| { type: "agent_notify"; level: "info" | "warning" | "error"; message: string }
 	| { type: "error"; message: string; target?: Target }
 	// interactive voice mode is (no longer) live on this gateway
-	| { type: "voice_active"; active: boolean };
+	| { type: "voice_active"; active: boolean }
+	// status bar (v5)
+	| { type: "status"; status: AgentStatus }
+	| { type: "model_list"; models: ModelInfo[] };
 
 // ---------------------------------------------------------------- interactive voice (ws /voice)
 
