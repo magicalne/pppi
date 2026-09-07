@@ -89,10 +89,12 @@ goes through the omni session's pi over RPC and is echoed back as one
 pppi/
 ├── extensions/omni.ts       # what pi loads (-e) — the omni extension entry
 ├── packages/
+│   ├── gateway/             # gateway core: wire transport, voice stack, pi rpc driver
 │   ├── omni/                # omni core: repo registry, worktrees, pigeon bridge, pi tools
+│   ├── pi-ext/              # pi extension: /omni /pair /profile — /omni boots the gateway
 │   └── protocol/            # shared wire protocol (server ⇄ clients)
 ├── apps/
-│   ├── server/              # gateway: single omni session (pi --mode rpc), local STT, pairing
+│   ├── server/              # standalone gateway host (headless/daemon cli)
 │   ├── web/                 # single-session voice UI (React/Vite)
 │   └── android/             # hold-to-talk app (Kotlin/Compose)
 └── docs/                    # architecture notes
@@ -110,18 +112,25 @@ ln -s ~/Workspace/opensource/pigeon/bin/pigeon ~/.local/bin/pigeon
 bun install
 bun run build:web
 
-# 2. start the gateway (spawns the headless omni session)
-bun run dev:server -- --host 0.0.0.0
-#    → prints the LAN URL and the pairing token (stored in ~/.pppi/config.json)
+# 2. install the pi extension (also ships the gateway runtime for /omni)
+bun run install:ext
 
-# 3. talk to it
+# 3a. start the gateway from any pi session — type /omni in pi
+#    → prints the LAN URL + QR; clients pair while that session lives
+#    (or run the standalone host: bun run dev:server -- --host 0.0.0.0)
+#    → both read the same ~/.pppi/config.json token, so clients stay paired
+
+# 3b. or make THIS pi session the omni itself (/omni here)
+#    → no child session; the terminal and clients mirror one conversation
+
+# 4. talk to it
 #    web:   open http://<mac>:8787 on any device, paste the token once
 #           (or open the printed pair link — it ends in /?pair=<token>)
 #    phone: install apps/android APK, tap ☰ → Scan QR on the /pair QR,
 #           or paste the pair link
-#    terminal: pi -e $PWD/extensions/omni.ts   (interactive omni session)
+#    terminal: the /omni here session IS a terminal screen
 
-# 4. teach the omni agent about your repos (say: "register ~/Workspace/opensource/pppi")
+# 5. teach the omni agent about your repos (say: "register ~/Workspace/opensource/pppi")
 #    or use the omni_repos tool directly
 ```
 
@@ -152,7 +161,10 @@ once with `bun run install:ext` (copies it to `~/.pi/agent/extensions/pppi/`):
 
 | Command / tool | Purpose |
 |---|---|
-| `/omni` | mark the current pi session as this machine's omni (gateway resumes it) |
+| `/omni` | boot the gateway from this session (clients pair while it lives); the omni is an rpc child |
+| `/omni here` | this session itself becomes the omni — terminal and clients mirror one conversation (asks first if history exists) |
+| `/omni mark` | tag this session as the omni target the child attaches to |
+| `/omni stop` | shut the gateway down |
 | `/pair` | print the pairing QR + link for web/Android clients |
 | `/profile` | set this session's name / color / description |
 | `pppi_profiles` | tool: list profiles (agents read descriptions to pick targets) |

@@ -138,3 +138,23 @@ extension event bus (RPC mode is a JSONL veneer over it), so the mapping is:
 - P3: same battery with the in-process driver; TUI conversation and client
   mirror stay in lockstep; `/omni child` still works; guard dialogs fire in a
   dirty session.
+
+## As-built deviations
+
+- **`/omni` default is the launcher; `here` is opt-in.** The plan flipped the
+  default to here-mode, but the original ask ("a server is spawned when I
+  send /omni") is the launcher form, and here-mode changes the session's
+  identity — it stays an explicit `/omni here` with its guard.
+- **enabledModels reads pi's settings.json directly**, not SettingsManager:
+  the extension copy cannot rely on pi's module aliasing for
+  `@earendil-works/pi-coding-agent`, so the gateway dropped that dependency
+  entirely.
+- **`prompt` asks pi (`ctx.isIdle()`)** rather than tracking a local
+  isStreaming flag: an errored turn settles without the handler transition we
+  expected, and a stuck flag queued every later message into followUp limbo.
+- **The audio child prints one ready line on stdout** (port + stt/tts/vad
+  health); the gateway kicks `ensure()` on health polls so a crashed child
+  self-heals and /api/health converges to the truth.
+- The install stamps `repo.json` (repo root) into the extension dir; native
+  voice deps are symlinked from the repo so dev machines get the full stack
+  while bare installs degrade per capability.

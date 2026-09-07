@@ -46,31 +46,47 @@ sessions. Read README.md for the full picture.
 ## Key files
 
 - `packages/omni/src/extension.ts` — the omni tools the agent sees.
+- `packages/gateway/` — the gateway core both hosts share: wire transport
+  (node:http + ws, no framework), voice stack, `AgentPort` seam,
+  `RpcAgentDriver`. Hosted by apps/server's cli AND by the pi extension.
 - `packages/pi-ext/` — the /omni /pair /profile commands + pppi_profiles tool
-  (install: `bun run install:ext` → `~/.pi/agent/extensions/pppi/`).
-- `apps/server/src/agent.ts` — pi RPC driver (framing, events, restart) plus
-  the status-bar controls: `setModel`/`setThinkingLevel`/`availableModels`,
-  context from `get_session_stats`, `status` events on hello/turn/set.
-- `apps/server/src/server.ts` — broadcast plumbing; the model popup's list =
-  `availableModels` ∩ pi's `enabledModels` (SettingsManager + minimatch,
-  pi's own semantics; tests inject `enabledModelsProvider`).
+  (install: `bun run install:ext` → `~/.pi/agent/extensions/pppi/`; the
+  installer also materializes ext node_modules + web dist for /omni).
+- `packages/pi-ext/src/omni-host.ts` — /omni boots the gateway from a pi
+  session (default: rpc child · `here`: the host session IS the omni ·
+  `stop` · `mark`). Gateway stops on session_shutdown.
+- `packages/pi-ext/src/session-driver.ts` — in-process AgentPort over pi's
+  extension API; prompt delivery must ask pi (ctx.isIdle), not a local flag.
+- `packages/gateway/src/audio-service.ts` (+ `audio-proxy.ts`) — voice in a
+  spawned child so native STT/silero/kokoro never load into pi's process;
+  the gateway proxies /voice frames with `__`-prefixed control frames.
+- `packages/gateway/src/agent.ts` — pi RPC driver (framing, events, restart)
+  plus the status-bar controls: `setModel`/`setThinkingLevel`/
+  `availableModels`, context from `get_session_stats`, `status` events on
+  hello/turn/set. `AgentPort` is the seam hosts implement.
+- `packages/gateway/src/gateway.ts` — broadcast plumbing; the model popup's
+  list = `availableModels` ∩ pi's `enabledModels` (read directly from pi's
+  settings.json + minimatch, pi's own semantics; tests inject
+  `enabledModelsProvider`).
 - `apps/web/src/status/StatusBar.tsx` + `apps/android/.../StatusBar.kt` —
   the status bar (context, model sheet, brain slider; brightness = thinking
   level). Wire shapes live in packages/protocol (v5) and Protocol.kt.
-- `apps/server/src/profiles.ts` — profile palette + explicit/derived profile
-  merge (keep the JSON shape in sync with packages/pi-ext/src/store.ts).
-- `apps/server/src/stt.ts` — model resolution: `PPPI_STT_MODEL` →
+- `packages/gateway/src/profiles.ts` — profile palette + explicit/derived
+  profile merge (keep the JSON shape in sync with
+  packages/pi-ext/src/store.ts).
+- `packages/gateway/src/stt.ts` — model resolution: `PPPI_STT_MODEL` →
   `~/.pi/agent/pi-transcribe.json` → HF-cache parakeet. `openUtterance()`
   exposes parakeet's buffered streaming for live partials.
-- `apps/server/src/tts.ts` — TTS providers behind `TtsProvider`
+- `packages/gateway/src/tts.ts` — TTS providers behind `TtsProvider`
   (kokoro first via `kokoro-js`, `macos-say` fallback;
   `PPPI_TTS_PROVIDER=kokoro|macos-say|auto`).
-- `apps/server/src/vad.ts` + `vadProcess.ts` — silero VAD in a host process
-  (worker threads deadlock against kokoro's runtime) + the turn-taking state
-  machine (`UtteranceDetector`, timings in `DEFAULT_TIMINGS`).
-- `apps/server/src/voice.ts` — the /voice websocket: streaming utterances,
-  keyword commands, sentence-chunked speaking (`Speaker`, speak-prose
-  transform), barge-in.
+- `packages/gateway/src/vad.ts` + `vadProcess.ts` — silero VAD in a host
+  process (worker threads deadlock against kokoro's runtime) + the
+  turn-taking state machine (`UtteranceDetector`, timings in
+  `DEFAULT_TIMINGS`).
+- `packages/gateway/src/voice.ts` — the /voice websocket: streaming
+  utterances, keyword commands, sentence-chunked speaking (`Speaker`,
+  speak-prose transform), barge-in.
 - `apps/web/src/voice/` — web interactive mode (mic, ws client, WebAudio
   playback, `useVoice` state machine).
 - `packages/protocol/src/index.ts` — the wire protocol; keep TS and Kotlin
