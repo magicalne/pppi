@@ -46,7 +46,6 @@
       "name": "@pppi/gateway",
       "version": "0.1.0",
       "dependencies": {
-        "@earendil-works/pi-coding-agent": "0.83.0",
         "@pppi/omni": "workspace:*",
         "@pppi/protocol": "workspace:*",
         "kokoro-js": "^1.2.1",

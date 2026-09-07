@@ -12,6 +12,7 @@ export {
 } from "./agent.ts";
 export { loadOrCreateConfig, pppiDir, tokensMatch, type ServerConfig } from "./config.ts";
 export { buildPairInfo, lanIps, writePairFile } from "./pair.ts";
+export { AudioService, type AudioHealth } from "./audio-proxy.ts";
 export { createGateway, type Gateway, type GatewayOptions } from "./gateway.ts";
 export { Stt } from "./stt.ts";
 export { resolveTtsProvider } from "./tts.ts";

@@ -10,8 +10,9 @@
 // Install: bun run packages/pi-ext/install.mjs  (copies this package to
 // ~/.pi/agent/extensions/pppi/); restart pi afterwards.
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { startOmniHost, stopOmniHost } from "./omni-host.ts";
 import { pairUrl, qrText } from "./pair.ts";
 import { listProfiles, loadPair, readProfile, selfSessionId, writeOmniMark, writeProfile } from "./store.ts";
 
@@ -29,29 +30,44 @@ const COLORS = [
 	"steel #6f8db9",
 ];
 
-function sessionIdOf(ctx: ExtensionContext): string | undefined {
+function sessionIdOf(ctx: { sessionManager: { getSessionFile(): string | undefined } }): string | undefined {
 	return selfSessionId(ctx.sessionManager.getSessionFile() ?? undefined);
 }
 
-function suggestedName(ctx: ExtensionContext): string {
+function suggestedName(ctx: { cwd: string }): string {
 	const dir = ctx.cwd.split("/").filter(Boolean).at(-1);
 	return dir ?? "pi-session";
 }
 
 export default function pppiExtension(pi: ExtensionAPI) {
+	pi.on("session_shutdown", async () => {
+		await stopOmniHost();
+	});
+
 	pi.registerCommand("omni", {
-		description: "Mark this pi session as this machine's pppi omni agent",
-		handler: async (_args, ctx) => {
-			const id = sessionIdOf(ctx);
-			if (!id) {
-				ctx.ui.notify("Could not determine this session's id — cannot mark it as omni.", "error");
+		description:
+			"pppi: boot the gateway from this session (clients pair while this session lives). Args: `mark` tags this session as the omni target, `stop` shuts the gateway down.",
+		handler: async (args, ctx) => {
+			const sub = args.trim().split(/\s+/)[0];
+			if (sub === "stop") {
+				await stopOmniHost();
+				ctx.ui.notify("pppi gateway stopped.", "info");
 				return;
 			}
-			writeOmniMark({ sessionId: id, cwd: ctx.cwd, pid: process.pid, markedAt: Date.now() });
-			ctx.ui.notify(
-				`This session is now the pppi omni agent.\nsession ${id}\nRestart the pppi gateway to attach to it.`,
-				"info",
-			);
+			if (sub === "mark") {
+				const id = sessionIdOf(ctx);
+				if (!id) {
+					ctx.ui.notify("Could not determine this session's id — cannot mark it as omni.", "error");
+					return;
+				}
+				writeOmniMark({ sessionId: id, cwd: ctx.cwd, pid: process.pid, markedAt: Date.now() });
+				ctx.ui.notify(
+					`This session is now the pppi omni target (session ${id}).\nRestart the gateway to attach.`,
+					"info",
+				);
+				return;
+			}
+			await startOmniHost((message, level) => ctx.ui.notify(message, level));
 		},
 	});
 

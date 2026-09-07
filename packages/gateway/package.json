@@ -8,7 +8,6 @@
 		".": "./src/index.ts"
 	},
 	"dependencies": {
-		"@earendil-works/pi-coding-agent": "0.83.0",
 		"@pppi/omni": "workspace:*",
 		"@pppi/protocol": "workspace:*",
 		"kokoro-js": "^1.2.1",

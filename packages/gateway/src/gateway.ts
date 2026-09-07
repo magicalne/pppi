@@ -10,10 +10,10 @@
 // extension, where only the deps shipped next to it resolve.
 
 import { randomUUID } from "node:crypto";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
+import { homedir } from "node:os";
 import { extname, join, normalize } from "node:path";
-import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { type PigeonSession, listSessions, pigeon } from "@pppi/omni/pigeon";
 import { loadRegistry } from "@pppi/omni/repos";
 import type {
@@ -30,6 +30,7 @@ import type {
 import { minimatch } from "minimatch";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { AgentPort } from "./agent.ts";
+import { AudioService } from "./audio-proxy.ts";
 import { tokensMatch } from "./config.ts";
 import { buildProfiles } from "./profiles.ts";
 import type { Stt } from "./stt.ts";
@@ -40,7 +41,11 @@ import { WavError, decodeWav } from "./wav.ts";
 export type GatewayOptions = {
 	token: string;
 	agent: AgentPort;
-	stt: Stt;
+	/** In-process STT (cli host). Exactly one of `stt` / `audioService` should be set. */
+	stt?: Stt;
+	/** Serve voice from a spawned audio-service child (extension host): native
+	 *  STT, silero and kokoro stay out of pi's process. */
+	audioService?: { command: string[]; env?: Record<string, string | undefined> };
 	webDist?: string;
 	/** Max voice upload size (default 25 MiB ≈ 26 min of 16 kHz PCM16). */
 	maxVoiceBytes?: number;
@@ -88,14 +93,27 @@ function matchesEnabledPattern(model: ModelInfo, rawPattern: string): boolean {
 	return full === pattern || model.id.toLowerCase() === pattern;
 }
 
-/** Read enabledModels from pi's settings the same way pi's own model picker does. */
+/**
+ * Read enabledModels from pi's settings (global + project), the same fields
+ * pi's own model picker filters by. Read directly rather than through
+ * pi-coding-agent: the gateway also runs inside extension copies where the
+ * host's module aliasing isn't available.
+ */
 function enabledPatternsFromPi(cwd: string): string[] | undefined {
-	try {
-		const patterns = SettingsManager.create(cwd).getEnabledModels();
-		return Array.isArray(patterns) && patterns.length > 0 ? patterns.filter((p) => typeof p === "string") : undefined;
-	} catch {
-		return undefined;
-	}
+	const read = (p: string): { enabledModels?: unknown } | undefined => {
+		try {
+			return JSON.parse(readFileSync(p, "utf8")) as { enabledModels?: unknown };
+		} catch {
+			return undefined;
+		}
+	};
+	const global = read(join(homedir(), ".pi", "agent", "settings.json"));
+	const project = read(join(cwd, ".pi", "settings.json"));
+	const merged = [
+		...(Array.isArray(global?.enabledModels) ? (global!.enabledModels as unknown[]) : []),
+		...(Array.isArray(project?.enabledModels) ? (project!.enabledModels as unknown[]) : []),
+	].filter((p): p is string => typeof p === "string");
+	return merged.length > 0 ? merged : undefined;
 }
 
 async function classify(omniSessionId: string, registryDir?: string): Promise<SessionsResponse> {
@@ -179,6 +197,9 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 	// peer exchanges (targets + delegated replies) never enter the omni session
 	// transcript, so keep them here for reconnecting clients; lost on gateway restart.
 	const peerLog: ChatEntry[] = [];
+	// voice sessions live in-process (cli host) or in the audio child (ext host)
+	let voiceSessions: Map<VoiceSession, WebSocket> | null = null;
+	let onVoiceSocket: (raw: WebSocket) => void = (raw) => raw.close();
 
 	function broadcast(evt: ServerEvent): void {
 		const line = JSON.stringify(evt);
@@ -219,9 +240,38 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 	}
 
 	// agent events are always the omni conversation (no target).
-	// They also feed interactive voice: open mic sessions speak the answer.
-	const speakAssistant = (fn: (s: VoiceSession) => void): void => {
-		for (const s of voiceSessions.keys()) fn(s);
+	// They also feed interactive voice: open mic sessions speak the answer —
+	// in-process sessions directly, or via control frames to the audio child.
+	let voiceActiveCount = 0;
+	let voiceActive = false;
+	const setVoiceActive = (active: boolean): void => {
+		voiceActiveCount = Math.max(0, voiceActiveCount + (active ? 1 : -1));
+		const now = voiceActiveCount > 0;
+		if (now !== voiceActive) {
+			voiceActive = now;
+			broadcast({ type: "voice_active", active: now });
+		}
+	};
+	const audio = opts.audioService
+		? new AudioService({
+				command: opts.audioService.command,
+				token: opts.token,
+				env: opts.audioService.env,
+				submit: async (text) => {
+					await submitUserText(text, "voice");
+				},
+				abortAgent: () => void agent.abort(),
+				setVoiceActive,
+			})
+		: null;
+	// bring the child up right away so /api/health reflects real voice readiness
+	void audio?.ensure();
+	const speakAssistant = (fn: (s: VoiceSession) => void, toChild?: (a: AudioService) => void): void => {
+		if (audio) {
+			if (toChild) toChild(audio);
+			return;
+		}
+		for (const s of voiceSessions?.keys() ?? []) fn(s);
 	};
 	// the wire AgentInfo keeps `model` as a display string; full model facts
 	// travel in `status` (below)
@@ -239,11 +289,17 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 	agent.on("status", (status) => broadcast({ type: "status", status }));
 	agent.on("assistant-delta", (id: string, delta: string) => {
 		broadcast({ type: "assistant_delta", id, delta });
-		speakAssistant((s) => s.assistantDelta(id, delta));
+		speakAssistant(
+			(s) => s.assistantDelta(id, delta),
+			(a) => a.assistantDelta(id, delta),
+		);
 	});
 	agent.on("assistant-final", (id: string, text: string) => {
 		broadcast({ type: "assistant_final", id, text });
-		speakAssistant((s) => s.assistantFinal(id, text));
+		speakAssistant(
+			(s) => s.assistantFinal(id, text),
+			(a) => a.assistantFinal(id, text),
+		);
 	});
 	agent.on("tool", (toolName: string, phase: "start" | "end", label?: string) =>
 		broadcast({ type: "tool_event", toolName, phase, label }),
@@ -317,7 +373,9 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 	async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		const path = new URL(req.url ?? "/", "http://local").pathname;
 		if (req.method === "GET" && path === "/api/health") {
-			const status = opts.stt.status;
+			// kick the child so a crashed/starting audio service self-heals
+			void audio?.ensure();
+			const status = audio ? audio.health().stt : (opts.stt?.status ?? { ready: false, reason: "no stt configured" });
 			return json(res, 200, {
 				ok: true,
 				name: "pppi",
@@ -330,13 +388,15 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			if (!presented || !tokensMatch(presented, opts.token)) {
 				return json(res, 401, { ok: false, error: "unauthorized" });
 			}
-			const sttStatus = opts.stt.status;
+			const sttStatus = audio
+				? audio.health().stt
+				: (opts.stt?.status ?? { ready: false, reason: "no stt configured" });
 			if (!sttStatus.ready) return json(res, 503, { ok: false, error: sttStatus.reason });
 			const body = await readBody(req, maxVoiceBytes);
 			if (body.length === 0) return json(res, 400, { ok: false, error: "empty body; send a WAV" });
 			let transcript: string;
 			try {
-				transcript = await opts.stt.transcribe(decodeWav(body));
+				transcript = audio ? await audio.transcribe(body) : await opts.stt!.transcribe(decodeWav(body));
 			} catch (err) {
 				if (err instanceof WavError) return json(res, 400, { ok: false, error: err.message });
 				throw err;
@@ -513,39 +573,36 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 
 	// ------------------------------------------------------- interactive voice
 
-	const sttPort = opts.voiceStt ?? voiceStt(opts.stt);
-	// bundled silero model; a missing file leaves voice sessions connected but inert
-	const vad = opts.vad ?? (await SileroVad.create().catch(() => null));
-	const voiceSessions = new Map<VoiceSession, WebSocket>();
-	let voiceActiveCount = 0;
-	let voiceActive = false;
-	const setVoiceActive = (active: boolean): void => {
-		voiceActiveCount = Math.max(0, voiceActiveCount + (active ? 1 : -1));
-		const now = voiceActiveCount > 0;
-		if (now !== voiceActive) {
-			voiceActive = now;
-			broadcast({ type: "voice_active", active: now });
-		}
-	};
+	// child mode (extension host): /voice sockets pipe to the audio service
+	if (audio) {
+		onVoiceSocket = (raw: WebSocket) => void audio.proxyVoice(raw);
+	} else {
+		// in-process mode (cli host): the whole voice stack lives here
+		const sttPort = opts.voiceStt ?? voiceStt(opts.stt!);
+		// bundled silero model; a missing file leaves voice sessions connected but inert
+		const vad = opts.vad ?? (await SileroVad.create().catch(() => null));
+		voiceSessions = new Map<VoiceSession, WebSocket>();
+		const sessions = voiceSessions;
 
-	function onVoiceSocket(raw: WebSocket): void {
-		const session = new VoiceSession(raw, {
-			token: opts.token,
-			stt: sttPort,
-			tts: opts.tts ?? null,
-			vad: vad ?? { prob: async () => 0 },
-			timings: opts.voiceTimings,
-			submit: async (text) => {
-				await submitUserText(text, "voice");
-			},
-			abortAgent: () => void agent.abort(),
-			onAuthed: () => setVoiceActive(true),
-			onClosed: () => {
-				voiceSessions.delete(session);
-				setVoiceActive(false);
-			},
-		});
-		voiceSessions.set(session, raw);
+		onVoiceSocket = (raw: WebSocket): void => {
+			const session = new VoiceSession(raw, {
+				token: opts.token,
+				stt: sttPort,
+				tts: opts.tts ?? null,
+				vad: vad ?? { prob: async () => 0 },
+				timings: opts.voiceTimings,
+				submit: async (text) => {
+					await submitUserText(text, "voice");
+				},
+				abortAgent: () => void agent.abort(),
+				onAuthed: () => setVoiceActive(true),
+				onClosed: () => {
+					sessions.delete(session);
+					setVoiceActive(false);
+				},
+			});
+			sessions.set(session, raw);
+		};
 	}
 
 	// ---------------------------------------------------------------- lifecycle
@@ -566,8 +623,9 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 		},
 		close(): Promise<void> {
 			clearInterval(mailboxPoll);
-			for (const ws of clients) ws.close();
-			for (const raw of voiceSessions.values()) raw.close();
+			audio?.close();
+			// terminate: upgrade sockets aren't tracked by server.close()
+			for (const ws of wss.clients) ws.terminate();
 			return new Promise((resolve) => server.close(() => resolve()));
 		},
 	};

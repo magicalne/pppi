@@ -74,6 +74,19 @@ export function writeOmniMark(mark: { sessionId: string; cwd: string; pid: numbe
 	writeFileSync(join(pppiDir(), "omni.json"), `${JSON.stringify(mark, null, "\t")}\n`);
 }
 
+export function readOmniMark(): { sessionId?: string } | null {
+	try {
+		return JSON.parse(readFileSync(join(pppiDir(), "omni.json"), "utf8")) as { sessionId?: string };
+	} catch {
+		return null;
+	}
+}
+
+export function writePair(pair: PairFile): void {
+	mkdirSync(pppiDir(), { recursive: true });
+	writeFileSync(join(pppiDir(), "pair.json"), `${JSON.stringify(pair, null, "\t")}\n`, { mode: 0o600 });
+}
+
 /** The session id of the invoking pi session (env first, then the session file header). */
 export function selfSessionId(sessionFile?: string): string | undefined {
 	const env = process.env.PI_SESSION_ID;

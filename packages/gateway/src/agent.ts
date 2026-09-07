@@ -170,6 +170,12 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 		const proc = spawn(cmd, args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], env: process.env });
 		this.proc = proc;
 
+		// spawn failures (bad cwd, missing binary) surface here, not via exit
+		proc.on("error", (err) => {
+			this.emit("error", `failed to spawn omni agent: ${err.message}`);
+			this.setState("starting");
+		});
+
 		proc.stdout.on("data", (chunk: Buffer) => this.onData(chunk));
 		proc.stderr.on("data", (chunk: Buffer) => {
 			const line = chunk.toString().trim();
