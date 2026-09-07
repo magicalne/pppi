@@ -1,4 +1,4 @@
-# sspi V1 — the full picture: a fleet of pi machines, paired clients, and agents with identities
+# pppi V1 — the full picture: a fleet of pi machines, paired clients, and agents with identities
 
 **Date:** 2026-09-03 · **Status:** DRAFT — awaiting approval. **No code is written for V1 until this plan is approved.**
 
@@ -6,7 +6,7 @@
 
 ## 1. What we're building
 
-Today sspi assumes one machine: the Mac runs a gateway with one omni pi
+Today pppi assumes one machine: the Mac runs a gateway with one omni pi
 session, and web/Android mirror that single conversation. The full picture
 promotes every axis:
 
@@ -53,7 +53,7 @@ JSONL RPC framing, TS/Kotlin protocol kept in sync.
 
 ### B. Pairing (gateway + `/pair`)
 - Gateway binds `0.0.0.0`, discovers its LAN IPv4s, and writes
-  `~/.sspi/pair.json`: `{machine, port, token, ips[], fingerprint}`. It prints
+  `~/.pppi/pair.json`: `{machine, port, token, ips[], fingerprint}`. It prints
   the same QR + link at startup.
 - **`/pair`** (pi slash command, works in any session on the machine) reads
   `pair.json` and renders a QR as terminal block characters plus the plain
@@ -62,7 +62,7 @@ JSONL RPC framing, TS/Kotlin protocol kept in sync.
 - Trust model unchanged: LAN + bearer token, no TLS in V1.
 
 ### C. Omni marking (`/omni`)
-- `/omni` in any pi session writes `~/.sspi/omni.json`
+- `/omni` in any pi session writes `~/.pppi/omni.json`
   (`{sessionId, cwd, pid, ts}`) — "this session is the machine's omni".
   Re-running it elsewhere moves the crown; the gateway attaches to the marked
   session. This is "spawn a pi agent in any place and make it the omni."
@@ -73,7 +73,7 @@ JSONL RPC framing, TS/Kotlin protocol kept in sync.
   machine role. Anything omitted is auto-generated: name from hostname/repo
   dir, color hashed from session id, description written by the agent itself
   in one sentence.
-- Stored per machine at `~/.sspi/profiles/<sessionId>.json`; the gateway
+- Stored per machine at `~/.pppi/profiles/<sessionId>.json`; the gateway
   merges them into `GET /api/sessions`, so clients get
   `{profileId, name, color, description}` per session. Agents see profiles
   through a small `profiles_list` tool registered by the same extension (and
@@ -112,7 +112,7 @@ JSONL RPC framing, TS/Kotlin protocol kept in sync.
 |---|---|---|---|
 | 0 | **Finish the tree switcher** | Complete `apps/web` drawer CSS + Android overlay drawer + PRD §4 update + verify (per the switcher plan doc). Leaves the repo green. | S |
 | 1 | **Gateway + protocol v3** | `packages/protocol` additions; gateway binds `0.0.0.0`, writes `pair.json`, `/api/pair`, startup QR; profiles merged into `/api/sessions`; peer-reply attribution tagging; unit tests for classify/attribution. | M |
-| 2 | **`packages/pi-ext`** | One extension registering `/omni`, `/pair`, `/profile`, `profiles_list` tool, auto-profile generation; `sspi install-ext` copies it to `~/.pi/agent/extensions/sspi/` (pi's extension dir — verified). Tested in a real TUI pi session (QR legible, profile flow) and in RPC mode (hasUI path). | M |
+| 2 | **`packages/pi-ext`** | One extension registering `/omni`, `/pair`, `/profile`, `profiles_list` tool, auto-profile generation; `pppi install-ext` copies it to `~/.pi/agent/extensions/pppi/` (pi's extension dir — verified). Tested in a real TUI pi session (QR legible, profile flow) and in RPC mode (hasUI path). | M |
 | 3 | **Web: connections + bubbles** | ☰ button + connections drawer; multi-connection store; `?pair=` onboarding; per-connection transcript swap; profile-colored peer bubbles + names. Verified in the live browser. | M |
 | 4 | **Android: connections + QR** | ☰ button + connections drawer (same overlay style as the tree drawer); `+` → paste link or scan QR (`zxing-embedded` — no Play Services dependency); DataStore; profile bubbles. Instrumented tests + emulator screenshots. | L |
 | 5 | **Delegation polish + E2E** | omni's context gets profiles (description-driven delegation), tool chip `asking Joe…` already exists → label uses profile name; extend `e2e.py`: second connection pairs via link, profile flow, attribution bubble; full green run; AGENTS.md + README updated. | M |
@@ -127,10 +127,10 @@ so pairing can be tested against real `/pair` output.)
 | D10 | Connections menu shape | left drawer from the screen edge, in front of chat; ☰ button left of the presence dot |
 | D11 | Pairing transport | plain HTTP on LAN, token in link/QR; no TLS in V1 |
 | D12 | QR rendering | terminal: `qrcode` npm (block chars); Android: zxing-embedded |
-| D13 | Profile storage | `~/.sspi/profiles/<sessionId>.json` per machine; pigeon registry untouched |
+| D13 | Profile storage | `~/.pppi/profiles/<sessionId>.json` per machine; pigeon registry untouched |
 | D14 | Color palette | fixed 10 hues + paired inks, contrast-checked on all 5 themes |
 | D15 | Omni count | one per machine; `/omni` re-mark moves it |
-| D16 | Extension packaging | `packages/pi-ext`, installed into `~/.pi/agent/extensions/sspi/` |
+| D16 | Extension packaging | `packages/pi-ext`, installed into `~/.pi/agent/extensions/pppi/` |
 | D17 | Attribution granularity | gateway tags delegated replies with the target's profile; omni's own summary stays omni-styled |
 | D18 | Connections sync across devices | no — per-device lists in V1 |
 

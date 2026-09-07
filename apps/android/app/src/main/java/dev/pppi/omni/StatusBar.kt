@@ -1,4 +1,4 @@
-package dev.sspi.omni
+package dev.pppi.omni
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -80,7 +80,7 @@ private val BRAIN_PATHS = listOf(
 )
 
 @Composable
-private fun BrainGlyph(level: String, theme: SspiTheme) {
+private fun BrainGlyph(level: String, theme: PppiTheme) {
 	val alpha = brainAlpha(level)
 	val paths = remember { BRAIN_PATHS.map { PathParser().parsePathString(it).toPath() } }
 	Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
@@ -119,7 +119,7 @@ private fun BrainGlyph(level: String, theme: SspiTheme) {
 
 @Composable
 fun StatusBarRow(
-	theme: SspiTheme,
+	theme: PppiTheme,
 	status: AgentStatusDto?,
 	active: Boolean,
 	targetLabel: String,
@@ -327,7 +327,7 @@ fun StatusBarRow(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelSheet(
-	theme: SspiTheme,
+	theme: PppiTheme,
 	models: List<ModelInfoDto>,
 	current: ModelInfoDto?,
 	onPick: (ModelInfoDto) -> Unit,

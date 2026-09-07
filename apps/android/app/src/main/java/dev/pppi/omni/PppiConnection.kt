@@ -1,7 +1,7 @@
-package dev.sspi.omni
+package dev.pppi.omni
 
 /** Abstraction over the gateway connection so UI tests can inject a fake. */
-interface SspiConnection {
+interface PppiConnection {
 	fun connect()
 	fun sendChat(text: String, target: String? = null)
 	fun abort()
@@ -14,9 +14,9 @@ interface SspiConnection {
 	fun close()
 }
 
-fun sspiClientFactory(
+fun pppiClientFactory(
 	serverUrl: String,
 	token: String,
 	onEvent: (ServerEvent) -> Unit,
 	onConnection: (Boolean) -> Unit,
-): SspiConnection = SspiClient(serverUrl, token, onEvent, onConnection)
+): PppiConnection = PppiClient(serverUrl, token, onEvent, onConnection)

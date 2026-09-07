@@ -1,4 +1,4 @@
-package dev.sspi.omni
+package dev.pppi.omni
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -16,8 +16,8 @@ import org.junit.runner.RunWith
 /**
  * On-device proof of the voice pipeline: takes a real speech WAV, extracts its
  * PCM exactly like the mic reader would, encodes it with the app's own
- * WavEncoder, and — when the sspi gateway is reachable (args sspi.server /
- * sspi.token) — uploads it and asserts the server transcribed the phrase.
+ * WavEncoder, and — when the pppi gateway is reachable (args pppi.server /
+ * pppi.token) — uploads it and asserts the server transcribed the phrase.
  * Skips gracefully when no gateway is running.
  */
 @RunWith(AndroidJUnit4::class)
@@ -50,8 +50,8 @@ class VoicePipelineDeviceTest {
 	@Test
 	fun uploadsRealSpeechAndGatewayTranscribesIt() {
 		val args = InstrumentationRegistry.getArguments()
-		val server = args.getString("sspi.server") ?: return
-		val token = args.getString("sspi.token") ?: return
+		val server = args.getString("pppi.server") ?: return
+		val token = args.getString("pppi.token") ?: return
 		val host = server.removePrefix("http://").substringBefore(":")
 		val port = server.substringAfterLast(":").trimEnd('/').toIntOrNull() ?: 8787
 

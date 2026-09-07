@@ -1,14 +1,14 @@
-// sspi pi extension: the slash commands that wire any pi session into sspi.
+// pppi pi extension: the slash commands that wire any pi session into pppi.
 //
 //   /omni     mark this session as the machine's omni agent
 //   /pair     show the pairing QR + link for web/android clients
 //   /profile  give this session an identity (name/color/description)
 //
-// plus the `sspi_profiles` tool, which lets agents read each other's
+// plus the `pppi_profiles` tool, which lets agents read each other's
 // profiles — the description is how an omni decides whom to delegate to.
 //
 // Install: bun run packages/pi-ext/install.mjs  (copies this package to
-// ~/.pi/agent/extensions/sspi/); restart pi afterwards.
+// ~/.pi/agent/extensions/pppi/); restart pi afterwards.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -38,9 +38,9 @@ function suggestedName(ctx: ExtensionContext): string {
 	return dir ?? "pi-session";
 }
 
-export default function sspiExtension(pi: ExtensionAPI) {
+export default function pppiExtension(pi: ExtensionAPI) {
 	pi.registerCommand("omni", {
-		description: "Mark this pi session as this machine's sspi omni agent",
+		description: "Mark this pi session as this machine's pppi omni agent",
 		handler: async (_args, ctx) => {
 			const id = sessionIdOf(ctx);
 			if (!id) {
@@ -49,19 +49,19 @@ export default function sspiExtension(pi: ExtensionAPI) {
 			}
 			writeOmniMark({ sessionId: id, cwd: ctx.cwd, pid: process.pid, markedAt: Date.now() });
 			ctx.ui.notify(
-				`This session is now the sspi omni agent.\nsession ${id}\nRestart the sspi gateway to attach to it.`,
+				`This session is now the pppi omni agent.\nsession ${id}\nRestart the pppi gateway to attach to it.`,
 				"info",
 			);
 		},
 	});
 
 	pi.registerCommand("pair", {
-		description: "Show the sspi pairing QR code + link for web/android clients",
+		description: "Show the pppi pairing QR code + link for web/android clients",
 		handler: async (_args, ctx) => {
 			const pair = loadPair();
 			if (!pair) {
 				ctx.ui.notify(
-					`No sspi pairing info found (${process.env.SSPI_DIR ?? "~/.sspi"}/pair.json).\nStart the sspi gateway once, then retry.`,
+					`No pppi pairing info found (${process.env.PPPI_DIR ?? "~/.pppi"}/pair.json).\nStart the pppi gateway once, then retry.`,
 					"error",
 				);
 				return;
@@ -70,7 +70,7 @@ export default function sspiExtension(pi: ExtensionAPI) {
 			const url = pairUrl(pair);
 			ctx.ui.notify(
 				[
-					`sspi pairing — machine "${pair.machine}" · fingerprint ${pair.fingerprint}`,
+					`pppi pairing — machine "${pair.machine}" · fingerprint ${pair.fingerprint}`,
 					qr ? `\n${qr}` : "",
 					`\n${url}`,
 					"\nweb: open this link.  android: sessions menu → + → scan or paste.",
@@ -83,7 +83,7 @@ export default function sspiExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("profile", {
-		description: "Create or update this session's sspi profile (name · color · description)",
+		description: "Create or update this session's pppi profile (name · color · description)",
 		handler: async (args, ctx) => {
 			const id = sessionIdOf(ctx);
 			if (!id) {
@@ -122,10 +122,10 @@ export default function sspiExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
-		name: "sspi_profiles",
-		label: "sspi_profiles",
+		name: "pppi_profiles",
+		label: "pppi_profiles",
 		description:
-			"List sspi profiles of pi sessions on this machine: name, color and description. " +
+			"List pppi profiles of pi sessions on this machine: name, color and description. " +
 			"Read the descriptions to decide which session to delegate work to (via pigeon send).",
 		parameters: Type.Object({}),
 		execute: async (_toolCallId: string) => {

@@ -1,7 +1,7 @@
-// sspi server CLI.
+// pppi server CLI.
 //
 //   bun run apps/server/src/cli.ts [--port 8787] [--host 0.0.0.0] [--token X]
-//                                 [--cwd ~/.sspi/omni-home] [--agent-cmd "..."]
+//                                 [--cwd ~/.pppi/omni-home] [--agent-cmd "..."]
 //                                 [--no-stt]
 
 import { createHash } from "node:crypto";
@@ -9,10 +9,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname, networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { PairInfo } from "@sspi/protocol";
+import type { PairInfo } from "@pppi/protocol";
 import QRCode from "qrcode";
 import { RpcAgentDriver } from "./agent.ts";
-import { loadOrCreateConfig, sspiDir } from "./config.ts";
+import { loadOrCreateConfig, pppiDir } from "./config.ts";
 import { createServer } from "./server.ts";
 import { Stt } from "./stt.ts";
 import { resolveTtsProvider } from "./tts.ts";
@@ -52,11 +52,11 @@ function lanIps(): string[] {
 	return out;
 }
 
-const dir = sspiDir();
+const dir = pppiDir();
 mkdirSync(dir, { recursive: true });
 
 const pair: PairInfo = {
-	machine: process.env.SSPI_NAME ?? hostname(),
+	machine: process.env.PPPI_NAME ?? hostname(),
 	port: cfg.port,
 	token: cfg.token,
 	ips: lanIps(),
@@ -81,7 +81,7 @@ function markedOmniSession(): string | null {
 	}
 }
 
-const omniSessionId = markedOmniSession() ?? "sspi-omni";
+const omniSessionId = markedOmniSession() ?? "pppi-omni";
 
 const agentCmd = args["agent-cmd"]
 	? String(args["agent-cmd"]).split(/\s+/)
@@ -112,7 +112,7 @@ const pairUrl = pair.urls[0] ?? `http://localhost:${cfg.port}`;
 const qr = await QRCode.toString(pairUrl, { type: "terminal", small: true }).catch(() => null);
 console.log(`
         ┌──────┐         ┌──────┐         ┌──────┐
-        │ sspi │ ──────► │  *p  │ ──────► │  pi  │
+        │ pppi │ ──────► │  *p  │ ──────► │  pi  │
         └──────┘        └──────┘        └──────┘
        pointer ──► pointer ──► pi   (one omni agent, every screen)
 
@@ -131,7 +131,7 @@ ${qr ? `\n${qr}\n` : ""}
 `);
 
 async function shutdown() {
-	console.log("\nsspi: shutting down");
+	console.log("\npppi: shutting down");
 	await app.close();
 	driver.dispose();
 	process.exit(0);

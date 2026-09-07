@@ -1,7 +1,7 @@
 // Voice websocket client: hello/token auth, continuous 16 kHz PCM16 uplink,
 // server events down (vad turns, stt partials, tts audio framing).
 
-import type { VoiceServerEvent } from "@sspi/protocol";
+import type { VoiceServerEvent } from "@pppi/protocol";
 import type { MicStream } from "./mic.ts";
 
 export type VoiceHandlers = {

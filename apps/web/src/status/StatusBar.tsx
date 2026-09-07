@@ -2,7 +2,7 @@
 // The brain is a press-hold + swipe slider whose brightness IS the level; the
 // model name opens the enabled-models sheet. Mirrors pi's canonical ladder.
 
-import type { AgentStatus, ModelInfo } from "@sspi/protocol";
+import type { AgentStatus, ModelInfo } from "@pppi/protocol";
 import { useRef, useState } from "react";
 
 /** pi's canonical thinking ladder (pi-agent-core ThinkingLevel). */

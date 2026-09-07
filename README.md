@@ -1,13 +1,13 @@
-# sspi
+# pppi
 
 ```
         ┌──────┐         ┌──────┐         ┌──────┐
-        │ sspi │ ──────► │  *p  │ ──────► │  pi  │
+        │ pppi │ ──────► │  *p  │ ──────► │  pi  │
         └──────┘         └──────┘         └──────┘
        pointer ──► pointer ──► pi
 ```
 
-**sspi is `**pi` — a pointer to a pointer to [pi](https://pi.dev).** Don't talk to
+**pppi is `**pi` — a pointer to a pointer to [pi](https://pi.dev).** Don't talk to
 your pi sessions one by one in terminals. Run **one omni agent** and let it
 manage the fleet. It's the same conversation on every screen: your terminal,
 your phone, your browser.
@@ -36,7 +36,7 @@ omni pi session
 |---|---|
 | **Terminal** | `pi -e .../extensions/omni.ts` — a plain pi session with omni tools |
 | **Web** | served by the gateway at `http://<mac>:8787` |
-| **Android** | the `sspi` app — hold-to-talk voice first |
+| **Android** | the `pppi` app — hold-to-talk voice first |
 
 There is exactly **one** omni session. The mobile/web clients mirror it (they
 cannot create sessions); the omni agent is expected to figure out what to do
@@ -63,8 +63,8 @@ is cached, else macOS `say`. Talk over the agent and it stops instantly
 without becoming a chat turn. Fenced code is never spoken — the voice says
 "code is on the screen" and the full answer stays in the bubble.
 
-- TTS provider is pluggable: `SSPI_TTS_PROVIDER=kokoro|macos-say|auto`,
-  model dir via `SSPI_TTS_MODEL` (layout: `config.json`, `onnx/
+- TTS provider is pluggable: `PPPI_TTS_PROVIDER=kokoro|macos-say|auto`,
+  model dir via `PPPI_TTS_MODEL` (layout: `config.json`, `onnx/
   model_quantized.onnx`, `voices/af_heart.bin`). Download:
   `huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX --include
   "onnx/model_quantized.onnx" "voices/af_heart.bin" "config.json" "tokenizer*"`
@@ -86,7 +86,7 @@ goes through the omni session's pi over RPC and is echoed back as one
 ## Layout
 
 ```
-sspi/
+pppi/
 ├── extensions/omni.ts       # what pi loads (-e) — the omni extension entry
 ├── packages/
 │   ├── omni/                # omni core: repo registry, worktrees, pigeon bridge, pi tools
@@ -112,7 +112,7 @@ bun run build:web
 
 # 2. start the gateway (spawns the headless omni session)
 bun run dev:server -- --host 0.0.0.0
-#    → prints the LAN URL and the pairing token (stored in ~/.sspi/config.json)
+#    → prints the LAN URL and the pairing token (stored in ~/.pppi/config.json)
 
 # 3. talk to it
 #    web:   open http://<mac>:8787 on any device, paste the token once
@@ -121,12 +121,12 @@ bun run dev:server -- --host 0.0.0.0
 #           or paste the pair link
 #    terminal: pi -e $PWD/extensions/omni.ts   (interactive omni session)
 
-# 4. teach the omni agent about your repos (say: "register ~/Workspace/opensource/sspi")
+# 4. teach the omni agent about your repos (say: "register ~/Workspace/opensource/pppi")
 #    or use the omni_repos tool directly
 ```
 
 The headless omni session persists across gateway restarts (`--session-id
-sspi-omni`). To run an interactive omni session in a terminal, load the same
+pppi-omni`). To run an interactive omni session in a terminal, load the same
 extension; both flavors share the tools, and cross-session messaging rides on
 pigeon.
 
@@ -144,24 +144,24 @@ auto-generated). The gateway merges explicit profiles with deterministic
 derived ones and ships them to clients, so when the omni delegates work to
 "Joe" in some repo, Joe's answer shows up as a **yellow bubble labeled Joe**
 — on the phone and in the browser. Agents read the same profiles through the
-`sspi_profiles` tool: descriptions are how an omni decides *whom* to delegate
+`pppi_profiles` tool: descriptions are how an omni decides *whom* to delegate
 to.
 
-The `sspi` pi extension (`packages/pi-ext/`) provides the commands; install
-once with `bun run install:ext` (copies it to `~/.pi/agent/extensions/sspi/`):
+The `pppi` pi extension (`packages/pi-ext/`) provides the commands; install
+once with `bun run install:ext` (copies it to `~/.pi/agent/extensions/pppi/`):
 
 | Command / tool | Purpose |
 |---|---|
 | `/omni` | mark the current pi session as this machine's omni (gateway resumes it) |
 | `/pair` | print the pairing QR + link for web/Android clients |
 | `/profile` | set this session's name / color / description |
-| `sspi_profiles` | tool: list profiles (agents read descriptions to pick targets) |
+| `pppi_profiles` | tool: list profiles (agents read descriptions to pick targets) |
 
 ## Omni tools (what the agent gets)
 
 | Tool | Purpose |
 |---|---|
-| `omni_repos` | register / list / remove managed repos (`~/.sspi/repos.json`) |
+| `omni_repos` | register / list / remove managed repos (`~/.pppi/repos.json`) |
 | `omni_sessions` | open pi sessions (pigeon registry) mapped to repos |
 | `omni_send` | delegate a task to a repo's session (async, msgId ticket) |
 | `omni_replies` | collect replies to sent messages |

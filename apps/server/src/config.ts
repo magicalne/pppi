@@ -14,14 +14,14 @@ export type ServerConfig = {
 	cwd: string;
 };
 
-export function sspiDir(): string {
-	return process.env.SSPI_DIR ?? join(homedir(), ".sspi");
+export function pppiDir(): string {
+	return process.env.PPPI_DIR ?? join(homedir(), ".pppi");
 }
 
 export function loadOrCreateConfig(
 	opts: { port?: number; host?: string; token?: string; cwd?: string } = {},
 ): ServerConfig {
-	const dir = sspiDir();
+	const dir = pppiDir();
 	const path = join(dir, "config.json");
 	let stored: { token?: string; port?: number; host?: string } = {};
 	if (existsSync(path)) {

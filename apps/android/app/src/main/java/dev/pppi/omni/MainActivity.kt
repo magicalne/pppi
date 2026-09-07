@@ -1,4 +1,4 @@
-package dev.sspi.omni
+package dev.pppi.omni
 
 import android.Manifest
 import android.content.Context
@@ -94,12 +94,12 @@ import kotlin.concurrent.thread
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 
-// sspi — **pi — one omni agent, every screen.
+// pppi — **pi — one omni agent, every screen.
 // Design: docs/design/ui-prd.md — "talk to a person, not a terminal".
 
 // ---------------------------------------------------------------- themes (PRD §8)
 
-data class SspiTheme(
+data class PppiTheme(
 	val id: String,
 	val name: String,
 	val mood: String,
@@ -115,36 +115,36 @@ data class SspiTheme(
 	val danger: Color,
 )
 
-val SspiThemes = listOf(
-	SspiTheme(
+val PppiThemes = listOf(
+	PppiTheme(
 		"dusk", "Dusk", "lamplight",
 		bg = Color(0xFF171412), surface = Color(0xFF201C19), text = Color(0xFFF2EAE0),
 		dim = Color(0xFF9A8F83), accent = Color(0xFFE8965A), accentInk = Color(0xFF1A130C),
 		userBubble = Color(0xFF2E2823), userBubbleInk = Color(0xFFF2EAE0),
 		line = Color(0xFF2B2622), danger = Color(0xFFE5484D),
 	),
-	SspiTheme(
+	PppiTheme(
 		"dawn", "Dawn", "morning paper",
 		bg = Color(0xFFFAF6F0), surface = Color(0xFFFFFFFF), text = Color(0xFF2A2620),
 		dim = Color(0xFF8A8177), accent = Color(0xFFD96C47), accentInk = Color(0xFFFFFFFF),
 		userBubble = Color(0xFFF5E7D8), userBubbleInk = Color(0xFF4A3F33),
 		line = Color(0xFFEAE2D8), danger = Color(0xFFC62A2F),
 	),
-	SspiTheme(
+	PppiTheme(
 		"slate", "Slate", "cool focus",
 		bg = Color(0xFF0E1116), surface = Color(0xFF151A21), text = Color(0xFFE6EDF3),
 		dim = Color(0xFF8B949E), accent = Color(0xFF7AA2FF), accentInk = Color(0xFF0B1020),
 		userBubble = Color(0xFF1C2740), userBubbleInk = Color(0xFFE6EDF3),
 		line = Color(0xFF212833), danger = Color(0xFFF2555A),
 	),
-	SspiTheme(
+	PppiTheme(
 		"paper", "Paper", "pen & ink",
 		bg = Color(0xFFFFFFFF), surface = Color(0xFFF6F6F4), text = Color(0xFF141414),
 		dim = Color(0xFF6B6B6B), accent = Color(0xFF141414), accentInk = Color(0xFFFFFFFF),
 		userBubble = Color(0xFFEFEFEC), userBubbleInk = Color(0xFF141414),
 		line = Color(0xFFE6E6E2), danger = Color(0xFFC62A2F),
 	),
-	SspiTheme(
+	PppiTheme(
 		"matcha", "Matcha", "greenhouse",
 		bg = Color(0xFFF3F7F0), surface = Color(0xFFFFFFFF), text = Color(0xFF22301F),
 		dim = Color(0xFF7A8873), accent = Color(0xFF5B8C51), accentInk = Color(0xFFFFFFFF),
@@ -153,13 +153,13 @@ val SspiThemes = listOf(
 	),
 )
 
-fun themeById(id: String): SspiTheme = SspiThemes.firstOrNull { it.id == id } ?: SspiThemes.first()
+fun themeById(id: String): PppiTheme = PppiThemes.firstOrNull { it.id == id } ?: PppiThemes.first()
 
 class MainActivity : ComponentActivity() {
 	override fun onCreate(savedInstanceState: Bundle?) {
 		super.onCreate(savedInstanceState)
 		setContent {
-			val prefs = remember { getSharedPreferences("sspi", Context.MODE_PRIVATE) }
+			val prefs = remember { getSharedPreferences("pppi", Context.MODE_PRIVATE) }
 			var themeId by remember { mutableStateOf(prefs.getString("theme", "dusk") ?: "dusk") }
 			val theme = themeById(themeId)
 			val setTheme: (String) -> Unit = { id ->
@@ -174,7 +174,7 @@ class MainActivity : ComponentActivity() {
 				},
 			) {
 				Surface(modifier = Modifier.fillMaxSize(), color = theme.bg) {
-					SspiApp(theme, setTheme)
+					PppiApp(theme, setTheme)
 				}
 			}
 		}
@@ -197,10 +197,10 @@ typealias ClientFactory = (
 	token: String,
 	onEvent: (ServerEvent) -> Unit,
 	onConnection: (Boolean) -> Unit,
-) -> SspiConnection
+) -> PppiConnection
 
 @Composable
-fun SspiApp(theme: SspiTheme, setTheme: (String) -> Unit) {
+fun PppiApp(theme: PppiTheme, setTheme: (String) -> Unit) {
 	val context = LocalContext.current
 	val store = remember { ConnectionsStore(context) }
 	var connections by remember { mutableStateOf(store.load()) }
@@ -302,7 +302,7 @@ fun SspiApp(theme: SspiTheme, setTheme: (String) -> Unit) {
 
 @Composable
 fun MachinesDrawer(
-	theme: SspiTheme,
+	theme: PppiTheme,
 	connections: List<Connection>,
 	activeId: String?,
 	onSwitch: (String) -> Unit,
@@ -377,7 +377,7 @@ fun MachinesDrawer(
 			onValueChange = { link = it },
 			placeholder = { Text("Paste pair link or server URL", color = theme.dim, fontSize = 14.sp) },
 			singleLine = true,
-			modifier = Modifier.fillMaxWidth().testTag("sspi.link"),
+			modifier = Modifier.fillMaxWidth().testTag("pppi.link"),
 			colors = fieldColors(theme),
 		)
 		Spacer(Modifier.height(8.dp))
@@ -386,7 +386,7 @@ fun MachinesDrawer(
 			onValueChange = { token = it },
 			placeholder = { Text("Token (skip if the link has one)", color = theme.dim, fontSize = 14.sp) },
 			singleLine = true,
-			modifier = Modifier.fillMaxWidth().testTag("sspi.addToken"),
+			modifier = Modifier.fillMaxWidth().testTag("pppi.addToken"),
 			colors = fieldColors(theme),
 		)
 		error?.let {
@@ -407,14 +407,14 @@ fun MachinesDrawer(
 						onAdd(parsed.first, parsed.second)
 					}
 				},
-				modifier = Modifier.weight(1f).testTag("sspi.addMachine"),
+				modifier = Modifier.weight(1f).testTag("pppi.addMachine"),
 				colors = ButtonDefaults.buttonColors(containerColor = theme.accent, contentColor = theme.accentInk),
 			) {
 				Text("Add", fontSize = 14.sp)
 			}
 			Button(
 				onClick = onScan,
-				modifier = Modifier.weight(1f).testTag("sspi.scan"),
+				modifier = Modifier.weight(1f).testTag("pppi.scan"),
 				colors = ButtonDefaults.buttonColors(containerColor = theme.surface, contentColor = theme.text),
 			) {
 				Text("Scan QR", fontSize = 14.sp)
@@ -439,7 +439,7 @@ fun parseHexColor(hex: String?): Color? {
 // ---------------------------------------------------------------- pairing
 
 @Composable
-fun PairingScreen(theme: SspiTheme, onScan: () -> Unit = {}, onPair: (String, String) -> Unit) {
+fun PairingScreen(theme: PppiTheme, onScan: () -> Unit = {}, onPair: (String, String) -> Unit) {
 	var server by remember { mutableStateOf("") }
 	var token by remember { mutableStateOf("") }
 	var error by remember { mutableStateOf<String?>(null) }
@@ -451,7 +451,7 @@ fun PairingScreen(theme: SspiTheme, onScan: () -> Unit = {}, onPair: (String, St
 			.windowInsetsPadding(WindowInsets.safeDrawing)
 			.padding(24.dp),
 	) {
-		Text("sspi", fontSize = 40.sp, color = theme.text)
+		Text("pppi", fontSize = 40.sp, color = theme.text)
 		Text("**pi — pointer-pointer to pi", fontSize = 14.sp, color = theme.dim)
 		Spacer(Modifier.height(32.dp))
 		Text("Pair with your omni agent", fontSize = 20.sp, color = theme.text)
@@ -468,7 +468,7 @@ fun PairingScreen(theme: SspiTheme, onScan: () -> Unit = {}, onPair: (String, St
 			label = { Text("Pair link or server URL") },
 			placeholder = { Text("http://192.168.1.10:8787/?pair=…") },
 			singleLine = true,
-			modifier = Modifier.fillMaxWidth().testTag("sspi.server"),
+			modifier = Modifier.fillMaxWidth().testTag("pppi.server"),
 			colors = fieldColors(theme),
 		)
 		Spacer(Modifier.height(12.dp))
@@ -477,7 +477,7 @@ fun PairingScreen(theme: SspiTheme, onScan: () -> Unit = {}, onPair: (String, St
 			onValueChange = { token = it },
 			label = { Text("Token (skip if the link has one)") },
 			singleLine = true,
-			modifier = Modifier.fillMaxWidth().testTag("sspi.token"),
+			modifier = Modifier.fillMaxWidth().testTag("pppi.token"),
 			colors = fieldColors(theme),
 		)
 		Spacer(Modifier.height(20.dp))
@@ -491,14 +491,14 @@ fun PairingScreen(theme: SspiTheme, onScan: () -> Unit = {}, onPair: (String, St
 						onPair(parsed.first, parsed.second)
 					}
 				},
-				modifier = Modifier.weight(1f).testTag("sspi.connect"),
+				modifier = Modifier.weight(1f).testTag("pppi.connect"),
 				colors = ButtonDefaults.buttonColors(containerColor = theme.accent, contentColor = theme.accentInk),
 			) {
 				Text("Connect")
 			}
 			Button(
 				onClick = onScan,
-				modifier = Modifier.weight(1f).testTag("sspi.scan"),
+				modifier = Modifier.weight(1f).testTag("pppi.scan"),
 				colors = ButtonDefaults.buttonColors(containerColor = theme.surface, contentColor = theme.text),
 			) {
 				Text("Scan QR")
@@ -512,7 +512,7 @@ fun PairingScreen(theme: SspiTheme, onScan: () -> Unit = {}, onPair: (String, St
 }
 
 @Composable
-private fun fieldColors(theme: SspiTheme) = OutlinedTextFieldDefaults.colors(
+private fun fieldColors(theme: PppiTheme) = OutlinedTextFieldDefaults.colors(
 	focusedTextColor = theme.text,
 	unfocusedTextColor = theme.text,
 	focusedBorderColor = theme.accent,
@@ -527,14 +527,14 @@ private fun fieldColors(theme: SspiTheme) = OutlinedTextFieldDefaults.colors(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
-	theme: SspiTheme,
+	theme: PppiTheme,
 	server: String,
 	token: String,
 	onDisconnect: () -> Unit,
 	onOpenThemes: () -> Unit,
 	onOpenMachines: () -> Unit = {},
 	onConnectionInfo: (String?, String?) -> Unit = { _, _ -> },
-	clientFactory: ClientFactory = ::sspiClientFactory,
+	clientFactory: ClientFactory = ::pppiClientFactory,
 	sessionsFetcher: (String, String) -> SessionsResponseDto? = { s, t -> fetchSessions(s, t) },
 	pairFetcher: (String, String) -> PairInfoDto? = { s, t -> fetchPairInfo(s, t) },
 ) {
@@ -595,7 +595,7 @@ fun ChatScreen(
 						messages.addAll(evt.history.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId, it.ts) })
 						hasMoreHistory = evt.history.size >= HISTORY_PAGE
 						// learn the machine's name + omni profile color once, off the UI thread
-						thread(name = "sspi-learn") {
+						thread(name = "pppi-learn") {
 							try {
 								val info = pairFetcher(server, token)
 								val sess = sessionsFetcher(server, token)
@@ -729,7 +729,7 @@ fun ChatScreen(
 			maxOf(minBuf * 2, 32000 * 2),
 		)
 		record.startRecording()
-		thread(name = "sspi-rec") {
+		thread(name = "pppi-rec") {
 			val buf = ShortArray(1600) // 100 ms @16 kHz
 			while (keepRecording.get()) {
 				val n = record.read(buf, 0, buf.size)
@@ -752,7 +752,7 @@ fun ChatScreen(
 		recording = false
 		haptics.performHapticFeedback(HapticFeedbackType.LongPress)
 		// give the reader thread a beat to flush the last chunk
-		thread(name = "sspi-send") {
+		thread(name = "pppi-send") {
 			Thread.sleep(150)
 			val wav = WavEncoder.encode(chunks.toList())
 			if (wav.size <= 44) {
@@ -771,7 +771,7 @@ fun ChatScreen(
 		voiceTentative = ""
 		voiceMachine.reset()
 		voicePhase = VoicePhase.LISTENING
-		thread(name = "sspi-voice") {
+		thread(name = "pppi-voice") {
 			try {
 				val client = VoiceClient(
 					server,
@@ -1091,13 +1091,13 @@ fun ChatScreen(
 						placeholder = "Message ${selected.label}…",
 						theme = theme,
 						enabled = !recording,
-						modifier = Modifier.weight(1f).testTag("sspi.composer"),
+						modifier = Modifier.weight(1f).testTag("pppi.composer"),
 					)
 				}
 				Box(
 					modifier = Modifier
 						.size(44.dp)
-						.testTag("sspi.mic")
+						.testTag("pppi.mic")
 						.clip(CircleShape)
 						.background(if (voiceOn || recording) theme.danger else theme.accent)
 						.pointerInput(voiceOn) {
@@ -1264,7 +1264,7 @@ private fun TextFieldWithSend(
 	onValueChange: (String) -> Unit,
 	onSend: () -> Unit,
 	placeholder: String,
-	theme: SspiTheme,
+	theme: PppiTheme,
 	enabled: Boolean,
 	modifier: Modifier = Modifier,
 ) {
@@ -1286,7 +1286,7 @@ private fun TextFieldWithSend(
 			focusedIndicatorColor = Color.Transparent,
 			unfocusedIndicatorColor = Color.Transparent,
 		),
-		modifier = modifier.testTag("sspi.composer"),
+		modifier = modifier.testTag("pppi.composer"),
 	)
 }
 
@@ -1299,7 +1299,7 @@ private fun stateLabel(state: String): String = when (state) {
 /** One row of the target tree; draws a vertical guide cell per ancestor level. */
 @Composable
 private fun TreeRow(
-	theme: SspiTheme,
+	theme: PppiTheme,
 	name: String,
 	state: String,
 	active: Boolean = false,

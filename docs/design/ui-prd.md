@@ -1,4 +1,4 @@
-# sspi UI Design PRD — "Talk to a person, not a terminal"
+# pppi UI Design PRD — "Talk to a person, not a terminal"
 
 Status: **DRAFT for review** · Scope: web + Android (one design, two implementations) · Baseline: mobile 390px
 
@@ -87,7 +87,7 @@ secrets rules unchanged (clients hold only pairing tokens).
    ╭────────────────────────────────╮
    │ SESSIONS                       │
    │ ◉ Omni              the fleet  │   depth 0
-   │ │ ◉ sspi            working…   │   depth 1 = repo (= its main session)
+   │ │ ◉ pppi            working…   │   depth 1 = repo (= its main session)
    │ │ │ ◉ fix-auth      idle       │   depth 2 = worktrees (bare name)
    │ │ │ ◉ perf         reading…   │
    │ │ ◉ pigeon           idle      │
@@ -128,7 +128,7 @@ come from the session's real activity (pi events), mapped:
 | tool: write/edit      | `writing tests/e2e.spec`   | tiny pencil icon  |
 | tool: bash            | `running bun test`         | tiny spinner      |
 | streaming text        | `typing…`                  | blinking caret    |
-| pigeon send/reply     | `asking sspi · main…`      | tiny arrow        |
+| pigeon send/reply     | `asking pppi · main…`      | tiny arrow        |
 | idle                  | (blank — quiet is polite)  | none              |
 | error                 | `hit a snag — tap to see`  | rose dot          |
 

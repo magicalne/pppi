@@ -12,8 +12,8 @@ describe("repo registry", () => {
 	let repo: string;
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "sspi-reg-"));
-		repo = realpathSync(mkdtempSync(join(tmpdir(), "sspi-git-")));
+		dir = mkdtempSync(join(tmpdir(), "pppi-reg-"));
+		repo = realpathSync(mkdtempSync(join(tmpdir(), "pppi-git-")));
 		mkdirSync(repo, { recursive: true });
 		execFileSync("git", ["-C", repo, "init", "-q"]);
 		execFileSync("git", ["-C", repo, "config", "user.email", "t@t"]);
@@ -45,7 +45,7 @@ describe("repo registry", () => {
 
 	it("rejects non-git directories and duplicate names", () => {
 		const reg = loadRegistry(dir);
-		const notGit = mkdtempSync(join(tmpdir(), "sspi-notgit-"));
+		const notGit = mkdtempSync(join(tmpdir(), "pppi-notgit-"));
 		expect(addRepo(reg, notGit, undefined, dir)).toMatchObject({ ok: false });
 		expect(addRepo(reg, repo, "demo", dir).ok).toBe(true);
 		expect(addRepo(reg, repo, "demo", dir)).toMatchObject({ ok: false });
@@ -56,7 +56,7 @@ describe("worktrees", () => {
 	let repo: string;
 
 	beforeEach(() => {
-		repo = realpathSync(mkdtempSync(join(tmpdir(), "sspi-wt-")));
+		repo = realpathSync(mkdtempSync(join(tmpdir(), "pppi-wt-")));
 		execFileSync("git", ["-C", repo, "init", "-q"]);
 		execFileSync("git", ["-C", repo, "config", "user.email", "t@t"]);
 		execFileSync("git", ["-C", repo, "config", "user.name", "t"]);

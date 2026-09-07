@@ -1,4 +1,4 @@
-package dev.sspi.omni
+package dev.pppi.omni
 
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -23,14 +23,14 @@ class ChatScreenTest {
 	@get:Rule
 	val rule = createComposeRule()
 
-	private lateinit var fake: FakeSspiConnection
+	private lateinit var fake: FakePppiConnection
 	private var disconnected = false
 	/** tests can pre-seed the fetchers before emitting HelloOk */
 	private var fakeSessionsResponse: SessionsResponseDto? = null
 
 	@Before
 	fun setUp() {
-		fake = FakeSspiConnection()
+		fake = FakePppiConnection()
 		disconnected = false
 		val theme = themeById("dusk")
 		rule.setContent {
@@ -84,8 +84,8 @@ class ChatScreenTest {
 
 	@Test
 	fun composerSendsViaImeAction() {
-		rule.onNodeWithTag("sspi.composer").performTextInput("hello omni")
-		rule.onNodeWithTag("sspi.composer").performImeAction()
+		rule.onNodeWithTag("pppi.composer").performTextInput("hello omni")
+		rule.onNodeWithTag("pppi.composer").performImeAction()
 		rule.waitForIdle()
 		org.junit.Assert.assertEquals(listOf("hello omni"), fake.chats)
 	}

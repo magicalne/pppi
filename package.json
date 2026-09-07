@@ -1,5 +1,5 @@
 {
-	"name": "sspi",
+	"name": "pppi",
 	"private": true,
 	"version": "0.1.0",
 	"description": "**pi — a pointer-pointer to pi. One omni agent managing your pi sessions: repos on main, worktrees as branches.",

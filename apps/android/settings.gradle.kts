@@ -18,5 +18,5 @@ dependencyResolutionManagement {
 		mavenCentral()
 	}
 }
-rootProject.name = "sspi-android"
+rootProject.name = "pppi-android"
 include(":app")

@@ -1,9 +1,9 @@
-package dev.sspi.omni
+package dev.pppi.omni
 
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Scriptable [SspiConnection] for UI tests: records calls, replays events. */
-class FakeSspiConnection : SspiConnection {
+/** Scriptable [PppiConnection] for UI tests: records calls, replays events. */
+class FakePppiConnection : PppiConnection {
 
 	lateinit var onEvent: (ServerEvent) -> Unit
 	lateinit var onConnection: (Boolean) -> Unit

@@ -8,7 +8,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { AgentStatus, ContextInfo, ModelInfo } from "@sspi/protocol";
+import type { AgentStatus, ContextInfo, ModelInfo } from "@pppi/protocol";
 
 export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming";
 

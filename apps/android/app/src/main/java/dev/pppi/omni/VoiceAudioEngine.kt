@@ -1,4 +1,4 @@
-package dev.sspi.omni
+package dev.pppi.omni
 
 import android.media.AudioAttributes
 import android.media.AudioFormat

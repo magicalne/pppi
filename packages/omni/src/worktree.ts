@@ -1,5 +1,5 @@
 // Git worktree management.
-// Layer 2 of the sspi hierarchy: repo session (main branch) -> worktree branches.
+// Layer 2 of the pppi hierarchy: repo session (main branch) -> worktree branches.
 // Worktrees live under <repo>/.worktrees/<name> on branches wt/<name>.
 
 import { execFile } from "node:child_process";

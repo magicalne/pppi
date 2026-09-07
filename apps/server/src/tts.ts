@@ -1,10 +1,10 @@
 // Local text-to-speech for interactive mode. Same posture as stt.ts: models
 // live on this Mac, nothing leaves the machine. Providers are pluggable —
-// pick with SSPI_TTS_PROVIDER=kokoro|macos-say|auto (default auto: kokoro
+// pick with PPPI_TTS_PROVIDER=kokoro|macos-say|auto (default auto: kokoro
 // when its model is cached, else the always-available macOS `say`).
 //
 // Kokoro model resolution order (mirrors stt.ts):
-//   1. $SSPI_TTS_MODEL (dir containing a kokoro .onnx + voices.bin, or the .onnx itself)
+//   1. $PPPI_TTS_MODEL (dir containing a kokoro .onnx + voices.bin, or the .onnx itself)
 //   2. onnx-community/Kokoro-82M-v1.0-ONNX in the HuggingFace cache
 //
 // synthesize() takes PROSE ONLY — strip code/markdown with speakProse()
@@ -14,7 +14,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import type { VoiceTtsStatus } from "@sspi/protocol";
+import type { VoiceTtsStatus } from "@pppi/protocol";
 import { decodeWav } from "./wav.ts";
 
 export type TtsChunk = { pcm: Buffer; rate: number };
@@ -26,7 +26,7 @@ export interface TtsProvider extends VoiceTts {
 // ---------------------------------------------------------------- provider resolution
 
 export function resolveTtsProvider(): TtsProvider {
-	const explicit = (process.env.SSPI_TTS_PROVIDER ?? "auto").toLowerCase();
+	const explicit = (process.env.PPPI_TTS_PROVIDER ?? "auto").toLowerCase();
 	if (explicit === "macos-say") return new MacosSayProvider();
 	const kokoro = new KokoroProvider();
 	if (explicit === "kokoro") return kokoro;
@@ -39,11 +39,11 @@ const KOKORO_REPO_DIR = "models--onnx-community--Kokoro-82M-v1.0-ONNX";
 const DEFAULT_KOKORO_VOICE = "af_heart";
 
 export function resolveKokoroModel(): { dir: string } | { reason: string } {
-	const explicit = process.env.SSPI_TTS_MODEL;
+	const explicit = process.env.PPPI_TTS_MODEL;
 	if (explicit) {
 		const onnxPath = existsSync(explicit) ? findOnnx(explicit) : "";
 		if (onnxPath) return { dir: explicit };
-		if (explicit) return { reason: `SSPI_TTS_MODEL dir has no onnx/model*.onnx: ${explicit}` };
+		if (explicit) return { reason: `PPPI_TTS_MODEL dir has no onnx/model*.onnx: ${explicit}` };
 	}
 	// HF cache snapshots (as laid out by `huggingface-cli download` or git lfs)
 	const hfCache = join(homedir(), ".cache", "huggingface", "hub", KOKORO_REPO_DIR, "snapshots");
@@ -56,7 +56,7 @@ export function resolveKokoroModel(): { dir: string } | { reason: string } {
 		// not cached
 	}
 	return {
-		reason: `no kokoro model cached — download ${KOKORO_REPO_DIR} (config.json, onnx/model_quantized.onnx, voices/<voice>.bin) and set SSPI_TTS_MODEL, or run: bunx --bun huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX --include "onnx/model_quantized.onnx" "voices/af_heart.bin" "config.json" "tokenizer*"`,
+		reason: `no kokoro model cached — download ${KOKORO_REPO_DIR} (config.json, onnx/model_quantized.onnx, voices/<voice>.bin) and set PPPI_TTS_MODEL, or run: bunx --bun huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX --include "onnx/model_quantized.onnx" "voices/af_heart.bin" "config.json" "tokenizer*"`,
 	};
 }
 
@@ -121,7 +121,7 @@ async function loadKokoroEngine(): Promise<KokoroEngine | null> {
 			}>;
 		};
 	};
-	// local snapshot dir (SSPI_TTS_MODEL or the HF cache) — never the network
+	// local snapshot dir (PPPI_TTS_MODEL or the HF cache) — never the network
 	const tts = await mod.KokoroTTS.from_pretrained(model.dir, {
 		dtype: "q8",
 		device: "cpu",
@@ -160,7 +160,7 @@ export class MacosSayProvider implements TtsProvider {
 	private voice: string;
 
 	constructor(voice?: string) {
-		this.voice = voice ?? process.env.SSPI_SAY_VOICE ?? pickSayVoice();
+		this.voice = voice ?? process.env.PPPI_SAY_VOICE ?? pickSayVoice();
 		this.status = {
 			ready: true,
 			provider: this.id,
@@ -169,7 +169,7 @@ export class MacosSayProvider implements TtsProvider {
 	}
 
 	async *synthesize(text: string): AsyncIterable<TtsChunk> {
-		const dir = mkdtempSync(join(tmpdir(), "sspi-say-"));
+		const dir = mkdtempSync(join(tmpdir(), "pppi-say-"));
 		const wavPath = join(dir, "out.wav");
 		try {
 			await new Promise<void>((resolve, reject) => {

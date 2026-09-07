@@ -1,4 +1,4 @@
-// The five sspi themes (docs/design/ui-prd.md §8). ids map to [data-theme] in tokens.css.
+// The five pppi themes (docs/design/ui-prd.md §8). ids map to [data-theme] in tokens.css.
 
 export type ThemeId = "dusk" | "dawn" | "slate" | "paper" | "matcha";
 
@@ -10,7 +10,7 @@ export const THEMES: { id: ThemeId; name: string; mood: string }[] = [
 	{ id: "matcha", name: "Matcha", mood: "greenhouse" },
 ];
 
-const KEY = "sspi.theme";
+const KEY = "pppi.theme";
 
 export function loadTheme(): ThemeId {
 	const saved = localStorage.getItem(KEY) as ThemeId | null;

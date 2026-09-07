@@ -15,8 +15,8 @@
 		"jsx": "react-jsx",
 		"baseUrl": ".",
 		"paths": {
-			"@sspi/protocol": ["packages/protocol/src/index.ts"],
-			"@sspi/omni": ["packages/omni/src/extension.ts"]
+			"@pppi/protocol": ["packages/protocol/src/index.ts"],
+			"@pppi/omni": ["packages/omni/src/extension.ts"]
 		},
 		"types": ["bun-types", "node", "vitest/globals"]
 	},

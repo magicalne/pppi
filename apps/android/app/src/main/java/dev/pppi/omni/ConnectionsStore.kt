@@ -1,4 +1,4 @@
-package dev.sspi.omni
+package dev.pppi.omni
 
 import android.content.Context
 import kotlinx.serialization.Serializable
@@ -27,7 +27,7 @@ fun parsePairInput(raw: String, tokenFallback: String = ""): Pair<String, String
 }
 
 /** Machine-scoped connection list backed by SharedPreferences. */
-class ConnectionsStore(context: Context, prefsName: String = "sspi") {
+class ConnectionsStore(context: Context, prefsName: String = "pppi") {
 
 	private val prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
 	private val json = Json { ignoreUnknownKeys = true }

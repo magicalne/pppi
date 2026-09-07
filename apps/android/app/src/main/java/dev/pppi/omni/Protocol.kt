@@ -1,4 +1,4 @@
-package dev.sspi.omni
+package dev.pppi.omni
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable

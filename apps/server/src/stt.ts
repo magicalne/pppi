@@ -3,7 +3,7 @@
 // parakeet-unified-en-0.6b (rank 1 in pi-transcribe's catalog).
 //
 // Model resolution order:
-//   1. $SSPI_STT_MODEL (explicit gguf path)
+//   1. $PPPI_STT_MODEL (explicit gguf path)
 //   2. pi-transcribe's configured model (~/.pi/agent/pi-transcribe.json)
 //   3. pi-transcribe's recommended model in the HuggingFace cache
 
@@ -18,9 +18,9 @@ const RECOMMENDED_FILE = "parakeet-unified-en-0.6b-Q8_0.gguf";
 export type SttStatus = { ready: true; modelPath: string; modelId: string } | { ready: false; reason: string };
 
 export function resolveSttModel(): SttStatus {
-	const explicit = process.env.SSPI_STT_MODEL;
+	const explicit = process.env.PPPI_STT_MODEL;
 	if (explicit) {
-		if (!existsSync(explicit)) return { ready: false, reason: `SSPI_STT_MODEL points to a missing file: ${explicit}` };
+		if (!existsSync(explicit)) return { ready: false, reason: `PPPI_STT_MODEL points to a missing file: ${explicit}` };
 		return { ready: true, modelPath: explicit, modelId: explicit };
 	}
 
@@ -46,7 +46,7 @@ export function resolveSttModel(): SttStatus {
 
 	return {
 		ready: false,
-		reason: `no local STT model found. Run /transcribe once in pi (pi-transcribe) to download the recommended model (${RECOMMENDED_FILE}), or set SSPI_STT_MODEL=/path/to/model.gguf`,
+		reason: `no local STT model found. Run /transcribe once in pi (pi-transcribe) to download the recommended model (${RECOMMENDED_FILE}), or set PPPI_STT_MODEL=/path/to/model.gguf`,
 	};
 }
 

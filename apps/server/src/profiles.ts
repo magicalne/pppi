@@ -1,6 +1,6 @@
 // Session profiles: identity for pi sessions (name/color/description).
 //
-// Explicit profiles live at $SSPI_DIR/profiles/<sessionId>.json (written by
+// Explicit profiles live at $PPPI_DIR/profiles/<sessionId>.json (written by
 // the /profile pi command). Sessions without one get a *derived* profile —
 // deterministic name/color from the registry — so attribution coloring works
 // before anyone has run /profile. The JSON shape here is the contract the
@@ -9,8 +9,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import type { Profile } from "@sspi/protocol";
-import { sspiDir } from "./config.ts";
+import type { Profile } from "@pppi/protocol";
+import { pppiDir } from "./config.ts";
 
 export const PROFILE_COLORS = [
 	"#e8b14a", // amber
@@ -51,7 +51,7 @@ export function readProfileFile(sessionId: string, dir: string): Profile | null 
 export function buildProfiles(
 	sessionIds: string[],
 	info: { id: string; name?: string | null; cwd?: string }[],
-	dir: string = sspiDir(),
+	dir: string = pppiDir(),
 ): Record<string, Profile> {
 	const byId = new Map(info.map((s) => [s.id, s]));
 	const out: Record<string, Profile> = {};
@@ -73,8 +73,8 @@ export function buildProfiles(
 	return out;
 }
 
-/** All explicitly saved profiles in $SSPI_DIR/profiles (for the pi extension's profiles_list tool). */
-export function listExplicitProfiles(dir: string = sspiDir()): Profile[] {
+/** All explicitly saved profiles in $PPPI_DIR/profiles (for the pi extension's profiles_list tool). */
+export function listExplicitProfiles(dir: string = pppiDir()): Profile[] {
 	const d = join(dir, "profiles");
 	if (!existsSync(d)) return [];
 	const out: Profile[] = [];

@@ -1,4 +1,4 @@
-package dev.sspi.omni
+package dev.pppi.omni
 
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -27,7 +27,7 @@ class PairingScreenTest {
 	@Test
 	fun emptyFieldsShowValidationError() {
 		setContent()
-		rule.onNodeWithTag("sspi.connect").performClick()
+		rule.onNodeWithTag("pppi.connect").performClick()
 		rule.onNodeWithText("need a pair link, or a URL + token").assertIsDisplayed()
 		assertEquals(null, paired)
 	}
@@ -35,17 +35,17 @@ class PairingScreenTest {
 	@Test
 	fun validInputPairsWithTrimmedServer() {
 		setContent()
-		rule.onNodeWithTag("sspi.server").performTextInput("http://10.0.2.2:8787/")
-		rule.onNodeWithTag("sspi.token").performTextInput("abc123")
-		rule.onNodeWithTag("sspi.connect").performClick()
+		rule.onNodeWithTag("pppi.server").performTextInput("http://10.0.2.2:8787/")
+		rule.onNodeWithTag("pppi.token").performTextInput("abc123")
+		rule.onNodeWithTag("pppi.connect").performClick()
 		assertEquals("http://10.0.2.2:8787" to "abc123", paired)
 	}
 
 	@Test
 	fun pairLinkCarriesTokenWithoutTokenField() {
 		setContent()
-		rule.onNodeWithTag("sspi.server").performTextInput("http://192.168.1.9:8787/?pair=deadbeef99")
-		rule.onNodeWithTag("sspi.connect").performClick()
+		rule.onNodeWithTag("pppi.server").performTextInput("http://192.168.1.9:8787/?pair=deadbeef99")
+		rule.onNodeWithTag("pppi.connect").performClick()
 		assertEquals("http://192.168.1.9:8787" to "deadbeef99", paired)
 	}
 

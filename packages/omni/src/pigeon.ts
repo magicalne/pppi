@@ -1,6 +1,6 @@
 // Thin wrapper around the `pigeon` CLI (github.com/magicalne/pigeon).
 // pigeon lets independently started pi sessions discover each other, exchange
-// messages, and collect replies — the transport for the sspi hierarchy.
+// messages, and collect replies — the transport for the pppi hierarchy.
 
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";

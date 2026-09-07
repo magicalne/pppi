@@ -18,7 +18,7 @@ describe.skipIf(!supported || !modelStatus.ready)("stt (real model)", () => {
 	let wavPath: string;
 
 	it("transcribes say-generated speech", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "sspi-stt-"));
+		const dir = mkdtempSync(join(tmpdir(), "pppi-stt-"));
 		wavPath = join(dir, "input.wav");
 		execFileSync("say", ["-o", wavPath, "--data-format=LEI16@16000", phrase]);
 
@@ -36,7 +36,7 @@ describe.skipIf(!supported || !modelStatus.ready)("stt (real model)", () => {
 	}, 120_000);
 
 	it("streams partials for say-generated speech and finalizes the same phrase", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "sspi-stt-stream-"));
+		const dir = mkdtempSync(join(tmpdir(), "pppi-stt-stream-"));
 		const wavPath = join(dir, "input.wav");
 		execFileSync("say", ["-o", wavPath, "--data-format=LEI16@16000", phrase]);
 

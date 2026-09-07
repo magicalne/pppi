@@ -1,4 +1,4 @@
-// sspi gateway server.
+// pppi gateway server.
 //
 // Owns THE single omni agent session (apps talk to it; they never create
 // sessions), transcribes voice locally, and mirrors the conversation to every
@@ -10,8 +10,8 @@ import { existsSync } from "node:fs";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
-import { type PigeonSession, listSessions, pigeon } from "@sspi/omni/pigeon";
-import { loadRegistry } from "@sspi/omni/repos";
+import { type PigeonSession, listSessions, pigeon } from "@pppi/omni/pigeon";
+import { loadRegistry } from "@pppi/omni/repos";
 import type {
 	AgentInfo,
 	ChatEntry,
@@ -22,7 +22,7 @@ import type {
 	ServerEvent,
 	SessionsResponse,
 	Target,
-} from "@sspi/protocol";
+} from "@pppi/protocol";
 import fastify, { type FastifyInstance } from "fastify";
 import { minimatch } from "minimatch";
 import type { WebSocket } from "ws";
@@ -265,14 +265,14 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		const status = opts.stt.status;
 		return {
 			ok: true,
-			name: "sspi",
+			name: "pppi",
 			agent: agentInfo(),
 			stt: status.ready ? { ready: true, modelId: status.modelId } : { ready: false, reason: status.reason },
 		};
 	});
 
-	app.post<{ Headers: { authorization?: string; "x-sspi-token"?: string } }>("/api/voice", async (req, reply) => {
-		const presented = req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? req.headers["x-sspi-token"];
+	app.post<{ Headers: { authorization?: string; "x-pppi-token"?: string } }>("/api/voice", async (req, reply) => {
+		const presented = req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? req.headers["x-pppi-token"];
 		if (!presented || !tokensMatch(presented, opts.token)) {
 			return reply.code(401).send({ ok: false, error: "unauthorized" });
 		}

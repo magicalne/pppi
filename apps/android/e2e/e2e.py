@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sspi Android E2E driver — asserts the real UI flow over adb.
+"""pppi Android E2E driver — asserts the real UI flow over adb.
 
 Phases (coordinated by run.sh):
   pair     fresh install -> pair through the real UI -> connected
@@ -147,11 +147,11 @@ def tap_text(match: str, occurrence: int = 0) -> bool:
 # ---------------------------------------------------------------- phases
 
 def phase_pair() -> None:
-    adb("uninstall", "dev.sspi.omni", check=False)  # ok if not installed
+    adb("uninstall", "dev.pppi.omni", check=False)  # ok if not installed
     apk = os.environ["E2E_APK"]
     adb("install", apk)
-    shell("pm grant dev.sspi.omni android.permission.RECORD_AUDIO")
-    shell("am start -n dev.sspi.omni/.MainActivity")
+    shell("pm grant dev.pppi.omni android.permission.RECORD_AUDIO")
+    shell("am start -n dev.pppi.omni/.MainActivity")
     check("pairing screen appears", wait_for_text("Pair with your omni agent", 15))
 
     xml = dump()

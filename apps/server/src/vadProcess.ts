@@ -13,7 +13,7 @@
 import { createInterface } from "node:readline";
 import * as ort from "onnxruntime-node";
 
-const modelPath = process.argv[2] ?? process.env.SSPI_VAD_MODEL ?? "";
+const modelPath = process.argv[2] ?? process.env.PPPI_VAD_MODEL ?? "";
 if (!modelPath) {
 	console.error("vad-process: model path required");
 	process.exit(1);

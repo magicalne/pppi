@@ -1,7 +1,7 @@
 // Entry point pi loads for the omni extension.
 //
-//   pi -e /path/to/sspi/extensions/omni.ts        # one-off
-//   ln -s .../sspi/extensions/omni.ts ~/.pi/agent/extensions/sspi-omni.ts
+//   pi -e /path/to/pppi/extensions/omni.ts        # one-off
+//   ln -s .../pppi/extensions/omni.ts ~/.pi/agent/extensions/pppi-omni.ts
 //
 // See packages/omni/src/extension.ts for the implementation.
 

@@ -1,4 +1,4 @@
-import type { AgentState, AgentStatus, ChatEntry, ModelInfo, ServerEvent, SessionsResponse } from "@sspi/protocol";
+import type { AgentState, AgentStatus, ChatEntry, ModelInfo, ServerEvent, SessionsResponse } from "@pppi/protocol";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { StatusBar } from "./status/StatusBar.tsx";
 import { THEMES, type ThemeId, applyTheme, loadTheme } from "./theme.ts";
@@ -27,9 +27,18 @@ const HISTORY_PAGE = 50;
 
 const OMNI = (): Target => ({ id: undefined, label: "Omni" });
 
+// sspi → pppi rename: carry pre-rename localStorage keys (pairing, theme) across
+for (let i = localStorage.length - 1; i >= 0; i--) {
+	const key = localStorage.key(i);
+	if (!key?.startsWith("sspi.")) continue;
+	const next = `pppi.${key.slice(5)}`;
+	if (localStorage.getItem(next) === null) localStorage.setItem(next, localStorage.getItem(key) ?? "");
+	localStorage.removeItem(key);
+}
+
 function loadConnections(): Connection[] {
 	try {
-		const raw = localStorage.getItem("sspi.connections");
+		const raw = localStorage.getItem("pppi.connections");
 		if (raw) {
 			const list = JSON.parse(raw) as Connection[];
 			if (Array.isArray(list) && list.length) return list;
@@ -39,7 +48,7 @@ function loadConnections(): Connection[] {
 	}
 	// migrate the v0 single-pairing record
 	try {
-		const raw = localStorage.getItem("sspi.pairing");
+		const raw = localStorage.getItem("pppi.pairing");
 		if (raw) {
 			const p = JSON.parse(raw) as Pairing;
 			if (p.server && p.token) {
@@ -92,7 +101,7 @@ export default function App() {
 	const [theme, setTheme] = useState<ThemeId>(loadTheme);
 	const [tab, setTab] = useState<"chat" | "themes">("chat");
 	const [connections, setConnections] = useState<Connection[]>(loadConnections);
-	const [activeId, setActiveId] = useState<string | null>(() => localStorage.getItem("sspi.active"));
+	const [activeId, setActiveId] = useState<string | null>(() => localStorage.getItem("pppi.active"));
 	const [connected, setConnected] = useState(false);
 	const [msgs, setMsgs] = useState<Msg[]>([]);
 	const [agentState, setAgentState] = useState<AgentState>("starting");
@@ -119,12 +128,12 @@ export default function App() {
 	useEffect(() => applyTheme(theme), [theme]);
 
 	useEffect(() => {
-		localStorage.setItem("sspi.connections", JSON.stringify(connections));
-		if (connections.length) localStorage.removeItem("sspi.pairing"); // v0 key
+		localStorage.setItem("pppi.connections", JSON.stringify(connections));
+		if (connections.length) localStorage.removeItem("pppi.pairing"); // v0 key
 	}, [connections]);
 
 	useEffect(() => {
-		if (activeId) localStorage.setItem("sspi.active", activeId);
+		if (activeId) localStorage.setItem("pppi.active", activeId);
 	}, [activeId]);
 
 	// ?pair=<token> onboarding: opening the gateway's pair link pairs this browser
@@ -751,11 +760,11 @@ function Pairing({ onDone, notice }: { onDone: (p: Pairing) => void; notice: str
 					overflowX: "auto",
 				}}
 			>{`   ┌──────┐        ┌──────┐        ┌──────┐
-   │ sspi │ ─────► │  *p  │ ─────► │  pi  │
+   │ pppi │ ─────► │  *p  │ ─────► │  pi  │
    └──────┘        └──────┘        └──────┘`}</pre>
 			<h1 style={{ fontSize: 22 }}>Pair with your omni agent</h1>
 			<p style={{ color: "var(--dim)" }}>
-				Paste the pair link from <code style={{ fontFamily: "var(--font-mono)" }}>/pair</code> — or run the sspi server
+				Paste the pair link from <code style={{ fontFamily: "var(--font-mono)" }}>/pair</code> — or run the pppi server
 				on your Mac and enter its URL + token. Secrets never leave the machine.
 			</p>
 			<form

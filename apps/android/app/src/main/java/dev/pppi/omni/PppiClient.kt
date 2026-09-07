@@ -1,4 +1,4 @@
-package dev.sspi.omni
+package dev.pppi.omni
 
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -9,16 +9,16 @@ import okhttp3.WebSocketListener
 import java.util.concurrent.TimeUnit
 
 /**
- * Single-session client for the sspi gateway: one WebSocket mirroring the
+ * Single-session client for the pppi gateway: one WebSocket mirroring the
  * omni conversation, plus voice upload over REST. The pairing token is the
  * only credential; everything sensitive stays on the Mac.
  */
-class SspiClient(
+class PppiClient(
 	private var serverUrl: String,
 	private var token: String,
 	private val onEvent: (ServerEvent) -> Unit,
 	private val onConnection: (Boolean) -> Unit,
-) : SspiConnection {
+) : PppiConnection {
 
 	private val http = OkHttpClient.Builder()
 		.connectTimeout(5, TimeUnit.SECONDS)
@@ -56,7 +56,7 @@ class SspiClient(
 				}
 
 				override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {
-					android.util.Log.w("sspi", "ws failure: ${t.message}")
+					android.util.Log.w("pppi", "ws failure: ${t.message}")
 					onConnection(false)
 					scheduleReconnect()
 				}

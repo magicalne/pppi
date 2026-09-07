@@ -1,5 +1,5 @@
 #!/bin/bash
-# sspi Android E2E — one command, full system flow.
+# pppi Android E2E — one command, full system flow.
 #
 #   apps/android/e2e/run.sh
 #
@@ -10,7 +10,7 @@
 #   (auto-reconnect)
 #
 # Env:
-#   E2E_AVD   emulator name          (default sspi-test)
+#   E2E_AVD   emulator name          (default pppi-test)
 #   E2E_PORT  gateway port           (default 8791)
 #   KEEP=1    leave emulator + gateway running after the run
 #   SKIP_BUILD=1  reuse the last built APK
@@ -19,7 +19,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-AVD="${E2E_AVD:-sspi-test}"
+AVD="${E2E_AVD:-pppi-test}"
 PORT="${E2E_PORT:-8791}"
 ADB="${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools/adb"
 EMU="${ANDROID_HOME:-$HOME/Library/Android/sdk}/emulator/emulator"
@@ -38,7 +38,7 @@ trap cleanup EXIT
 if ! "$ADB" devices | grep -q "emulator.*device"; then
   echo "== booting emulator $AVD =="
   nohup "$EMU" -avd "$AVD" -no-window -no-audio -gpu swiftshader_indirect \
-    -no-snapshot -no-boot-anim > /tmp/sspi-e2e-emulator.log 2>&1 &
+    -no-snapshot -no-boot-anim > /tmp/pppi-e2e-emulator.log 2>&1 &
   EMU_PID=$!
   for i in $(seq 1 40); do
     [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
@@ -58,10 +58,10 @@ APK="$REPO/apps/android/app/build/outputs/apk/debug/app-debug.apk"
 
 # 3. throwaway mock gateway ----------------------------------------------
 echo "== starting mock gateway on :$PORT =="
-GW_DIR="$(mktemp -d /tmp/sspi-e2e-gw.XXXXXX)"
-MOCK_REPLY="mock omni: standing by" SSPI_DIR="$GW_DIR" nohup bun run "$REPO/apps/server/src/cli.ts" \
+GW_DIR="$(mktemp -d /tmp/pppi-e2e-gw.XXXXXX)"
+MOCK_REPLY="mock omni: standing by" PPPI_DIR="$GW_DIR" nohup bun run "$REPO/apps/server/src/cli.ts" \
   --host 127.0.0.1 --port "$PORT" \
-  --agent-cmd "bun $REPO/apps/server/src/mock-agent.mjs" > /tmp/sspi-e2e-gw.log 2>&1 &
+  --agent-cmd "bun $REPO/apps/server/src/mock-agent.mjs" > /tmp/pppi-e2e-gw.log 2>&1 &
 GW_PID=$!
 for i in $(seq 1 20); do
   curl -sf "http://127.0.0.1:$PORT/api/health" > /dev/null && break
@@ -97,8 +97,8 @@ else
   exit 1
 fi
 
-# 5. restart gateway (same SSPI_DIR -> same token) for the reconnect phase
-MOCK_REPLY="mock omni: standing by" SSPI_DIR="$GW_DIR" nohup bun run "$REPO/apps/server/src/cli.ts" \
+# 5. restart gateway (same PPPI_DIR -> same token) for the reconnect phase
+MOCK_REPLY="mock omni: standing by" PPPI_DIR="$GW_DIR" nohup bun run "$REPO/apps/server/src/cli.ts" \
   --host 127.0.0.1 --port "$PORT" \
   --agent-cmd "bun $REPO/apps/server/src/mock-agent.mjs" > /dev/null 2>&1 &
 GW_PID=$!

@@ -1,5 +1,5 @@
 // Registry of repos the omni agent manages.
-// Layer 1 of the sspi hierarchy: omni session -> repo sessions.
+// Layer 1 of the pppi hierarchy: omni session -> repo sessions.
 
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -17,7 +17,7 @@ export type RepoRegistry = {
 };
 
 export function registryPath(dir?: string): string {
-	return join(dir ?? process.env.SSPI_DIR ?? join(homedir(), ".sspi"), "repos.json");
+	return join(dir ?? process.env.PPPI_DIR ?? join(homedir(), ".pppi"), "repos.json");
 }
 
 export function loadRegistry(dir?: string): RepoRegistry {

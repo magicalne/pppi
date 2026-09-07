@@ -22,7 +22,7 @@ Two corrections to your recollection, both in your favor:
 - **There is no "ultra".** The top level is **`max`**.
 - **pi already normalizes both providers onto one canonical ladder** — you
   remembered right that "pi has made some conversion". Everything in pi (and
-  therefore in sspi) is expressed as:
+  therefore in pppi) is expressed as:
 
   ```
   off · minimal · low · medium · high · xhigh · max

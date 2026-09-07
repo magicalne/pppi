@@ -1,8 +1,8 @@
 {
-	"name": "@sspi/pi-ext",
+	"name": "@pppi/pi-ext",
 	"version": "0.1.0",
 	"private": true,
-	"description": "sspi pi extension: /omni, /pair, /profile commands + sspi_profiles tool.",
+	"description": "pppi pi extension: /omni, /pair, /profile commands + pppi_profiles tool.",
 	"type": "module",
 	"scripts": {
 		"install-ext": "bun run install.mjs"

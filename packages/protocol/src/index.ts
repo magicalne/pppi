@@ -1,4 +1,4 @@
-// Wire protocol between sspi clients (web / android) and the sspi gateway server.
+// Wire protocol between pppi clients (web / android) and the pppi gateway server.
 // One omni agent session; every client mirrors the same conversation.
 // v2: targets (omni default, or a peer session id) + rich tool labels.
 // v3: session profiles (name/color/description), reply attribution via

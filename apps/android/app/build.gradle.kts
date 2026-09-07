@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-	namespace = "dev.sspi.omni"
+	namespace = "dev.pppi.omni"
 	compileSdk = 35
 
 	defaultConfig {
-		applicationId = "dev.sspi.omni"
+		applicationId = "dev.pppi.omni"
 		minSdk = 26
 		targetSdk = 35
 		versionCode = 1

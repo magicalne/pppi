@@ -1,4 +1,4 @@
-// sspi paths + profile store shared by the pi extension commands.
+// pppi paths + profile store shared by the pi extension commands.
 // Keep the JSON shapes in sync with apps/server/src/profiles.ts.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -21,12 +21,12 @@ export type Profile = {
 	description: string;
 };
 
-export function sspiDir(): string {
-	return process.env.SSPI_DIR ?? join(homedir(), ".sspi");
+export function pppiDir(): string {
+	return process.env.PPPI_DIR ?? join(homedir(), ".pppi");
 }
 
 export function loadPair(): PairFile | null {
-	const p = join(sspiDir(), "pair.json");
+	const p = join(pppiDir(), "pair.json");
 	if (!existsSync(p)) return null;
 	try {
 		return JSON.parse(readFileSync(p, "utf8")) as PairFile;
@@ -36,7 +36,7 @@ export function loadPair(): PairFile | null {
 }
 
 export function readProfile(sessionId: string): Profile | null {
-	const p = join(sspiDir(), "profiles", `${sessionId}.json`);
+	const p = join(pppiDir(), "profiles", `${sessionId}.json`);
 	if (!existsSync(p)) return null;
 	try {
 		return JSON.parse(readFileSync(p, "utf8")) as Profile;
@@ -46,13 +46,13 @@ export function readProfile(sessionId: string): Profile | null {
 }
 
 export function writeProfile(profile: Profile): void {
-	const dir = join(sspiDir(), "profiles");
+	const dir = join(pppiDir(), "profiles");
 	mkdirSync(dir, { recursive: true });
 	writeFileSync(join(dir, `${profile.id}.json`), `${JSON.stringify(profile, null, "\t")}\n`);
 }
 
 export function listProfiles(): Profile[] {
-	const dir = join(sspiDir(), "profiles");
+	const dir = join(pppiDir(), "profiles");
 	if (!existsSync(dir)) return [];
 	try {
 		return readdirSync(dir)
@@ -71,7 +71,7 @@ export function listProfiles(): Profile[] {
 }
 
 export function writeOmniMark(mark: { sessionId: string; cwd: string; pid: number; markedAt: number }): void {
-	writeFileSync(join(sspiDir(), "omni.json"), `${JSON.stringify(mark, null, "\t")}\n`);
+	writeFileSync(join(pppiDir(), "omni.json"), `${JSON.stringify(mark, null, "\t")}\n`);
 }
 
 /** The session id of the invoking pi session (env first, then the session file header). */

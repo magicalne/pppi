@@ -39,8 +39,8 @@ Tapping the presence bar opens, anchored just below it:
 
 Rules:
 
-- **Always expanded.** The visibility toggles and their `sspi.projects` /
-  `sspi.worktrees` localStorage keys are deleted. Omni is always the first row.
+- **Always expanded.** The visibility toggles and their `pppi.projects` /
+  `pppi.worktrees` localStorage keys are deleted. Omni is always the first row.
 - A repo row **is** its main session (label = bare repo name — the `· main`
   suffix is dropped). Worktrees indent one level under it as `wt/<name>`.
   A repo with no open session renders a dim, non-tappable row.

@@ -261,7 +261,7 @@ describe("pairing + profiles api", () => {
 				JSON.stringify({ id: "joe-1", name: "Joe", color: "#e8b14a", description: "owns the pigeon repo" }),
 			);
 			process.env.MOCK_REPLY = "ack from omni";
-			process.env.SSPI_DIR = tmpDir;
+			process.env.PPPI_DIR = tmpDir;
 			driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
 			app = await createServer({
 				token,
@@ -289,7 +289,7 @@ describe("pairing + profiles api", () => {
 		if (app) await app.close();
 		const { rmSync } = await import("node:fs");
 		rmSync(tmpDir, { recursive: true, force: true });
-		process.env.SSPI_DIR = undefined;
+		process.env.PPPI_DIR = undefined;
 	});
 
 	it("serves /api/pair with the right token and 401s otherwise", async () => {
@@ -379,12 +379,12 @@ describe("pairing + profiles api", () => {
 			["joe-1", "anon-9"],
 			[
 				{ id: "joe-1", name: null, cwd: "/x/pigeon" },
-				{ id: "anon-9", name: null, cwd: "/x/sspi" },
+				{ id: "anon-9", name: null, cwd: "/x/pppi" },
 			],
 			tmpDir,
 		);
 		expect(map["joe-1"]).toMatchObject({ name: "Joe", color: "#e8b14a", description: "owns the pigeon repo" });
-		expect(map["anon-9"]!.name).toBe("sspi"); // derived from cwd
+		expect(map["anon-9"]!.name).toBe("pppi"); // derived from cwd
 		expect(map["anon-9"]!.color).toBe(colorForId("anon-9"));
 	});
 });

@@ -1,4 +1,4 @@
-package dev.sspi.omni
+package dev.pppi.omni
 
 import okio.ByteString
 import okhttp3.MediaType.Companion.toMediaType

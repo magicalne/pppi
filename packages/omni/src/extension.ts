@@ -1,6 +1,6 @@
-// sspi omni extension for pi.
+// pppi omni extension for pi.
 //
-// Registers the tools the omni agent uses to manage the sspi hierarchy:
+// Registers the tools the omni agent uses to manage the pppi hierarchy:
 //
 //   omni pi session ──► repo sessions (main branch) ──► worktree branches
 //
@@ -17,9 +17,9 @@ import { type PigeonSession, listSessions, pigeon, sessionsForRepo } from "./pig
 import { type RepoRegistry, addRepo, displayPath, findRepo, loadRegistry, removeRepo } from "./repos.ts";
 import { addWorktree, listWorktrees, parseWorktrees, removeWorktree } from "./worktree.ts";
 
-const OMNI_SYSTEM_PROMPT = `## sspi — the omni agent
+const OMNI_SYSTEM_PROMPT = `## pppi — the omni agent
 
-You are the omni agent of sspi ("**pi"): a pointer-pointer to pi. You do not do repo work
+You are the omni agent of pppi ("**pi"): a pointer-pointer to pi. You do not do repo work
 yourself; you coordinate pi sessions that do. You manage a two-level hierarchy:
 
 1. omni (you) -> repo sessions: one pi session per registered repository, working on its
@@ -33,7 +33,7 @@ Rules of conduct:
 - Register repos you are asked to manage with omni_repos (add) before delegating to them.
 - When you delegate, say WHY and WHAT done looks like; one concern per message.
 - Always collect replies (omni_replies) before answering the user about delegated work.
-- Check sspi_profiles before choosing a delegation target: each session publishes a
+- Check pppi_profiles before choosing a delegation target: each session publishes a
   name, color and description; the description says what that session is good for.
   Prefer the session whose description matches the job, and tell the user WHO you
   asked (by profile name) — the client renders that agent's reply in its color.
@@ -80,7 +80,7 @@ function describeSessions(sessions: PigeonSession[], reg: RepoRegistry): string 
 		.join("\n");
 }
 
-export default function sspiOmniExtension(pi: ExtensionAPI) {
+export default function pppiOmniExtension(pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event) => {
 		return { systemPrompt: `${event.systemPrompt}\n\n${OMNI_SYSTEM_PROMPT}` };
 	});
@@ -256,11 +256,11 @@ export default function sspiOmniExtension(pi: ExtensionAPI) {
 	// ---------------------------------------------------------------- command
 
 	pi.registerCommand("omni", {
-		description: "Show the sspi hierarchy (omni -> repos -> worktrees)",
+		description: "Show the pppi hierarchy (omni -> repos -> worktrees)",
 		handler: async (_args, ctx: ExtensionContext) => {
 			const reg = loadRegistry();
 			const sessions = await listSessions();
-			const lines: string[] = ["sspi hierarchy:", ""];
+			const lines: string[] = ["pppi hierarchy:", ""];
 			lines.push("omni (you)");
 			if (!Array.isArray(sessions)) {
 				lines.push(`  ! could not list sessions: ${sessions.error}`);

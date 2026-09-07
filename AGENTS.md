@@ -1,6 +1,6 @@
-# AGENTS.md — sspi
+# AGENTS.md — pppi
 
-**sspi is `**pi`**: a pointer-pointer to pi. One omni agent managing pi
+**pppi is `**pi`**: a pointer-pointer to pi. One omni agent managing pi
 sessions. Read README.md for the full picture.
 
 ## Ground rules
@@ -22,11 +22,11 @@ sessions. Read README.md for the full picture.
   (parakeet-unified-en-0.6b is the recommendation from pi-transcribe's
   catalog). No cloud STT.
 - **Agents have identities.** Every pi session can carry a profile
-  (name/color/description — `/profile` writes `$SSPI_DIR/profiles/`).
+  (name/color/description — `/profile` writes `$PPPI_DIR/profiles/`).
   Delegated replies render tinted with the agent's color and labeled with its
   name; descriptions are for other agents to pick delegation targets.
 - **Design source of truth:** docs/design/ui-prd.md — five themes as design
-  tokens (tokens.css on web, SspiThemes on Android), "talk to a person not a
+  tokens (tokens.css on web, PppiThemes on Android), "talk to a person not a
   terminal" grammar for the live status line. New UI must use the tokens.
 
 ## Stack conventions
@@ -46,8 +46,8 @@ sessions. Read README.md for the full picture.
 ## Key files
 
 - `packages/omni/src/extension.ts` — the omni tools the agent sees.
-- `packages/pi-ext/` — the /omni /pair /profile commands + sspi_profiles tool
-  (install: `bun run install:ext` → `~/.pi/agent/extensions/sspi/`).
+- `packages/pi-ext/` — the /omni /pair /profile commands + pppi_profiles tool
+  (install: `bun run install:ext` → `~/.pi/agent/extensions/pppi/`).
 - `apps/server/src/agent.ts` — pi RPC driver (framing, events, restart) plus
   the status-bar controls: `setModel`/`setThinkingLevel`/`availableModels`,
   context from `get_session_stats`, `status` events on hello/turn/set.
@@ -59,12 +59,12 @@ sessions. Read README.md for the full picture.
   level). Wire shapes live in packages/protocol (v5) and Protocol.kt.
 - `apps/server/src/profiles.ts` — profile palette + explicit/derived profile
   merge (keep the JSON shape in sync with packages/pi-ext/src/store.ts).
-- `apps/server/src/stt.ts` — model resolution: `SSPI_STT_MODEL` →
+- `apps/server/src/stt.ts` — model resolution: `PPPI_STT_MODEL` →
   `~/.pi/agent/pi-transcribe.json` → HF-cache parakeet. `openUtterance()`
   exposes parakeet's buffered streaming for live partials.
 - `apps/server/src/tts.ts` — TTS providers behind `TtsProvider`
   (kokoro first via `kokoro-js`, `macos-say` fallback;
-  `SSPI_TTS_PROVIDER=kokoro|macos-say|auto`).
+  `PPPI_TTS_PROVIDER=kokoro|macos-say|auto`).
 - `apps/server/src/vad.ts` + `vadProcess.ts` — silero VAD in a host process
   (worker threads deadlock against kokoro's runtime) + the turn-taking state
   machine (`UtteranceDetector`, timings in `DEFAULT_TIMINGS`).

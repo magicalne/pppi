@@ -152,11 +152,11 @@ interface TtsProvider {
 ```
 
 - `KokoroProvider` — kokoro-82M ONNX. Model resolution mirrors `stt.ts`:
-  `SSPI_TTS_MODEL` → known HF-cache kokoro dir → not ready. Runs on
+  `PPPI_TTS_MODEL` → known HF-cache kokoro dir → not ready. Runs on
   `onnxruntime-node`, faster than real-time on M-series.
 - `MacosSayProvider` — `say --data-format` to WAV, split and streamed; zero
   deps, always available on the Mac.
-- Resolution: `SSPI_TTS_PROVIDER` (`kokoro` | `macos-say` | `auto`); auto =
+- Resolution: `PPPI_TTS_PROVIDER` (`kokoro` | `macos-say` | `auto`); auto =
   kokoro if its model is present, else say. Switching providers (or adding
   one) touches exactly one class + one line in the resolver.
 - **Sentence chunker:** as `assistant_delta` accumulates, cut at sentence
@@ -218,7 +218,7 @@ Gate between Phase 3 and Phase 4: **web must be live-verified end to end
 
 | File | Change |
 |---|---|
-| `apps/server/src/tts.ts` | `TtsProvider` interface, `KokoroProvider` (onnxruntime-node; **spike:** `kokoro-onnx` npm vs raw onnxruntime + phonemizer — decision recorded in this doc), `MacosSayProvider`, resolver (`SSPI_TTS_PROVIDER`) |
+| `apps/server/src/tts.ts` | `TtsProvider` interface, `KokoroProvider` (onnxruntime-node; **spike:** `kokoro-onnx` npm vs raw onnxruntime + phonemizer — decision recorded in this doc), `MacosSayProvider`, resolver (`PPPI_TTS_PROVIDER`) |
 | `apps/server/src/voice.ts` | sentence chunker over `assistant_delta`, speak-prose transform, TTS queue + drain, `tts_start`/binary/`tts_end`, interrupt wiring to `driver.abort()` |
 | `apps/server/test/*` | fake providers: chunking, ordering, drain-on-interrupt, resolution order, say fallback |
 

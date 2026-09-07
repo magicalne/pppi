@@ -1,4 +1,4 @@
-package dev.sspi.omni
+package dev.pppi.omni
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.sp
 
 /** Appearance page (PRD §8): five themes as live mini chat previews. */
 @Composable
-fun ThemesPage(theme: SspiTheme, setTheme: (String) -> Unit, onBack: () -> Unit) {
+fun ThemesPage(theme: PppiTheme, setTheme: (String) -> Unit, onBack: () -> Unit) {
 	Column(
 		Modifier
 			.fillMaxSize()
@@ -56,7 +56,7 @@ fun ThemesPage(theme: SspiTheme, setTheme: (String) -> Unit, onBack: () -> Unit)
 			fontSize = 13.5.sp,
 			modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
 		)
-		for (row in SspiThemes.chunked(2)) {
+		for (row in PppiThemes.chunked(2)) {
 			Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
 				for (t in row) {
 					ThemeCard(t, theme.id == t.id, Modifier.weight(1f)) { setTheme(t.id) }
@@ -69,7 +69,7 @@ fun ThemesPage(theme: SspiTheme, setTheme: (String) -> Unit, onBack: () -> Unit)
 }
 
 @Composable
-private fun ThemeCard(t: SspiTheme, current: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun ThemeCard(t: PppiTheme, current: Boolean, modifier: Modifier, onClick: () -> Unit) {
 	Column(
 		modifier
 			.clip(RoundedCornerShape(18.dp))

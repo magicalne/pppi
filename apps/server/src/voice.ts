@@ -10,7 +10,7 @@
 // synthesis + the in-flight agent turn. See docs/plan/interactive-mode.md.
 
 import { randomUUID } from "node:crypto";
-import type { VoiceServerEvent } from "@sspi/protocol";
+import type { VoiceServerEvent } from "@pppi/protocol";
 import type { WebSocket } from "ws";
 import type { Stt } from "./stt.ts";
 import { DEFAULT_TIMINGS, UtteranceDetector, type VadTimings } from "./vad.ts";

@@ -1,8 +1,8 @@
-package dev.sspi.omni
+package dev.pppi.omni
 
 import java.io.ByteArrayOutputStream
 
-/** Mono 16-bit PCM → 16 kHz PCM16 WAV bytes (what the sspi server's /api/voice expects). */
+/** Mono 16-bit PCM → 16 kHz PCM16 WAV bytes (what the pppi server's /api/voice expects). */
 object WavEncoder {
 
 	const val SAMPLE_RATE = 16000
