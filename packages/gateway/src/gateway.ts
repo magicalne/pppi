@@ -1,15 +1,19 @@
-// pppi gateway server.
+// pppi gateway — the transport-agnostic core every host shares (the standalone
+// cli, and `/omni` hosting it inside a pi session).
 //
 // Owns THE single omni agent session (apps talk to it; they never create
 // sessions), transcribes voice locally, and mirrors the conversation to every
 // paired client (web, android) over WebSocket. Secrets never leave the machine:
 // clients only hold the pairing token; provider keys stay inside pi's auth.
+//
+// Plain node:http + ws (no framework): this package must also run inside a pi
+// extension, where only the deps shipped next to it resolve.
 
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync, statSync } from "node:fs";
+import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
+import { extname, join, normalize } from "node:path";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
-import fastifyStatic from "@fastify/static";
-import fastifyWebsocket from "@fastify/websocket";
 import { type PigeonSession, listSessions, pigeon } from "@pppi/omni/pigeon";
 import { loadRegistry } from "@pppi/omni/repos";
 import type {
@@ -23,10 +27,9 @@ import type {
 	SessionsResponse,
 	Target,
 } from "@pppi/protocol";
-import fastify, { type FastifyInstance } from "fastify";
 import { minimatch } from "minimatch";
-import type { WebSocket } from "ws";
-import type { RpcAgentDriver } from "./agent.ts";
+import { type WebSocket, WebSocketServer } from "ws";
+import type { AgentPort } from "./agent.ts";
 import { tokensMatch } from "./config.ts";
 import { buildProfiles } from "./profiles.ts";
 import type { Stt } from "./stt.ts";
@@ -34,9 +37,9 @@ import { SileroVad, type VadTimings } from "./vad.ts";
 import { VoiceSession, type VoiceStt, type VoiceTts, voiceStt } from "./voice.ts";
 import { WavError, decodeWav } from "./wav.ts";
 
-export type ServerOptions = {
+export type GatewayOptions = {
 	token: string;
-	driver: RpcAgentDriver;
+	agent: AgentPort;
 	stt: Stt;
 	webDist?: string;
 	/** Max voice upload size (default 25 MiB ≈ 26 min of 16 kHz PCM16). */
@@ -47,12 +50,19 @@ export type ServerOptions = {
 	voiceStt?: VoiceStt;
 	/** Interactive-mode TTS provider (tests); null/omitted = no spoken replies yet. */
 	tts?: VoiceTts | null;
-	/** Voice-activity model (tests); defaults to the bundled silero_vad.onnx, inert if missing. */
-	vad?: SileroVad;
+	/** Voice-activity model (tests); defaults to the bundled silero_vad.onnx, inert if missing.
+	 *  Structural on purpose — anything with a per-window probability fits (SileroVad in prod). */
+	vad?: { prob(window: Float32Array): Promise<number> };
 	/** Turn-taking timings override (tests); defaults are the tuned plan values. */
 	voiceTimings?: Partial<VadTimings>;
 	/** Enabled-model patterns override (tests); default reads pi's settings (global + project). */
 	enabledModelsProvider?: () => string[] | undefined;
+};
+
+export type Gateway = {
+	listen(port: number, host: string): Promise<void>;
+	address(): { port: number; host: string } | null;
+	close(): Promise<void>;
 };
 
 type AuthedSocket = WebSocket & { authed?: boolean };
@@ -120,8 +130,49 @@ async function classify(omniSessionId: string, registryDir?: string): Promise<Se
 	return { omniSessionId, projects, others, profiles };
 }
 
-export async function createServer(opts: ServerOptions): Promise<FastifyInstance> {
-	const app = fastify({ logger: false, bodyLimit: opts.maxVoiceBytes ?? 25 * 1024 * 1024 }) as FastifyInstance;
+const MIME: Record<string, string> = {
+	".html": "text/html; charset=utf-8",
+	".js": "text/javascript; charset=utf-8",
+	".css": "text/css; charset=utf-8",
+	".svg": "image/svg+xml",
+	".png": "image/png",
+	".ico": "image/x-icon",
+	".json": "application/json",
+	".map": "application/json",
+	".txt": "text/plain; charset=utf-8",
+	".wasm": "application/wasm",
+	".woff2": "font/woff2",
+};
+
+function bearer(req: IncomingMessage): string | undefined {
+	const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
+	return auth ?? (req.headers["x-pppi-token"] as string | undefined);
+}
+
+function json(res: ServerResponse, code: number, body: unknown): void {
+	if (res.headersSent) {
+		res.end();
+		return;
+	}
+	const line = JSON.stringify(body);
+	res.writeHead(code, { "content-type": "application/json", "content-length": Buffer.byteLength(line) });
+	res.end(line);
+}
+
+async function readBody(req: IncomingMessage, cap: number): Promise<Buffer> {
+	const chunks: Buffer[] = [];
+	let size = 0;
+	for await (const chunk of req) {
+		size += (chunk as Buffer).length;
+		if (size > cap) throw new Error(`body exceeds ${cap} bytes`);
+		chunks.push(chunk as Buffer);
+	}
+	return Buffer.concat(chunks);
+}
+
+export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
+	const maxVoiceBytes = opts.maxVoiceBytes ?? 25 * 1024 * 1024;
+	const agent = opts.agent;
 
 	const clients = new Set<AuthedSocket>();
 	let sessionsCache: { at: number; data: SessionsResponse } | null = null;
@@ -167,37 +218,39 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		}
 	}
 
-	// driver events are always the omni conversation (no target).
+	// agent events are always the omni conversation (no target).
 	// They also feed interactive voice: open mic sessions speak the answer.
 	const speakAssistant = (fn: (s: VoiceSession) => void): void => {
-		for (const s of voiceSessions) fn(s);
+		for (const s of voiceSessions.keys()) fn(s);
 	};
 	// the wire AgentInfo keeps `model` as a display string; full model facts
 	// travel in `status` (below)
 	const agentInfo = (): AgentInfo => {
-		const info = opts.driver.info;
+		const info = agent.info;
 		return {
 			model: info.model ? `${info.model.provider}/${info.model.id}` : null,
 			sessionName: info.sessionName,
 			sessionId: info.sessionId,
-			state: opts.driver.state,
+			state: agent.state,
 		};
 	};
 
-	opts.driver.on("state", (state, toolName) => broadcast({ type: "agent_state", state, toolName }));
-	opts.driver.on("status", (status) => broadcast({ type: "status", status }));
-	opts.driver.on("assistant-delta", (id, delta) => {
+	agent.on("state", (state, toolName) => broadcast({ type: "agent_state", state, toolName }));
+	agent.on("status", (status) => broadcast({ type: "status", status }));
+	agent.on("assistant-delta", (id: string, delta: string) => {
 		broadcast({ type: "assistant_delta", id, delta });
 		speakAssistant((s) => s.assistantDelta(id, delta));
 	});
-	opts.driver.on("assistant-final", (id, text) => {
+	agent.on("assistant-final", (id: string, text: string) => {
 		broadcast({ type: "assistant_final", id, text });
 		speakAssistant((s) => s.assistantFinal(id, text));
 	});
-	opts.driver.on("tool", (toolName, phase, label) => broadcast({ type: "tool_event", toolName, phase, label }));
-	opts.driver.on("notify", (level, message) => broadcast({ type: "agent_notify", level, message }));
-	opts.driver.on("error", (message) => broadcast({ type: "error", message }));
-	opts.driver.on("info", () => broadcast({ type: "agent_info", agent: agentInfo() }));
+	agent.on("tool", (toolName: string, phase: "start" | "end", label?: string) =>
+		broadcast({ type: "tool_event", toolName, phase, label }),
+	);
+	agent.on("notify", (level, message) => broadcast({ type: "agent_notify", level, message }));
+	agent.on("error", (message: string) => broadcast({ type: "error", message }));
+	agent.on("info", () => broadcast({ type: "agent_info", agent: agentInfo() }));
 
 	// Poll the omni session's pigeon mailbox: whenever a delegated peer answers,
 	// surface the reply into the omni conversation with the peer's profileId so
@@ -207,7 +260,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 	const mailboxPoll = setInterval(async () => {
 		if (clients.size === 0) return;
 		const res = await pigeon(["replies", "--json", "--keep", "--timeout", "1"], {
-			sessionId: opts.driver.info.sessionId,
+			sessionId: agent.info.sessionId,
 			timeoutMs: 15_000,
 		});
 		if (res.code !== 0) return;
@@ -232,14 +285,13 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 			// no replies yet / non-JSON
 		}
 	}, 3_000);
-	void mailboxPoll;
 
 	async function submitUserText(text: string, source: "voice" | "text", target?: Target): Promise<{ id: string }> {
 		const id = randomUUID();
-		if (!target || target === opts.driver.info.sessionId) {
+		if (!target || target === agent.info.sessionId) {
 			if (source === "voice") broadcast({ type: "transcript", id, text });
 			broadcast({ type: "user_message", id, text, source });
-			await opts.driver.prompt(text);
+			await agent.prompt(text);
 			return { id };
 		}
 		await sendToPeer(text, target);
@@ -248,8 +300,8 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 
 	/** Available models filtered by pi's enabledModels settings — the model popup's list. */
 	async function listModels(): Promise<void> {
-		const models = await opts.driver.availableModels();
-		const patterns = opts.enabledModelsProvider ? opts.enabledModelsProvider() : enabledPatternsFromPi(opts.driver.cwd);
+		const models = await agent.availableModels();
+		const patterns = opts.enabledModelsProvider ? opts.enabledModelsProvider() : enabledPatternsFromPi(agent.cwd);
 		const filtered = patterns?.length
 			? models.filter((m) => patterns.some((p) => matchesEnabledPattern(m, p)))
 			: models;
@@ -258,105 +310,150 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 
 	// ---------------------------------------------------------------- rest
 
-	app.addContentTypeParser(/^audio\//, { parseAs: "buffer" }, (_req, body, done) => done(null, body));
-	app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, (_req, body, done) => done(null, body));
-
-	app.get("/api/health", async () => {
-		const status = opts.stt.status;
-		return {
-			ok: true,
-			name: "pppi",
-			agent: agentInfo(),
-			stt: status.ready ? { ready: true, modelId: status.modelId } : { ready: false, reason: status.reason },
-		};
+	const server: Server = createServer((req, res) => {
+		void route(req, res).catch(() => json(res, 500, { ok: false, error: "internal error" }));
 	});
 
-	app.post<{ Headers: { authorization?: string; "x-pppi-token"?: string } }>("/api/voice", async (req, reply) => {
-		const presented = req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? req.headers["x-pppi-token"];
-		if (!presented || !tokensMatch(presented, opts.token)) {
-			return reply.code(401).send({ ok: false, error: "unauthorized" });
+	async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		const path = new URL(req.url ?? "/", "http://local").pathname;
+		if (req.method === "GET" && path === "/api/health") {
+			const status = opts.stt.status;
+			return json(res, 200, {
+				ok: true,
+				name: "pppi",
+				agent: agentInfo(),
+				stt: status.ready ? { ready: true, modelId: status.modelId } : { ready: false, reason: status.reason },
+			});
 		}
-		const sttStatus = opts.stt.status;
-		if (!sttStatus.ready) return reply.code(503).send({ ok: false, error: sttStatus.reason });
-		const body = req.body as Buffer;
-		if (!Buffer.isBuffer(body) || body.length === 0)
-			return reply.code(400).send({ ok: false, error: "empty body; send a WAV" });
-
-		let transcript: string;
-		try {
-			transcript = await opts.stt.transcribe(decodeWav(body));
-		} catch (err) {
-			if (err instanceof WavError) return reply.code(400).send({ ok: false, error: err.message });
-			throw err;
+		if (req.method === "POST" && path === "/api/voice") {
+			const presented = bearer(req);
+			if (!presented || !tokensMatch(presented, opts.token)) {
+				return json(res, 401, { ok: false, error: "unauthorized" });
+			}
+			const sttStatus = opts.stt.status;
+			if (!sttStatus.ready) return json(res, 503, { ok: false, error: sttStatus.reason });
+			const body = await readBody(req, maxVoiceBytes);
+			if (body.length === 0) return json(res, 400, { ok: false, error: "empty body; send a WAV" });
+			let transcript: string;
+			try {
+				transcript = await opts.stt.transcribe(decodeWav(body));
+			} catch (err) {
+				if (err instanceof WavError) return json(res, 400, { ok: false, error: err.message });
+				throw err;
+			}
+			if (!transcript) return json(res, 422, { ok: false, error: "transcript was empty — say something?" });
+			const { id } = await submitUserText(transcript, "voice");
+			return json(res, 200, { ok: true, id, transcript });
 		}
-		if (!transcript) return reply.code(422).send({ ok: false, error: "transcript was empty — say something?" });
+		if (req.method === "GET" && path === "/api/sessions") {
+			const omniId = agent.info.sessionId ?? "omni";
+			if (sessionsCache && Date.now() - sessionsCache.at < 3_000) return json(res, 200, sessionsCache.data);
+			const data = await classify(omniId);
+			sessionsCache = { at: Date.now(), data };
+			return json(res, 200, data);
+		}
+		// pairing facts for this machine — token-authed (the token IS the secret,
+		// this endpoint only helps already-paired clients learn the machine's name/urls)
+		if (req.method === "GET" && path === "/api/pair") {
+			if (!opts.pair) return json(res, 404, { ok: false, error: "pairing info unavailable" });
+			const auth = bearer(req);
+			if (!auth || !tokensMatch(auth, opts.token)) return json(res, 401, { ok: false, error: "bad token" });
+			return json(res, 200, { ok: true, ...opts.pair });
+		}
+		// the omni extension calls this when it collects a delegated peer's reply
+		// (omni_replies): the answer is surfaced into the omni conversation with the
+		// peer's profileId, so clients render it in that agent's color
+		if (req.method === "POST" && path === "/api/peer-reply") {
+			const auth = bearer(req);
+			if (!auth || !tokensMatch(auth, opts.token)) return json(res, 401, { ok: false, error: "bad token" });
+			const raw = await readBody(req, 1024 * 1024);
+			let body: { session?: string; text?: string } = {};
+			try {
+				body = JSON.parse(raw.toString()) as { session?: string; text?: string };
+			} catch {
+				return json(res, 400, { ok: false, error: "invalid JSON" });
+			}
+			const session = (body.session ?? "").trim();
+			const replyText = (body.text ?? "").trim();
+			if (!session || !replyText) {
+				return json(res, 400, { ok: false, error: "session and text are required" });
+			}
+			const id = randomUUID();
+			broadcast({ type: "assistant_final", id, text: replyText, profileId: session });
+			peerLog.push({ id, role: "assistant", text: replyText, ts: Date.now(), profileId: session });
+			return json(res, 200, { ok: true });
+		}
+		if (req.method === "GET") return serveStatic(res, path);
+		json(res, 404, { ok: false, error: "not found" });
+	}
 
-		const { id } = await submitUserText(transcript, "voice");
-		return { ok: true, id, transcript };
-	});
-
-	app.get("/api/sessions", async () => {
-		const omniId = opts.driver.info.sessionId ?? "omni";
-		if (sessionsCache && Date.now() - sessionsCache.at < 3_000) return sessionsCache.data;
-		const data = await classify(omniId);
-		sessionsCache = { at: Date.now(), data };
-		return data;
-	});
-
-	// pairing facts for this machine — token-authed (the token IS the secret,
-	// this endpoint only helps already-paired clients learn the machine's name/urls)
-	app.get("/api/pair", async (req, reply) => {
-		if (!opts.pair) return reply.code(404).send({ ok: false, error: "pairing info unavailable" });
-		const auth = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-		if (!tokensMatch(auth, opts.token)) return reply.code(401).send({ ok: false, error: "bad token" });
-		return { ok: true, ...opts.pair };
-	});
-
-	// the omni extension calls this when it collects a delegated peer's reply
-	// (omni_replies): the answer is surfaced into the omni conversation with the
-	// peer's profileId, so clients render it in that agent's color
-	app.post("/api/peer-reply", async (req, reply) => {
-		const auth = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-		if (!tokensMatch(auth, opts.token)) return reply.code(401).send({ ok: false, error: "bad token" });
-		const body = req.body as { session?: string; text?: string };
-		const session = (body.session ?? "").trim();
-		const replyText = (body.text ?? "").trim();
-		if (!session || !replyText) return reply.code(400).send({ ok: false, error: "session and text are required" });
-		const id = randomUUID();
-		broadcast({ type: "assistant_final", id, text: replyText, profileId: session });
-		peerLog.push({ id, role: "assistant", text: replyText, ts: Date.now(), profileId: session });
-		return { ok: true };
-	});
+	function serveStatic(res: ServerResponse, path: string): void {
+		if (!opts.webDist) {
+			json(res, 404, { ok: false, error: "not found" });
+			return;
+		}
+		const root = normalize(opts.webDist);
+		const rel = path === "/" ? "/index.html" : path;
+		let file = normalize(join(root, rel));
+		if (!file.startsWith(root)) {
+			json(res, 403, { ok: false, error: "forbidden" });
+			return;
+		}
+		if (!existsSync(file) || !statSync(file).isFile()) {
+			// single-page app: extension-less paths fall back to the entry
+			if (extname(rel)) {
+				json(res, 404, { ok: false, error: "not found" });
+				return;
+			}
+			file = join(root, "index.html");
+			if (!existsSync(file)) {
+				json(res, 404, { ok: false, error: "not found" });
+				return;
+			}
+		}
+		res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
+		createReadStream(file).pipe(res);
+	}
 
 	// ---------------------------------------------------------------- websocket
 
-	await app.register(fastifyWebsocket, { options: { maxPayload: 1024 * 1024 } });
+	const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+	server.on("upgrade", (req, socket, head) => {
+		const path = new URL(req.url ?? "/", "http://local").pathname;
+		if (path === "/ws") wss.handleUpgrade(req, socket, head, (ws) => onClientSocket(ws));
+		else if (path === "/voice") wss.handleUpgrade(req, socket, head, (ws) => onVoiceSocket(ws));
+		else socket.destroy();
+	});
 
-	app.get("/ws", { websocket: true }, (raw: WebSocket) => {
-		const socket = raw as AuthedSocket;
-		socket.authed = false;
-		const helloTimer: NodeJS.Timeout | undefined = setTimeout(() => socket.close(), 10_000);
+	function send(ws: WebSocket, evt: ServerEvent): void {
+		if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(evt));
+	}
 
-		socket.on("message", async (raw: Buffer) => {
+	function onClientSocket(socket: WebSocket): void {
+		const ws = socket as AuthedSocket;
+		ws.authed = false;
+		const helloTimer: NodeJS.Timeout | undefined = setTimeout(() => ws.close(), 10_000);
+
+		ws.on("message", async (raw: Buffer) => {
 			let msg: ClientMessage;
 			try {
 				msg = JSON.parse(raw.toString()) as ClientMessage;
 			} catch {
 				return;
 			}
-			if (!socket.authed) {
-				if (msg.type !== "hello") return socket.close();
+			if (!ws.authed) {
+				if (msg.type !== "hello") return ws.close();
 				clearTimeout(helloTimer);
 				if (!tokensMatch(msg.token ?? "", opts.token)) {
-					send(socket, { type: "hello_fail", error: "bad pairing token" });
-					return socket.close();
+					send(ws, { type: "hello_fail", error: "bad pairing token" });
+					return ws.close();
 				}
-				socket.authed = true;
-				clients.add(socket);
+				ws.authed = true;
+				clients.add(ws);
 				let history: ChatEntry[] = [];
 				try {
 					// recent window only — clients pull older pages on demand (history)
-					const { entries } = await opts.driver.history({ limit: 50 });
+					const { entries } = await agent.history({ limit: 50 });
 					history = [...entries, ...peerLog]
 						.map((h) => ({ ...h, id: randomUUID() }))
 						.sort((a, b) => a.ts - b.ts)
@@ -364,58 +461,54 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 				} catch {
 					// keep empty history rather than failing the handshake
 				}
-				send(socket, { type: "hello_ok", agent: agentInfo(), history });
+				send(ws, { type: "hello_ok", agent: agentInfo(), history });
 				// status-bar snapshot for this client (fresh ones arrive via broadcast)
-				send(socket, { type: "status", status: opts.driver.status });
+				send(ws, { type: "status", status: agent.status });
 				return;
 			}
 			if (msg.type === "chat") {
 				const text = (msg.text ?? "").trim();
 				if (text) {
 					submitUserText(text, msg.source ?? "text", msg.target).catch((err) =>
-						send(socket, { type: "error", message: String(err.message ?? err), target: msg.target }),
+						send(ws, { type: "error", message: String(err.message ?? err), target: msg.target }),
 					);
 				}
 			} else if (msg.type === "abort") {
-				opts.driver.abort();
+				void agent.abort();
 			} else if (msg.type === "set_model") {
-				opts.driver
+				agent
 					.setModel(String(msg.provider ?? ""), String(msg.modelId ?? ""))
-					.catch((err) => send(socket, { type: "error", message: String(err.message ?? err) }));
+					.catch((err) => send(ws, { type: "error", message: String(err.message ?? err) }));
 			} else if (msg.type === "set_thinking_level") {
-				opts.driver
+				agent
 					.setThinkingLevel(String(msg.level ?? ""))
-					.catch((err) => send(socket, { type: "error", message: String(err.message ?? err) }));
+					.catch((err) => send(ws, { type: "error", message: String(err.message ?? err) }));
 			} else if (msg.type === "list_models") {
-				listModels().catch((err) => send(socket, { type: "error", message: String(err.message ?? err) }));
+				listModels().catch((err) => send(ws, { type: "error", message: String(err.message ?? err) }));
 			} else if (msg.type === "history") {
 				// forced older-history load (user scrolled to the top); reply to this socket only
 				(async () => {
-					const { entries, hasMore } = await opts.driver.history({
+					const { entries, hasMore } = await agent.history({
 						before: typeof msg.before === "number" ? msg.before : undefined,
 						limit: typeof msg.limit === "number" ? msg.limit : 50,
 					});
-					send(socket, {
+					send(ws, {
 						type: "history_page",
 						entries: entries.map((h) => ({ ...h, id: randomUUID() })),
 						hasMore,
 					});
-				})().catch((err) => send(socket, { type: "error", message: String(err.message ?? err) }));
+				})().catch((err) => send(ws, { type: "error", message: String(err.message ?? err) }));
 			}
 		});
 
-		socket.on("close", () => {
+		ws.on("close", () => {
 			clearTimeout(helloTimer);
-			clients.delete(socket);
+			clients.delete(ws);
 		});
-		socket.on("error", () => {
+		ws.on("error", () => {
 			clearTimeout(helloTimer);
-			clients.delete(socket);
+			clients.delete(ws);
 		});
-	});
-
-	function send(ws: WebSocket, evt: ServerEvent): void {
-		if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(evt));
 	}
 
 	// ------------------------------------------------------- interactive voice
@@ -423,7 +516,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 	const sttPort = opts.voiceStt ?? voiceStt(opts.stt);
 	// bundled silero model; a missing file leaves voice sessions connected but inert
 	const vad = opts.vad ?? (await SileroVad.create().catch(() => null));
-	const voiceSessions = new Set<VoiceSession>();
+	const voiceSessions = new Map<VoiceSession, WebSocket>();
 	let voiceActiveCount = 0;
 	let voiceActive = false;
 	const setVoiceActive = (active: boolean): void => {
@@ -435,30 +528,47 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 		}
 	};
 
-	const inertVad = { prob: async () => 0 };
-	app.get("/voice", { websocket: true }, (raw: WebSocket) => {
+	function onVoiceSocket(raw: WebSocket): void {
 		const session = new VoiceSession(raw, {
 			token: opts.token,
 			stt: sttPort,
 			tts: opts.tts ?? null,
-			vad: vad ?? inertVad,
+			vad: vad ?? { prob: async () => 0 },
 			timings: opts.voiceTimings,
-			submit: (text) => submitUserText(text, "voice"),
-			abortAgent: () => void opts.driver.abort(),
+			submit: async (text) => {
+				await submitUserText(text, "voice");
+			},
+			abortAgent: () => void agent.abort(),
 			onAuthed: () => setVoiceActive(true),
 			onClosed: () => {
 				voiceSessions.delete(session);
 				setVoiceActive(false);
 			},
 		});
-		voiceSessions.add(session);
-	});
-
-	// ---------------------------------------------------------------- static web app
-
-	if (opts.webDist && existsSync(opts.webDist)) {
-		app.register(fastifyStatic, { root: opts.webDist });
+		voiceSessions.set(session, raw);
 	}
 
-	return app;
+	// ---------------------------------------------------------------- lifecycle
+
+	return {
+		listen(port: number, host: string): Promise<void> {
+			return new Promise((resolve, reject) => {
+				server.once("error", reject);
+				server.listen(port, host, () => {
+					server.off("error", reject);
+					resolve();
+				});
+			});
+		},
+		address() {
+			const addr = server.address();
+			return typeof addr === "object" && addr ? { port: addr.port, host: addr.address } : null;
+		},
+		close(): Promise<void> {
+			clearInterval(mailboxPoll);
+			for (const ws of clients) ws.close();
+			for (const raw of voiceSessions.values()) raw.close();
+			return new Promise((resolve) => server.close(() => resolve()));
+		},
+	};
 }

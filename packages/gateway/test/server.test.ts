@@ -3,25 +3,25 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { RpcAgentDriver } from "../src/agent.ts";
-import { createServer } from "../src/server.ts";
+import { createGateway } from "../src/gateway.ts";
 import { Stt } from "../src/stt.ts";
 import { encodeWav16k } from "../src/wav.ts";
 
-const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "mock-agent.mjs");
+const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "mock-agent.mjs");
 
 describe("gateway server", () => {
-	let app: Awaited<ReturnType<typeof createServer>>;
+	let app: Awaited<ReturnType<typeof createGateway>>;
 	let driver: RpcAgentDriver;
 	let address: string;
+	let port = 0;
 	const token = "test-token-1234";
 
 	beforeEach(async () => {
 		process.env.MOCK_REPLY = "ack from omni";
 		driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
-		app = await createServer({ token, driver, stt: Stt.create({ disabled: true }) });
-		await app.listen({ port: 0, host: "127.0.0.1" });
-		const addr = app.server.address();
-		const port = typeof addr === "object" && addr?.port ? addr.port : 0;
+		app = await createGateway({ token, agent: driver, stt: Stt.create({ disabled: true }) });
+		await app.listen(0, "127.0.0.1");
+		port = app.address()?.port ?? 0;
 		address = `ws://127.0.0.1:${port}/ws`;
 		driver.start();
 		await new Promise<void>((r) => driver.once("ready", r));
@@ -57,21 +57,20 @@ describe("gateway server", () => {
 	}
 
 	it("health reports agent and stt status", async () => {
-		const res = await app.inject({ method: "GET", url: "/api/health" });
-		const body = res.json();
-		expect(res.statusCode).toBe(200);
+		const res = await fetch(`http://127.0.0.1:${port}/api/health`);
+		const body = (await res.json()) as any;
+		expect(res.status).toBe(200);
 		expect(body.agent.model).toBe("mock/mock-1");
 		expect(body.stt.ready).toBe(false);
 	});
 
 	it("rejects voice uploads with a bad token", async () => {
-		const res = await app.inject({
+		const res = await fetch(`http://127.0.0.1:${port}/api/voice`, {
 			method: "POST",
-			url: "/api/voice",
 			headers: { authorization: "Bearer wrong", "content-type": "audio/wav" },
-			payload: Buffer.alloc(44),
+			body: Buffer.alloc(44),
 		});
-		expect(res.statusCode).toBe(401);
+		expect(res.status).toBe(401);
 	});
 
 	it("handshakes with the right token and fails with the wrong one", async () => {
@@ -111,14 +110,13 @@ describe("gateway server", () => {
 
 	it("returns 422 for a silent voice upload", async () => {
 		const silence = encodeWav16k(new Float32Array(16000)); // 1s of silence
-		const res = await app.inject({
+		const res = await fetch(`http://127.0.0.1:${port}/api/voice`, {
 			method: "POST",
-			url: "/api/voice",
 			headers: { authorization: `Bearer ${token}`, "content-type": "audio/wav" },
-			payload: silence,
+			body: new Uint8Array(silence),
 		});
 		// STT is disabled in this suite → 503 before 422; assert the auth+pipeline path
-		expect([422, 503]).toContain(res.statusCode);
+		expect([422, 503]).toContain(res.status);
 	});
 
 	it("pushes a status snapshot right after hello", async () => {
@@ -172,7 +170,7 @@ describe("gateway server", () => {
 
 describe("model list (enabled patterns)", () => {
 	const token = "models-test-token";
-	const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "mock-agent.mjs");
+	const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "mock-agent.mjs");
 
 	function connect(address: string, tokenValue: string): Promise<WebSocket> {
 		return new Promise((resolve, reject) => {
@@ -202,14 +200,14 @@ describe("model list (enabled patterns)", () => {
 		process.env.MOCK_REPLY = "ack from omni";
 		const driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
 		const patterns: string[] = ["mock/mock-1"];
-		const app = await createServer({
+		const app = await createGateway({
 			token,
-			driver,
+			agent: driver,
 			stt: Stt.create({ disabled: true }),
 			enabledModelsProvider: () => patterns,
 		});
-		await app.listen({ port: 0, host: "127.0.0.1" });
-		const addr = app.server.address();
+		await app.listen(0, "127.0.0.1");
+		const addr = app.address();
 		const port = typeof addr === "object" && addr?.port ? addr.port : 0;
 		driver.start();
 		await new Promise<void>((r) => driver.once("ready", r));
@@ -248,7 +246,7 @@ describe("model list (enabled patterns)", () => {
 describe("pairing + profiles api", () => {
 	const token = "pair-test-token";
 	const tmpDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", ".tmp-test-profiles");
-	let app: Awaited<ReturnType<typeof createServer>>;
+	let app: Awaited<ReturnType<typeof createGateway>>;
 	let driver: RpcAgentDriver;
 
 	function boot(withPair: boolean) {
@@ -263,9 +261,9 @@ describe("pairing + profiles api", () => {
 			process.env.MOCK_REPLY = "ack from omni";
 			process.env.PPPI_DIR = tmpDir;
 			driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
-			app = await createServer({
+			app = await createGateway({
 				token,
-				driver,
+				agent: driver,
 				stt: Stt.create({ disabled: true }),
 				pair: withPair
 					? {
@@ -278,7 +276,7 @@ describe("pairing + profiles api", () => {
 						}
 					: undefined,
 			});
-			await app.listen({ port: 0, host: "127.0.0.1" });
+			await app.listen(0, "127.0.0.1");
 			driver.start();
 			await new Promise<void>((r) => driver.once("ready", r));
 		};
@@ -294,35 +292,36 @@ describe("pairing + profiles api", () => {
 
 	it("serves /api/pair with the right token and 401s otherwise", async () => {
 		await boot(true)();
-		const good = await app.inject({ method: "GET", url: "/api/pair", headers: { authorization: `Bearer ${token}` } });
-		expect(good.statusCode).toBe(200);
-		const body = good.json();
+		const base = `http://127.0.0.1:${app.address()?.port ?? 0}`;
+		const good = await fetch(`${base}/api/pair`, { headers: { authorization: `Bearer ${token}` } });
+		expect(good.status).toBe(200);
+		const body = (await good.json()) as any;
 		expect(body.machine).toBe("test-box");
 		expect(body.fingerprint).toBe("abcdef12");
 		expect(body.urls).toContain("http://192.168.1.9:8787");
 
-		const bad = await app.inject({ method: "GET", url: "/api/pair", headers: { authorization: "Bearer nope" } });
-		expect(bad.statusCode).toBe(401);
+		const bad = await fetch(`${base}/api/pair`, { headers: { authorization: "Bearer nope" } });
+		expect(bad.status).toBe(401);
 	});
 
 	it("404s /api/pair when no pair info is configured", async () => {
 		await boot(false)();
-		const res = await app.inject({ method: "GET", url: "/api/pair" });
-		expect(res.statusCode).toBe(404);
+		const res = await fetch(`http://127.0.0.1:${app.address()?.port ?? 0}/api/pair`);
+		expect(res.status).toBe(404);
 	});
 
 	it("keeps the /api/sessions shape with a profiles map", async () => {
 		await boot(false)();
-		const res = await app.inject({ method: "GET", url: "/api/sessions" });
-		expect(res.statusCode).toBe(200);
-		const body = res.json();
+		const res = await fetch(`http://127.0.0.1:${app.address()?.port ?? 0}/api/sessions`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
 		expect(Array.isArray(body.projects)).toBe(true);
 		expect(body.profiles).toBeDefined();
 	});
 
 	it("surfaces omni-delegated peer replies as attributed messages", async () => {
 		await boot(true)();
-		const addr = app.server.address();
+		const addr = app.address();
 		const port = typeof addr === "object" && addr?.port ? addr.port : 0;
 		const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
 		let resolveFinal: (evt: any) => void = () => {};
@@ -343,27 +342,25 @@ describe("pairing + profiles api", () => {
 			});
 			ws.send(JSON.stringify({ type: "hello", token, client: "test" }));
 		});
-		const res = await app.inject({
+		const res = await fetch(`http://127.0.0.1:${app.address()?.port ?? 0}/api/peer-reply`, {
 			method: "POST",
-			url: "/api/peer-reply",
 			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-			payload: { session: "joe-1", text: "build is green" },
+			body: JSON.stringify({ session: "joe-1", text: "build is green" }),
 		});
-		expect(res.statusCode).toBe(200);
+		expect(res.status).toBe(200);
 		const evt = await finalPromise;
 		expect(evt.profileId).toBe("joe-1");
 		expect(evt.text).toBe("build is green");
 		expect(evt.target).toBeUndefined(); // it lands in the omni conversation
 		// reconnecting clients see it again via history
-		const hist = await app.inject({ method: "GET", url: "/api/health" });
-		expect(hist.statusCode).toBe(200);
-		const bad = await app.inject({
+		const hist = await fetch(`http://127.0.0.1:${app.address()?.port ?? 0}/api/health`);
+		expect(hist.status).toBe(200);
+		const bad = await fetch(`http://127.0.0.1:${app.address()?.port ?? 0}/api/peer-reply`, {
 			method: "POST",
-			url: "/api/peer-reply",
 			headers: { authorization: "Bearer nope", "content-type": "application/json" },
-			payload: { session: "joe-1", text: "nope" },
+			body: JSON.stringify({ session: "joe-1", text: "nope" }),
 		});
-		expect(bad.statusCode).toBe(401);
+		expect(bad.status).toBe(401);
 		ws.close();
 	});
 

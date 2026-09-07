@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RpcAgentDriver } from "../src/agent.ts";
 
-const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "mock-agent.mjs");
+const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "mock-agent.mjs");
 
 describe("rpc agent driver", () => {
 	let driver: RpcAgentDriver;

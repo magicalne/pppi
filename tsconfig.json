@@ -15,6 +15,7 @@
 		"jsx": "react-jsx",
 		"baseUrl": ".",
 		"paths": {
+			"@pppi/gateway": ["packages/gateway/src/index.ts"],
 			"@pppi/protocol": ["packages/protocol/src/index.ts"],
 			"@pppi/omni": ["packages/omni/src/extension.ts"]
 		},

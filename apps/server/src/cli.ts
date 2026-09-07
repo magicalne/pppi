@@ -1,21 +1,25 @@
-// pppi server CLI.
+// pppi server CLI — the standalone gateway host (headless / daemon use).
+// The same gateway also runs inside a pi session via the pppi extension's
+// /omni command; this entry stays for unattended machines.
 //
 //   bun run apps/server/src/cli.ts [--port 8787] [--host 0.0.0.0] [--token X]
 //                                 [--cwd ~/.pppi/omni-home] [--agent-cmd "..."]
 //                                 [--no-stt]
 
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { hostname, networkInterfaces } from "node:os";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { PairInfo } from "@pppi/protocol";
+import {
+	RpcAgentDriver,
+	Stt,
+	buildPairInfo,
+	createGateway,
+	loadOrCreateConfig,
+	pppiDir,
+	resolveTtsProvider,
+	writePairFile,
+} from "@pppi/gateway";
 import QRCode from "qrcode";
-import { RpcAgentDriver } from "./agent.ts";
-import { loadOrCreateConfig, pppiDir } from "./config.ts";
-import { createServer } from "./server.ts";
-import { Stt } from "./stt.ts";
-import { resolveTtsProvider } from "./tts.ts";
 
 function parseArgs(argv: string[]): Record<string, string | boolean> {
 	const out: Record<string, string | boolean> = {};
@@ -42,36 +46,15 @@ const extensionPath = join(repoRoot, "extensions", "omni.ts");
 
 // ------------------------------------------------------------------ pairing
 
-function lanIps(): string[] {
-	const out: string[] = [];
-	for (const list of Object.values(networkInterfaces())) {
-		for (const ni of list ?? []) {
-			if (ni.family === "IPv4" && !ni.internal) out.push(ni.address);
-		}
-	}
-	return out;
-}
-
-const dir = pppiDir();
-mkdirSync(dir, { recursive: true });
-
-const pair: PairInfo = {
-	machine: process.env.PPPI_NAME ?? hostname(),
-	port: cfg.port,
-	token: cfg.token,
-	ips: lanIps(),
-	urls: [],
-	fingerprint: createHash("sha256").update(cfg.token).digest("hex").slice(0, 8),
-};
-pair.urls = pair.ips.map((ip) => `http://${ip}:${cfg.port}`);
-writeFileSync(join(dir, "pair.json"), `${JSON.stringify(pair, null, "\t")}\n`, { mode: 0o600 });
+const pair = buildPairInfo(cfg);
+writePairFile(pair);
 
 // ------------------------------------------------------------- omni marking
 // `/omni` (pi extension) writes omni.json marking which session is the
 // machine's omni; the gateway resumes that session by id.
 
 function markedOmniSession(): string | null {
-	const p = join(dir, "omni.json");
+	const p = join(pppiDir(), "omni.json");
 	if (!existsSync(p)) return null;
 	try {
 		const raw = JSON.parse(readFileSync(p, "utf8")) as { sessionId?: string };
@@ -95,16 +78,16 @@ const sttStatus = stt.status;
 
 const webDist = join(repoRoot, "apps", "web", "dist");
 const tts = resolveTtsProvider();
-const app = await createServer({
+const gateway = await createGateway({
 	token: cfg.token,
-	driver,
+	agent: driver,
 	stt,
 	webDist: existsSync(webDist) ? webDist : undefined,
 	pair,
 	tts,
 });
 
-await app.listen({ port: cfg.port, host: cfg.host });
+await gateway.listen(cfg.port, cfg.host);
 driver.start();
 
 const shownHost = cfg.host === "0.0.0.0" || cfg.host === "::" ? (pair.ips[0] ?? "<this-mac>") : cfg.host;
@@ -132,7 +115,7 @@ ${qr ? `\n${qr}\n` : ""}
 
 async function shutdown() {
 	console.log("\npppi: shutting down");
-	await app.close();
+	await gateway.close();
 	driver.dispose();
 	process.exit(0);
 }

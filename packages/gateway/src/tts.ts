@@ -10,11 +10,12 @@
 // synthesize() takes PROSE ONLY — strip code/markdown with speakProse()
 // before calling; a coding agent's raw answer is garbage out loud.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { VoiceTtsStatus } from "@pppi/protocol";
+import type { VoiceTts } from "./voice.ts";
 import { decodeWav } from "./wav.ts";
 
 export type TtsChunk = { pcm: Buffer; rate: number };
@@ -192,7 +193,7 @@ function pickSayVoice(): string {
 	try {
 		const list = execFileSync("say", ["-v", "?"], { encoding: "utf8" });
 		for (const want of preferred) {
-			if (list.split("\n").some((l) => l.includes(want))) return want;
+			if (list.split("\n").some((l: string) => l.includes(want))) return want;
 		}
 	} catch {
 		// non-darwin or say missing — say will error at synth time

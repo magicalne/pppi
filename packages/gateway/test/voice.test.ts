@@ -3,11 +3,11 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { RpcAgentDriver } from "../src/agent.ts";
-import { createServer } from "../src/server.ts";
+import { createGateway } from "../src/gateway.ts";
 import { Stt } from "../src/stt.ts";
 import type { VoiceStt, VoiceTts } from "../src/voice.ts";
 
-const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "mock-agent.mjs");
+const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "mock-agent.mjs");
 
 /** A VoiceStt that always "hears" the given text (batch path). */
 function fakeStt(text: string): VoiceStt {
@@ -101,7 +101,7 @@ function fakeTts(opts: { chunkDelayMs?: number } = {}) {
 
 describe("interactive voice websocket", () => {
 	const token = "voice-test-token";
-	let app: Awaited<ReturnType<typeof createServer>>;
+	let app: Awaited<ReturnType<typeof createGateway>>;
 	let driver: RpcAgentDriver;
 	let base: string;
 
@@ -151,9 +151,16 @@ describe("interactive voice websocket", () => {
 		process.env.MOCK_REPLY = mockReply;
 		const v = fakeVad();
 		driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
-		app = await createServer({ token, driver, stt: Stt.create({ disabled: true }), voiceStt: stt, tts, vad: v });
-		await app.listen({ port: 0, host: "127.0.0.1" });
-		const addr = app.server.address();
+		app = await createGateway({
+			token,
+			agent: driver,
+			stt: Stt.create({ disabled: true }),
+			voiceStt: stt,
+			tts,
+			vad: v,
+		});
+		await app.listen(0, "127.0.0.1");
+		const addr = app.address();
 		const port = typeof addr === "object" && addr?.port ? addr.port : 0;
 		base = `ws://127.0.0.1:${port}`;
 		driver.start();

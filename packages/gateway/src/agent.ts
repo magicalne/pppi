@@ -47,6 +47,29 @@ export type DriverEvents = {
 	ready: () => void;
 };
 
+/**
+ * What a gateway needs from "an agent". Implemented by RpcAgentDriver (the
+ * `pi --mode rpc` child used by the cli host and `/omni child`) and later by
+ * the in-process extension driver (`/omni` hosting its own session). The
+ * events are exactly the DriverEvents above — the gateway maps them to wire.
+ */
+export interface AgentPort extends EventEmitter {
+	/** Working directory the agent runs in (pi settings resolution). */
+	readonly cwd: string;
+	get state(): AgentState;
+	get info(): AgentSnapshot;
+	/** Last known status-bar snapshot; safest read is the `status` event. */
+	get status(): AgentStatus;
+	/** Send a user message; queues behind an active turn (followUp semantics). */
+	prompt(text: string): Promise<void>;
+	abort(): void | Promise<void>;
+	setModel(provider: string, modelId: string): Promise<void>;
+	setThinkingLevel(level: string): Promise<void>;
+	/** Models pi can run (auth-configured providers); the enabled filter lives in the gateway. */
+	availableModels(): Promise<ModelInfo[]>;
+	history(opts?: { before?: number; limit?: number }): Promise<{ entries: HistoryEntry[]; hasMore: boolean }>;
+}
+
 /** Map pi's Model (pi-ai) to the wire ModelInfo; tolerant of partial data (mock/tests). */
 function toModelInfo(m: any): ModelInfo | null {
 	if (!m || typeof m !== "object" || !m.provider || !m.id) return null;
@@ -97,7 +120,7 @@ export function toolLabel(toolName: string, args: any): string {
 	}
 }
 
-export class RpcAgentDriver extends EventEmitter {
+export class RpcAgentDriver extends EventEmitter implements AgentPort {
 	private proc: ChildProcessWithoutNullStreams | null = null;
 	private buffer = "";
 	private nextId = 1;

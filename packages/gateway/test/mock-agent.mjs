@@ -82,6 +82,11 @@ function write(obj) {
 
 const history = [];
 
+// strictly-increasing fake clock: rapid prompts can land in the same
+// Date.now() millisecond, which would break before-timestamp pagination
+let clock = Date.now() - 10_000;
+const nextTs = () => ++clock;
+
 function handle(cmd) {
 	switch (cmd.type) {
 		case "get_state":
@@ -150,7 +155,7 @@ function handle(cmd) {
 			write({ id: cmd.id, type: "response", command: "abort", success: true });
 			break;
 		case "prompt": {
-			history.push({ role: "user", content: cmd.message, timestamp: Date.now() });
+			history.push({ role: "user", content: cmd.message, timestamp: nextTs() });
 			write({ id: cmd.id, type: "response", command: "prompt", success: true });
 			// simulate an agent turn: agent_start → deltas → message_end → agent_settled
 			const text = reply.replace("{echo}", String(cmd.message).slice(0, 120));
@@ -167,7 +172,7 @@ function handle(cmd) {
 				role: "assistant",
 				content: [{ type: "text", text }],
 				stopReason: "stop",
-				timestamp: Date.now(),
+				timestamp: nextTs(),
 			};
 			write({ type: "message_end", message: assistant });
 			history.push(assistant);
