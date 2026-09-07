@@ -1,6 +1,7 @@
 package dev.sspi.omni
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -62,6 +63,32 @@ class StatusBarProtocolTest {
 			"""{"type":"list_models"}""",
 			protocolJson.encodeToString(ClientMessage.serializer(), ClientMessage.ListModels()),
 		)
+		// kotlinx omits default params — the server defaults limit to 50
+		assertEquals(
+			"""{"type":"history","before":1234}""",
+			protocolJson.encodeToString(ClientMessage.serializer(), ClientMessage.History(1234, 50)),
+		)
+	}
+
+	@Test fun `parses history_page events`() {
+		val json = """
+			{"type":"history_page","entries":[
+				{"id":"a","role":"user","text":"hi","ts":100},
+				{"id":"b","role":"assistant","text":"hello","ts":101}
+			],"hasMore":true}
+		""".trimIndent()
+		val evt = protocolJson.decodeFromString(ServerEvent.serializer(), json) as ServerEvent.HistoryPageEvt
+		assertEquals(2, evt.entries.size)
+		assertEquals("hello", evt.entries[1].text)
+		assertEquals(101L, evt.entries[1].ts)
+		assertTrue(evt.hasMore)
+
+		val minimal = protocolJson.decodeFromString(
+			ServerEvent.serializer(),
+			"""{"type":"history_page"}""",
+		) as ServerEvent.HistoryPageEvt
+		assertEquals(0, minimal.entries.size)
+		assertFalse(minimal.hasMore)
 	}
 
 	@Test fun `brain alpha ramps from dim to fully lit`() {

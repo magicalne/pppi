@@ -65,6 +65,11 @@ sealed class ServerEvent {
 	@Serializable
 	@SerialName("model_list")
 	data class ModelListEvt(val models: List<ModelInfoDto> = emptyList()) : ServerEvent()
+
+	/** paged history: entries older than the requested `before`, newest-last */
+	@Serializable
+	@SerialName("history_page")
+	data class HistoryPageEvt(val entries: List<ChatEntry> = emptyList(), val hasMore: Boolean = false) : ServerEvent()
 }
 
 @Serializable
@@ -112,6 +117,11 @@ sealed class ClientMessage {
 	@Serializable
 	@SerialName("list_models")
 	class ListModels : ClientMessage()
+
+	/** page of history strictly older than [before] (ms epoch); server replies HistoryPage */
+	@Serializable
+	@SerialName("history")
+	data class History(val before: Long, val limit: Int = 50) : ClientMessage()
 }
 
 // ---- status bar (mirrors packages/protocol v5) ----

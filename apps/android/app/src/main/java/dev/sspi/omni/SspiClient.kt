@@ -97,6 +97,10 @@ class SspiClient(
 		ws?.send(protocolJson.encodeToString(ClientMessage.serializer(), ClientMessage.ListModels()))
 	}
 
+	override fun loadHistory(before: Long, limit: Int) {
+		ws?.send(protocolJson.encodeToString(ClientMessage.serializer(), ClientMessage.History(before, limit)))
+	}
+
 	/** Upload a voice recording; the server transcribes locally and prompts the omni agent. */
 	override fun uploadVoice(wav: ByteArray, onDone: (Boolean, String) -> Unit) {
 		val url = serverUrl.trimEnd('/') + "/api/voice"

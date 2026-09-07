@@ -1,5 +1,5 @@
 import type { AgentState, AgentStatus, ChatEntry, ModelInfo, ServerEvent, SessionsResponse } from "@sspi/protocol";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { StatusBar } from "./status/StatusBar.tsx";
 import { THEMES, type ThemeId, applyTheme, loadTheme } from "./theme.ts";
 import { useVoice } from "./voice/useVoice.ts";
@@ -18,7 +18,12 @@ type Msg = {
 	target?: string;
 	profileId?: string;
 	tool?: { phase: "start" | "end"; label?: string };
+	/** ms epoch, set on history entries — anchors older-page loads */
+	ts?: number;
 };
+
+/** the recent window cached on the client; older pages load only on demand (scroll to top) */
+const HISTORY_PAGE = 50;
 
 const OMNI = (): Target => ({ id: undefined, label: "Omni" });
 
@@ -100,8 +105,13 @@ export default function App() {
 	const [connOpen, setConnOpen] = useState(false);
 	const [sessions, setSessions] = useState<SessionsResponse | null>(null);
 	const [textInput, setTextInput] = useState("");
+	const [hasMoreHistory, setHasMoreHistory] = useState(false);
 	const wsRef = useRef<WebSocket | null>(null);
 	const listRef = useRef<HTMLDivElement | null>(null);
+	/** guards one in-flight older-page load at a time */
+	const loadingOlderRef = useRef(false);
+	/** set when prepending a history page so the scroll effect restores position instead of jumping to bottom */
+	const prependScrollRef = useRef<{ height: number; top: number } | null>(null);
 	const voice = useVoice();
 
 	const conn = connections.find((c) => c.id === activeId) ?? connections[0] ?? null;
@@ -197,6 +207,7 @@ export default function App() {
 				setConnected(true);
 				setAgentState(evt.agent.state);
 				setMsgs(evt.history.map((h: ChatEntry) => ({ ...h })));
+				setHasMoreHistory(evt.history.length >= HISTORY_PAGE);
 				if (conn) void learnAbout(conn);
 				break;
 			case "hello_fail":
@@ -267,6 +278,20 @@ export default function App() {
 			case "agent_notify":
 				showNotice(evt.message);
 				break;
+			case "history_page": {
+				const older = evt.entries.map((h: ChatEntry) => ({ ...h }));
+				loadingOlderRef.current = false;
+				if (older.length === 0) {
+					setHasMoreHistory(false);
+					break;
+				}
+				// keep the viewport anchored on the current top message
+				const el = listRef.current;
+				if (el) prependScrollRef.current = { height: el.scrollHeight, top: el.scrollTop };
+				setMsgs((b) => [...older, ...b]);
+				setHasMoreHistory(evt.hasMore);
+				break;
+			}
 			case "status":
 				setAgentStatus(evt.status);
 				break;
@@ -275,6 +300,7 @@ export default function App() {
 				break;
 			case "error":
 				showNotice(evt.message);
+				loadingOlderRef.current = false; // a failed history page must not wedge the guard
 				break;
 		}
 	}
@@ -349,10 +375,30 @@ export default function App() {
 		return () => clearTimeout(t);
 	}, [voiceNotice, voice.clearNotice]);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: the scroll container is a ref; msgs/agentState are what change the height
-	useEffect(() => {
-		listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-	}, [msgs, agentState]);
+	// the chat is the bottom-anchored surface: new messages, agent state changes
+	// and re-entering from another tab all land on the latest message. A history
+	// page prepend instead restores the previous viewport (anchor on the top msg).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the scroll container is a ref; msgs/agentState/tab are what change the height or remount the list
+	useLayoutEffect(() => {
+		const el = listRef.current;
+		if (!el) return;
+		const prepended = prependScrollRef.current;
+		if (prepended) {
+			prependScrollRef.current = null;
+			el.scrollTop = el.scrollHeight - prepended.height + prepended.top;
+			return;
+		}
+		el.scrollTo({ top: el.scrollHeight });
+	}, [msgs, agentState, tab]);
+
+	// "load forcibly": scrolling hard to the top pulls the next older page
+	const loadOlder = useCallback(() => {
+		if (!hasMoreHistory || loadingOlderRef.current) return;
+		const oldest = msgs.find((m) => m.ts !== undefined)?.ts;
+		if (oldest === undefined || !wsRef.current) return;
+		loadingOlderRef.current = true;
+		wsRef.current.send(JSON.stringify({ type: "history", before: oldest, limit: HISTORY_PAGE }));
+	}, [hasMoreHistory, msgs]);
 
 	// -------------------------------------------------------------- render
 
@@ -446,7 +492,13 @@ export default function App() {
 				)}
 			</div>
 
-			<div className="list" ref={listRef}>
+			<div
+				className="list"
+				ref={listRef}
+				onScroll={(e) => {
+					if (e.currentTarget.scrollTop < 48 && !target.id) loadOlder();
+				}}
+			>
 				{visible.length === 0 && (
 					<div className="empty">
 						<p className="hi">Hey, it's {targetName}.</p>

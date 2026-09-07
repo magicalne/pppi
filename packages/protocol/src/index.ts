@@ -7,6 +7,8 @@
 //     streaming STT partials, spoken replies (local TTS) and barge-in.
 // v5: status bar — context usage, current model, thinking effort; clients can
 //     switch model / thinking level and list the enabled models (pi settings).
+//     Also: paged history — clients cache the recent window and pull older
+//     pages only when the user scrolls to the top.
 
 export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming";
 
@@ -90,7 +92,9 @@ export type ClientMessage =
 	| { type: "abort"; target?: Target }
 	| { type: "set_model"; provider: string; modelId: string }
 	| { type: "set_thinking_level"; level: string }
-	| { type: "list_models" };
+	| { type: "list_models" }
+	/** page of history strictly older than `before` (ms epoch); server replies history_page */
+	| { type: "history"; before: number; limit?: number };
 
 // ---------------------------------------------------------------- server → client
 
@@ -110,7 +114,9 @@ export type ServerEvent =
 	| { type: "voice_active"; active: boolean }
 	// status bar (v5)
 	| { type: "status"; status: AgentStatus }
-	| { type: "model_list"; models: ModelInfo[] };
+	| { type: "model_list"; models: ModelInfo[] }
+	// paged history: entries older than the requested `before`, newest-last
+	| { type: "history_page"; entries: ChatEntry[]; hasMore: boolean };
 
 // ---------------------------------------------------------------- interactive voice (ws /voice)
 

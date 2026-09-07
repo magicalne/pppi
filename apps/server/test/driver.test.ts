@@ -74,6 +74,31 @@ describe("rpc agent driver", () => {
 		expect(driver.status.context?.tokens ?? 0).toBeGreaterThan(before);
 	});
 
+	it("pages history: recent window, then strictly-older pages with hasMore", async () => {
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		for (const q of ["one", "two", "three"]) {
+			// attach before prompting: the mock streams the whole turn in one chunk
+			const done = new Promise<void>((r) => driver.once("assistant-final", r));
+			await driver.prompt(q);
+			await done;
+		}
+		// 3 exchanges = 6 entries; take the recent 2
+		const recent = await driver.history({ limit: 2 });
+		expect(recent.entries.map((h) => h.text)).toEqual(["three", "all green: 264 passed"]);
+		expect(recent.hasMore).toBe(true);
+
+		// older than the recent page: exactly the remaining 4, no more (newest-last)
+		const older = await driver.history({ before: recent.entries[0]!.ts, limit: 10 });
+		expect(older.entries.map((h) => h.text)).toEqual(["one", "all green: 264 passed", "two", "all green: 264 passed"]);
+		expect(older.hasMore).toBe(false);
+
+		// a page bounded in the middle leaves more behind it
+		const mid = await driver.history({ before: recent.entries[0]!.ts, limit: 2 });
+		expect(mid.entries).toHaveLength(2);
+		expect(mid.hasMore).toBe(true);
+	});
+
 	it("streams deltas and a final assistant message", async () => {
 		driver.start();
 		await new Promise<void>((r) => driver.once("ready", r));
@@ -105,11 +130,12 @@ describe("rpc agent driver", () => {
 	it("returns conversation history", async () => {
 		driver.start();
 		await new Promise<void>((r) => driver.once("ready", r));
+		const done = new Promise<void>((r) => driver.once("assistant-final", r));
 		await driver.prompt("hello");
-		await new Promise<void>((r) => driver.once("assistant-final", r));
-		const history = await driver.history();
-		expect(history.map((h) => h.role)).toEqual(["user", "assistant"]);
-		expect(history[1]!.text).toBe("all green: 264 passed");
+		await done;
+		const { entries } = await driver.history();
+		expect(entries.map((h) => h.role)).toEqual(["user", "assistant"]);
+		expect(entries[1]!.text).toBe("all green: 264 passed");
 	});
 
 	it("transitions through thinking/streaming states", async () => {

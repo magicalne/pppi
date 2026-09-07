@@ -355,8 +355,12 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 				clients.add(socket);
 				let history: ChatEntry[] = [];
 				try {
-					const entries = await opts.driver.history();
-					history = [...entries, ...peerLog].map((h) => ({ ...h, id: randomUUID() })).sort((a, b) => a.ts - b.ts);
+					// recent window only — clients pull older pages on demand (history)
+					const { entries } = await opts.driver.history({ limit: 50 });
+					history = [...entries, ...peerLog]
+						.map((h) => ({ ...h, id: randomUUID() }))
+						.sort((a, b) => a.ts - b.ts)
+						.slice(-50);
 				} catch {
 					// keep empty history rather than failing the handshake
 				}
@@ -384,6 +388,19 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 					.catch((err) => send(socket, { type: "error", message: String(err.message ?? err) }));
 			} else if (msg.type === "list_models") {
 				listModels().catch((err) => send(socket, { type: "error", message: String(err.message ?? err) }));
+			} else if (msg.type === "history") {
+				// forced older-history load (user scrolled to the top); reply to this socket only
+				(async () => {
+					const { entries, hasMore } = await opts.driver.history({
+						before: typeof msg.before === "number" ? msg.before : undefined,
+						limit: typeof msg.limit === "number" ? msg.limit : 50,
+					});
+					send(socket, {
+						type: "history_page",
+						entries: entries.map((h) => ({ ...h, id: randomUUID() })),
+						hasMore,
+					});
+				})().catch((err) => send(socket, { type: "error", message: String(err.message ?? err) }));
 			}
 		});
 

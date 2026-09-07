@@ -58,6 +58,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -180,7 +181,10 @@ class MainActivity : ComponentActivity() {
 	}
 }
 
-data class Msg(val id: String, val role: String, val text: String, val source: String?, val target: String? = null, val profileId: String? = null)
+data class Msg(val id: String, val role: String, val text: String, val source: String?, val target: String? = null, val profileId: String? = null, val ts: Long = 0)
+
+/** the recent window cached on the client; older pages load only on demand (scroll to top) */
+const val HISTORY_PAGE = 50
 
 data class UiTarget(val id: String?, val label: String) {
 	companion object {
@@ -220,11 +224,6 @@ fun SspiApp(theme: SspiTheme, setTheme: (String) -> Unit) {
 		if (activeId == id) activeId = connections.firstOrNull()?.id
 	}
 
-	if (showThemes) {
-		ThemesPage(theme, setTheme) { showThemes = false }
-		return
-	}
-
 	// QR scanner for /pair codes (journeyapps zxing-embedded; CaptureActivity handles the camera)
 	val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { res ->
 		val text = res.contents ?: return@rememberLauncherForActivityResult
@@ -262,6 +261,14 @@ fun SspiApp(theme: SspiTheme, setTheme: (String) -> Unit) {
 				upsert(Connection(id = url, name = ConnectionsStore.hostOf(url), url = url, token = token))
 			},
 		)
+	}
+
+	// themes is an OVERLAY (drawn after the chat): ChatScreen stays composed, so
+	// its websocket, state and scroll position survive the round trip
+	if (showThemes && conn != null) {
+		Box(Modifier.fillMaxSize().background(theme.bg)) {
+			ThemesPage(theme, setTheme) { showThemes = false }
+		}
 	}
 
 	if (machinesOpen) {
@@ -535,6 +542,9 @@ fun ChatScreen(
 	val context = LocalContext.current
 	val messages = remember { mutableStateListOf<Msg>() }
 	var connected by remember { mutableStateOf(false) }
+	// history window: hello delivers the recent page; older pages load on demand
+	var hasMoreHistory by remember { mutableStateOf(false) }
+	var loadingHistory by remember { mutableStateOf(false) }
 	var agentState by remember { mutableStateOf("starting") }
 	var toolLabel by remember { mutableStateOf<String?>(null) }
 	var notice by remember { mutableStateOf<String?>(null) }
@@ -582,7 +592,8 @@ fun ChatScreen(
 					is ServerEvent.HelloOk -> {
 						agentState = evt.agent.state
 						messages.clear()
-						messages.addAll(evt.history.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId) })
+						messages.addAll(evt.history.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId, it.ts) })
+						hasMoreHistory = evt.history.size >= HISTORY_PAGE
 						// learn the machine's name + omni profile color once, off the UI thread
 						thread(name = "sspi-learn") {
 							try {
@@ -639,6 +650,17 @@ fun ChatScreen(
 					is ServerEvent.AgentInfoEvt -> {}
 					is ServerEvent.StatusEvt -> agentStatus = evt.status
 					is ServerEvent.ModelListEvt -> modelList = evt.models
+					is ServerEvent.HistoryPageEvt -> {
+						loadingHistory = false
+						val older = evt.entries.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId, it.ts) }
+						if (older.isEmpty()) {
+							hasMoreHistory = false
+						} else {
+							// prepend; LazyColumn's item keys keep the viewport anchored
+							messages.addAll(0, older)
+							hasMoreHistory = evt.hasMore
+						}
+					}
 				}
 			},
 		) { ok -> connected = ok }
@@ -833,6 +855,16 @@ fun ChatScreen(
 	val listState = rememberLazyListState()
 	LaunchedEffect(messages.size, agentState) {
 		if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+	}
+	// "load forcibly": scrolled hard to the top → pull the next older page
+	val atTop by remember {
+		derivedStateOf { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 40 }
+	}
+	LaunchedEffect(atTop) {
+		if (atTop && hasMoreHistory && !loadingHistory && messages.isNotEmpty()) {
+			loadingHistory = true
+			client.loadHistory(messages.first().ts)
+		}
 	}
 
 	val visible = messages.filter { (it.target) == selected.id }

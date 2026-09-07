@@ -8,6 +8,8 @@ interface SspiConnection {
 	fun setModel(provider: String, modelId: String)
 	fun setThinkingLevel(level: String)
 	fun listModels()
+	/** pull one page of history strictly older than `before` (ms epoch) */
+	fun loadHistory(before: Long, limit: Int = 50)
 	fun uploadVoice(wav: ByteArray, onDone: (Boolean, String) -> Unit)
 	fun close()
 }

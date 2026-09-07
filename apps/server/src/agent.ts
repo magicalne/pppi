@@ -392,18 +392,25 @@ export class RpcAgentDriver extends EventEmitter {
 		return models;
 	}
 
-	async history(): Promise<HistoryEntry[]> {
+	/**
+	 * A page of conversation history, newest-last. Without `before`: the most
+	 * recent `limit` entries. With `before` (ms epoch): the most recent `limit`
+	 * entries strictly older than it, plus whether even older ones exist.
+	 */
+	async history(opts?: { before?: number; limit?: number }): Promise<{ entries: HistoryEntry[]; hasMore: boolean }> {
 		const res = await this.request("get_messages", 30_000);
 		if (!res.success) throw new Error(res.error ?? "get_messages failed");
 		const messages: any[] = res.data?.messages ?? [];
-		const out: HistoryEntry[] = [];
+		const all: HistoryEntry[] = [];
 		for (const m of messages) {
 			if (m.role !== "user" && m.role !== "assistant") continue;
 			const text = m.role === "user" ? textFromUser(m) : textFromAssistant(m);
 			if (!text.trim()) continue;
-			out.push({ role: m.role, text, ts: m.timestamp ?? Date.now() });
+			all.push({ role: m.role, text, ts: m.timestamp ?? Date.now() });
 		}
-		return out.slice(-100);
+		const older = opts?.before === undefined ? all : all.filter((e) => e.ts < (opts.before ?? 0));
+		const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
+		return { entries: older.slice(-limit), hasMore: older.length > limit };
 	}
 
 	dispose(): void {

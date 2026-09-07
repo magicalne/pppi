@@ -144,6 +144,30 @@ describe("gateway server", () => {
 		expect(evt.status.thinkingLevel).toBe("high");
 		ws.close();
 	});
+
+	it("serves older history pages on demand", async () => {
+		const ws = await connect(token);
+		await nextEvent(ws, "hello_ok");
+		// generate two exchanges, then page back from the newest
+		const final = nextEvent(ws, "assistant_final");
+		ws.send(JSON.stringify({ type: "chat", text: "page test one" }));
+		await final;
+		const final2 = nextEvent(ws, "assistant_final");
+		ws.send(JSON.stringify({ type: "chat", text: "page test two" }));
+		await final2;
+
+		ws.send(JSON.stringify({ type: "history", before: Date.now() + 1, limit: 2 }));
+		const page = await nextEvent(ws, "history_page");
+		expect(page.entries).toHaveLength(2);
+		expect(page.entries.at(-1).text).toBe("ack from omni");
+		expect(page.hasMore).toBe(true); // earlier mock exchanges still exist
+
+		ws.send(JSON.stringify({ type: "history", before: 0, limit: 50 }));
+		const empty = await nextEvent(ws, "history_page");
+		expect(empty.entries).toHaveLength(0);
+		expect(empty.hasMore).toBe(false);
+		ws.close();
+	});
 });
 
 describe("model list (enabled patterns)", () => {
