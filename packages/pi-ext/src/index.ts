@@ -12,7 +12,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { startOmniHost, stopOmniHost } from "./omni-host.ts";
+import { startOmniHere, startOmniHost, stopOmniHost } from "./omni-host.ts";
 import { pairUrl, qrText } from "./pair.ts";
 import { listProfiles, loadPair, readProfile, selfSessionId, writeOmniMark, writeProfile } from "./store.ts";
 
@@ -46,7 +46,7 @@ export default function pppiExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("omni", {
 		description:
-			"pppi: boot the gateway from this session (clients pair while this session lives). Args: `mark` tags this session as the omni target, `stop` shuts the gateway down.",
+			"pppi: boot the gateway from this session (clients pair while this session lives). Modes: (default) launch the omni as an rpc child · `here` THIS session becomes the omni · `mark` tag this session as the child target · `stop`.",
 		handler: async (args, ctx) => {
 			const sub = args.trim().split(/\s+/)[0];
 			if (sub === "stop") {
@@ -65,6 +65,10 @@ export default function pppiExtension(pi: ExtensionAPI) {
 					`This session is now the pppi omni target (session ${id}).\nRestart the gateway to attach.`,
 					"info",
 				);
+				return;
+			}
+			if (sub === "here") {
+				await startOmniHere(pi, ctx, (message, level) => ctx.ui.notify(message, level));
 				return;
 			}
 			await startOmniHost((message, level) => ctx.ui.notify(message, level));
