@@ -80,8 +80,20 @@ export default function pppiExtension(pi: ExtensionAPI) {
 		handler: async (_args, ctx) => {
 			const pair = loadPair();
 			if (!pair) {
+				// a running gateway with a DIFFERENT PPPI_DIR is the classic trap —
+				// detect it so the message says what to actually fix
+				let mismatch = false;
+				try {
+					const res = await fetch("http://127.0.0.1:8787/api/health");
+					mismatch = ((await res.json()) as { name?: string })?.name === "pppi";
+				} catch {
+					// nothing on the default port
+				}
+				const dir = process.env.PPPI_DIR ?? "~/.pppi";
 				ctx.ui.notify(
-					`No pppi pairing info found (${process.env.PPPI_DIR ?? "~/.pppi"}/pair.json).\nStart the pppi gateway once, then retry.`,
+					mismatch
+						? `A gateway is running on :8787, but this session has no pair info in ${dir}/pair.json.\nThe gateway was started with a different PPPI_DIR — restart it without PPPI_DIR (default ~/.pppi), or export the same PPPI_DIR here, then retry.`
+						: `No pppi pairing info found (${dir}/pair.json).\nRun /omni (or start the standalone gateway), then retry.`,
 					"error",
 				);
 				return;
