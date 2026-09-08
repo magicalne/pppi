@@ -136,11 +136,14 @@ export default function App() {
 		if (activeId) localStorage.setItem("pppi.active", activeId);
 	}, [activeId]);
 
-	// ?pair=<token> onboarding: opening the gateway's pair link pairs this browser
+	// ?pair=<token> onboarding: opening the gateway's pair link pairs this browser.
+	// ?server=<url> supports static-hosted clients (GitHub Pages) whose origin is
+	// NOT the gateway: ?server=http%3A%2F%2Fmac%3A8787&pair=<token>
 	useEffect(() => {
-		const token = new URLSearchParams(location.search).get("pair");
+		const params = new URLSearchParams(location.search);
+		const token = params.get("pair");
 		if (!token) return;
-		const url = location.origin;
+		const url = params.get("server") ?? location.origin;
 		setConnections((prev) => {
 			const next = [...prev.filter((c) => c.id !== url), { id: url, name: hostOf(url), url, token }];
 			return next;
@@ -786,9 +789,13 @@ function Pairing({ onDone, notice }: { onDone: (p: Pairing) => void; notice: str
 						defaultValue={
 							location.search.includes("pair=")
 								? location.href
-								: location.origin.includes("5173")
-									? "http://localhost:8787"
-									: location.origin
+								: new URLSearchParams(location.search).get("server") ??
+									(location.origin.includes("5173")
+										? "http://localhost:8787"
+										: location.protocol === "https:"
+											// static host (GitHub Pages etc.): the gateway lives elsewhere
+											? ""
+											: location.origin)
 						}
 						style={fieldStyle}
 					/>

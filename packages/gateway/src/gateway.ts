@@ -162,6 +162,15 @@ const MIME: Record<string, string> = {
 	".woff2": "font/woff2",
 };
 
+// static-host clients (GitHub Pages) are cross-origin to the gateway; every
+// authed route requires the bearer token anyway, so permissive CORS is safe
+const CORS: Record<string, string> = {
+	"access-control-allow-origin": "*",
+	"access-control-allow-methods": "GET, POST, OPTIONS",
+	"access-control-allow-headers": "authorization, content-type, x-pppi-token",
+	"access-control-max-age": "86400",
+};
+
 function bearer(req: IncomingMessage): string | undefined {
 	const auth = req.headers.authorization?.replace(/^Bearer\s+/i, "");
 	return auth ?? (req.headers["x-pppi-token"] as string | undefined);
@@ -173,7 +182,7 @@ function json(res: ServerResponse, code: number, body: unknown): void {
 		return;
 	}
 	const line = JSON.stringify(body);
-	res.writeHead(code, { "content-type": "application/json", "content-length": Buffer.byteLength(line) });
+	res.writeHead(code, { ...CORS, "content-type": "application/json", "content-length": Buffer.byteLength(line) });
 	res.end(line);
 }
 
@@ -371,6 +380,12 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 	});
 
 	async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		if (req.method === "OPTIONS") {
+			// preflight for cross-origin clients (GitHub Pages → LAN gateway)
+			res.writeHead(204, CORS);
+			res.end();
+			return;
+		}
 		const path = new URL(req.url ?? "/", "http://local").pathname;
 		if (req.method === "GET" && path === "/api/health") {
 			// kick the child so a crashed/starting audio service self-heals

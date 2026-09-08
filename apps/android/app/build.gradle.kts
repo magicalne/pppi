@@ -18,9 +18,27 @@ android {
 		testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 	}
 
+	signingConfigs {
+		create("release") {
+			// CI release signing from secrets; without them the build falls back
+			// to the debug key so the APK stays installable
+			val ksFile = System.getenv("PPPI_KEYSTORE_FILE")
+			if (ksFile != null) {
+				storeFile = file(ksFile)
+				storePassword = System.getenv("PPPI_KEYSTORE_PASSWORD")
+				keyAlias = System.getenv("PPPI_KEY_ALIAS") ?: "pppi"
+				keyPassword = System.getenv("PPPI_KEY_PASSWORD")
+			}
+		}
+	}
 	buildTypes {
 		release {
 			isMinifyEnabled = false
+			signingConfig = if (System.getenv("PPPI_KEYSTORE_FILE") != null) {
+				signingConfigs.getByName("release")
+			} else {
+				signingConfigs.getByName("debug")
+			}
 		}
 	}
 	compileOptions {

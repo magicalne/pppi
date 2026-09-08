@@ -1,0 +1,52 @@
+name: release
+# Tag a version (v*) → build the Android APK and publish a GitHub Release.
+# Future host binaries can join as extra steps in this job.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    env:
+      PPPI_KEYSTORE_FILE: ${{ github.workspace }}/pppi.keystore.jks
+      PPPI_KEYSTORE_PASSWORD: ${{ secrets.PPPI_KEYSTORE_PASSWORD }}
+      PPPI_KEY_ALIAS: ${{ secrets.PPPI_KEY_ALIAS }}
+      PPPI_KEY_PASSWORD: ${{ secrets.PPPI_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: prepare keystore (falls back to debug signing without secrets)
+        env:
+          B64: ${{ secrets.PPPI_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$B64" ]; then
+            echo "$B64" | base64 -d > "$PPPI_KEYSTORE_FILE"
+          else
+            echo "no PPPI_KEYSTORE_B64 secret — debug-signed APK"
+            echo "PPPI_KEYSTORE_FILE=" >> "$GITHUB_ENV"
+          fi
+
+      - name: build release APK
+        run: cd apps/android && ./gradlew :app:assembleRelease --no-daemon
+
+      - name: rename artifact
+        run: |
+          mkdir -p dist
+          cp apps/android/app/build/outputs/apk/release/app-release.apk "dist/pppi-${GITHUB_REF_NAME}.apk"
+
+      - name: publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*.apk

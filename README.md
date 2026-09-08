@@ -180,6 +180,25 @@ once with `bun run install:ext` (copies it to `~/.pi/agent/extensions/pppi/`):
 | `omni_worktree` | create / list / remove git worktrees per repo |
 | `/omni` | print the current hierarchy |
 
+## Releases & the hosted web client
+
+- **Android APK**: pushing a `v*` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml)
+  and attaches a signed `pppi-<tag>.apk` to a GitHub Release. Signing uses repo
+  secrets (`PPPI_KEYSTORE_B64` / `PPPI_KEYSTORE_PASSWORD` / `PPPI_KEY_ALIAS` /
+  `PPPI_KEY_PASSWORD`); without them the APK falls back to debug signing.
+- **Web client on GitHub Pages**: pushes to `main` build `apps/web` to
+  https://magicalne.github.io/pppi/ — no local web server needed. The bundle
+  is static and pairs with any gateway: enter the gateway URL + token, or open
+  a link shaped like `https://magicalne.github.io/pppi/?server=http%3A%2F%2F<mac>%3A8787&pair=<token>`.
+
+> **Mixed-content caveat:** an `https://` Pages page cannot open `ws://` /
+> `http://` connections to a plain-LAN gateway — browsers block it. Put the
+> gateway behind TLS for Pages use, e.g. with Tailscale (both devices on the
+> tailnet): `tailscale serve --bg --https=443 http://localhost:8787`, then pair
+> the Pages client with `https://<mac>.<tailnet>.ts.net` (valid certs, `wss://`
+> works). On the same LAN, the gateway's own served client (no TLS needed)
+> remains the simplest path.
+
 ## Testing
 
 ```bash

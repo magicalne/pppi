@@ -3,6 +3,8 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
 	plugins: [react()],
+	// relative so the same bundle works from the gateway root AND GitHub Pages (/pppi/)
+	base: "./",
 	server: {
 		host: "0.0.0.0",
 		proxy: {
