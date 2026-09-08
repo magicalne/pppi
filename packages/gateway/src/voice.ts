@@ -67,6 +67,8 @@ export type VoiceSessionDeps = {
 	submit(text: string): Promise<void>;
 	/** Barge-in: abort the in-flight agent turn. */
 	abortAgent(): void;
+	/** The last assistant reply (magic-word `repeat`). */
+	lastReply?(): string | null;
 	/** Lifecycle: the server counts authed sessions and mirrors `voice_active` to chat clients. */
 	onAuthed(): void;
 	onClosed(): void;
@@ -81,7 +83,8 @@ const SAMPLE_RATE = 16_000;
 const VAD_WINDOW_SAMPLES = 512; // 32 ms @ 16 kHz
 
 /** Control phrases act immediately and never become turns (plan D1: keywords command, silence ends turns). */
-const CONTROL_PHRASES = /^(stop|cancel|abort|never\s?mind|forget it|scratch that)\s*[.!,?]*$/i;
+const CONTROL_PHRASES = /^(stop|cancel|abort|never\s?mind|forget it|scratch that|quiet)\s*[.!,?]*$/i;
+const REPEAT_PHRASES = /^(repeat|say\s+that\s+again|come\s+again|again)\s*[.!,?]*$/i;
 
 type Capture = {
 	pcm: Float32Array[];
@@ -357,6 +360,19 @@ export class VoiceSession {
 			this.interrupt();
 			return;
 		}
+		// "repeat": re-speak the last reply as its own turn — no model round trip
+		if (REPEAT_PHRASES.test(text)) {
+			const reply = this.deps.lastReply?.() ?? null;
+			this.send({ type: "stt_final", id: randomUUID(), text });
+			if (reply) {
+				this.send({ type: "voice_state", state: "thinking" });
+				this.speaker?.speakWhole(reply);
+			} else {
+				this.send({ type: "voice_error", message: "nothing to repeat yet" });
+				this.send({ type: "voice_state", state: "listening" });
+			}
+			return;
+		}
 		const id = randomUUID();
 		this.send({ type: "stt_final", id, text });
 		this.send({ type: "voice_state", state: "thinking" });
@@ -458,6 +474,15 @@ export class Speaker {
 		if (!text.startsWith(this.chunker.emitted)) return; // rewritten mid-flight: the visible text is right, stay quiet
 		const tail = text.slice(this.chunker.emitted.length).trim();
 		if (tail) this.enqueue(tail);
+	}
+
+	/** Magic-word replay: speak a finished text as its own turn (repeat). */
+	speakWhole(text: string): void {
+		this.beginTurn();
+		const prose = speakProse(text);
+		if (!prose) return;
+		this.queue.push({ id: randomUUID(), text: prose });
+		void this.drain();
 	}
 
 	private enqueue(text: string): void {

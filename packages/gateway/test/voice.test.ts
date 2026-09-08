@@ -364,6 +364,42 @@ describe("interactive voice websocket", () => {
 		chat.close();
 	});
 
+	it("repeats the last reply on a repeat magic word without a new turn", async () => {
+		const { provider, received } = fakeTts();
+		let turns = 0;
+		driver.prompt = async () => {
+			turns++;
+		};
+		const v = await boot(fakeStt("repeat"), provider, "ignored turn text");
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+		const chat = await chatConnect();
+		await nextEvent(chat, "hello_ok");
+
+		const events: any[] = [];
+		voice.on("message", (raw: Buffer, isBinary: boolean) => {
+			if (isBinary) return;
+			events.push(JSON.parse(raw.toString()));
+		});
+
+		// seed lastReply through a normal agent final (the gateway tracks it even
+		// when the speaker's chunker never saw deltas)
+		driver.emit("assistant-final", "seed-1", "The build is green.");
+
+		say(voice, v, "speech", 8);
+		say(voice, v, "silence", 30);
+
+		await new Promise((r) => setTimeout(r, 400));
+		const starts = events.filter((e) => e.type === "tts_start");
+		const states = events.filter((e) => e.type === "voice_state").map((e) => e.state);
+		expect(turns).toBe(0); // repeat never becomes a model turn
+		expect(received).toEqual(["The build is green."]); // spoken exactly once, from the cache
+		expect(starts.length).toBe(1);
+		expect(states).toContain("speaking");
+		voice.close();
+		chat.close();
+	});
+
 	it("dispatches sentences that merely contain a control word", async () => {
 		const v = await boot(fakeStt("stop the build"));
 		const voice = await voiceConnect(token);

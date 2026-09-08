@@ -98,15 +98,17 @@ const server = createServer((req, res) => {
 
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 let open = 0;
+let lastReplyText: string | null = null; // fed by __assistant_final__ frames (magic-word repeat)
 server.on("upgrade", (req, socket, head) => {
 	if (new URL(req.url ?? "/", "http://local").pathname !== "/voice") return socket.destroy();
 	wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
 		open++;
-		void new VoiceSession(ws, {
+		const session = new VoiceSession(ws, {
 			token,
 			stt: sttPort,
 			tts,
 			vad: vad ?? { prob: async () => 0 },
+			lastReply: () => lastReplyText,
 			submit: async (text) => ws.send(JSON.stringify({ type: "__submit__", text })),
 			abortAgent: () => ws.send(JSON.stringify({ type: "__abort__" })),
 			onAuthed: () => ws.send(JSON.stringify({ type: "__voice_active__", active: true })),
@@ -114,6 +116,21 @@ server.on("upgrade", (req, socket, head) => {
 				open = Math.max(0, open - 1);
 				if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "__voice_active__", active: open > 0 }));
 			},
+		});
+		// assistant text arrives as control frames — feed the speaker (+ repeat cache)
+		ws.on("message", (data: Buffer, isBinary: boolean) => {
+			if (isBinary) return;
+			try {
+				const m = JSON.parse(data.toString()) as { type?: string; id?: string; text?: string; delta?: string };
+				if (m.type === "__assistant_final__" && m.id && m.text) {
+					lastReplyText = m.text;
+					session.assistantFinal(m.id, m.text);
+				} else if (m.type === "__assistant_delta__" && m.id && m.delta) {
+					session.assistantDelta(m.id, m.delta);
+				}
+			} catch {
+				// not ours
+			}
 		});
 	});
 });

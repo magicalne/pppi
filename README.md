@@ -68,7 +68,10 @@ without becoming a chat turn. Fenced code is never spoken — the voice says
   model_quantized.onnx`, `voices/af_heart.bin`). Download:
   `huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX --include
   "onnx/model_quantized.onnx" "voices/af_heart.bin" "config.json" "tokenizer*"`
-- Timing knobs live in `apps/server/src/vad.ts` (`DEFAULT_TIMINGS`).
+- Timing knobs live in `packages/gateway/src/vad.ts` (`DEFAULT_TIMINGS`).
+- Magic words never become turns: `stop` (also `cancel`, `quiet`) cuts
+  playback and aborts the agent; `repeat` (also `say that again`) re-speaks
+  the last reply without a model round trip.
 - Sessions auto-pause after 10 idle minutes; hold-to-talk stays as the
   fallback whenever the session is off.
 

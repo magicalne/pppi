@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.AudioManager
 import android.media.MediaRecorder
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -811,7 +812,8 @@ fun ChatScreen(
 						notice = "voice session ended"
 					},
 				)
-				val engine = VoiceAudioEngine(client)
+				val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+				val engine = VoiceAudioEngine(client, audioManager)
 				voiceClientRef.set(client)
 				voiceEngineRef.set(engine)
 				client.start()

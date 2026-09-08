@@ -303,7 +303,9 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			(a) => a.assistantDelta(id, delta),
 		);
 	});
+	let lastReply: string | null = null;
 	agent.on("assistant-final", (id: string, text: string) => {
+		lastReply = text;
 		broadcast({ type: "assistant_final", id, text });
 		speakAssistant(
 			(s) => s.assistantFinal(id, text),
@@ -610,6 +612,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 					await submitUserText(text, "voice");
 				},
 				abortAgent: () => void agent.abort(),
+				lastReply: () => lastReply,
 				onAuthed: () => setVoiceActive(true),
 				onClosed: () => {
 					sessions.delete(session);

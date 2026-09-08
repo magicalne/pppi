@@ -789,13 +789,13 @@ function Pairing({ onDone, notice }: { onDone: (p: Pairing) => void; notice: str
 						defaultValue={
 							location.search.includes("pair=")
 								? location.href
-								: new URLSearchParams(location.search).get("server") ??
+								: (new URLSearchParams(location.search).get("server") ??
+									// static host (GitHub Pages etc.): the gateway lives elsewhere
 									(location.origin.includes("5173")
 										? "http://localhost:8787"
 										: location.protocol === "https:"
-											// static host (GitHub Pages etc.): the gateway lives elsewhere
 											? ""
-											: location.origin)
+											: location.origin))
 						}
 						style={fieldStyle}
 					/>
