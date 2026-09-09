@@ -66,6 +66,11 @@ sealed class ServerEvent {
 	@SerialName("model_list")
 	data class ModelListEvt(val models: List<ModelInfoDto> = emptyList()) : ServerEvent()
 
+	/** the omni session was reset (/new): clear the mirrored history */
+	@Serializable
+	@SerialName("session_new")
+	data object SessionNew : ServerEvent()
+
 	/** paged history: entries older than the requested `before`, newest-last */
 	@Serializable
 	@SerialName("history_page")

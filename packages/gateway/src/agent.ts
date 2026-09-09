@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { AgentStatus, ContextInfo, ModelInfo } from "@pppi/protocol";
 
-export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming";
+export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming" | "compacting";
 
 export type AgentSnapshot = {
 	model: ModelInfo | null;
@@ -63,6 +63,10 @@ export interface AgentPort extends EventEmitter {
 	/** Send a user message; queues behind an active turn (followUp semantics). */
 	prompt(text: string): Promise<void>;
 	abort(): void | Promise<void>;
+	/** Compact the session now (LLM summarization; seconds to minutes). */
+	compact(): Promise<void>;
+	/** Reset to a fresh session; history is empty afterwards. */
+	newSession(): Promise<void>;
 	setModel(provider: string, modelId: string): Promise<void>;
 	setThinkingLevel(level: string): Promise<void>;
 	/** Models pi can run (auth-configured providers); the enabled filter lives in the gateway. */
@@ -195,7 +199,7 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 			}, this.restartDelay);
 		});
 
-		this.request("get_state", 15_000)
+		this.request("get_state", 30_000)
 			.then(async (res) => {
 				if (!res.success) return;
 				const d = res.data ?? {};
@@ -211,6 +215,9 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 				this.emit("info", this.snapshot);
 				this.emitStatus();
 				this.setState(d.isStreaming ? "streaming" : "idle");
+				// auto-compaction is pi's default, but a local setting could have
+				// it off — the context bar staying honest depends on it
+				void this.request("set_auto_compaction", 10_000, { enabled: true }).catch(() => {});
 				this.restartDelay = 1_000;
 				this.emit("ready");
 			})
@@ -296,6 +303,17 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 					.then(() => this.emitStatus())
 					.catch(() => {});
 				break;
+			case "compaction_start":
+				// pi auto-compacts at the context threshold by default; /compact lands here too
+				this.setState("compacting");
+				break;
+			case "compaction_end":
+				this.setState("idle");
+				// context usage just collapsed — refresh the bar
+				void this.refreshStats()
+					.then(() => this.emitStatus())
+					.catch(() => {});
+				break;
 			case "tool_execution_start":
 				this.setState("tool", ev.toolName);
 				this.emit("tool", ev.toolName, "start", toolLabel(ev.toolName, ev.args));
@@ -353,6 +371,20 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 
 	async abort(): Promise<void> {
 		this.write({ type: "abort" });
+	}
+
+	/** Compact the session (LLM summarization — can take a while). */
+	async compact(): Promise<void> {
+		const res = await this.request("compact", 300_000, {});
+		if (!res.success) throw new Error(res.error ?? "compact failed");
+	}
+
+	/** Reset to a fresh session; the old conversation stays on disk. */
+	async newSession(): Promise<void> {
+		const res = await this.request("new_session", 30_000, {});
+		if (!res.success) throw new Error(res.error ?? "new session failed");
+		await this.refreshStats().catch(() => {});
+		this.emitStatus();
 	}
 
 	// ------------------------------------------------------------- status bar

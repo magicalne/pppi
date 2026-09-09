@@ -91,6 +91,8 @@ function omniStatus(state: AgentState, toolLabel: string | null, connected: bool
 			return `${toolLabel ?? "working"}…`;
 		case "streaming":
 			return "typing…";
+		case "compacting":
+			return "compacting…";
 		case "starting":
 			return "waking up…";
 		default:
@@ -286,8 +288,7 @@ export default function App() {
 				break;
 			case "agent_state":
 				setAgentState(evt.state);
-				if (evt.state !== "tool") setToolLabel(null);
-				break;
+				if (evt.state !== "tool") setToolLabel(null);				break;
 			case "agent_notify":
 				showNotice(evt.message);
 				break;
@@ -310,6 +311,11 @@ export default function App() {
 				break;
 			case "model_list":
 				setModelList(evt.models);
+				break;
+			case "session_new":
+				setMsgs([]);
+				setHasMoreHistory(false);
+				showNotice("started a fresh session");
 				break;
 			case "error":
 				showNotice(evt.message);

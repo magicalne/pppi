@@ -4,7 +4,7 @@
 // ripple so the wave breathes through silence and thinking.
 
 import { useEffect, useRef } from "react";
-import type { VoicePhase } from "./voice/useVoice.ts";
+import type { VoicePhase } from "./useVoice.ts";
 
 const BARS = 28;
 const SAMPLE_MS = 100;

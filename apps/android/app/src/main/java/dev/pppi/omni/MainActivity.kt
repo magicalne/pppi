@@ -657,6 +657,11 @@ fun ChatScreen(
 					is ServerEvent.AgentInfoEvt -> {}
 					is ServerEvent.StatusEvt -> agentStatus = evt.status
 					is ServerEvent.ModelListEvt -> modelList = evt.models
+					is ServerEvent.SessionNew -> {
+						messages.clear()
+						hasMoreHistory = false
+						notice = "started a fresh session"
+					}
 					is ServerEvent.HistoryPageEvt -> {
 						loadingHistory = false
 						val older = evt.entries.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId, it.ts) }
@@ -708,6 +713,7 @@ fun ChatScreen(
 				!connected -> "connecting…"
 				agentState == "tool" -> (toolLabel ?: "working") + "…"
 				agentState == "thinking" -> "thinking…"
+				agentState == "compacting" -> "compacting…"
 				agentState == "streaming" -> "typing…"
 				agentState == "starting" -> "waking up…"
 				else -> ""

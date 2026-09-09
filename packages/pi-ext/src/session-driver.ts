@@ -33,6 +33,10 @@ type Ctx = {
 		getSessionName?(): string | undefined;
 	};
 	modelRegistry: { getAvailable(): AnyModel[] };
+	/** pi ≥0.83: trigger compaction without awaiting completion. */
+	compact?(options?: { customInstructions?: string }): void;
+	/** pi ≥0.83: reset to a fresh session. */
+	newSession?(options?: Record<string, unknown>): unknown;
 };
 
 /** pi-ai Model → wire ModelInfo (drop non-string thinkingLevelMap entries). */
@@ -156,7 +160,11 @@ export class ExtensionAgentDriver extends EventEmitter {
 			this.refreshStatus();
 			this.emit("info", this.info);
 		});
-		this.pi.on("session_compact", async () => this.refreshStatus());
+		this.pi.on("session_before_compact", async () => this.setState("compacting"));
+		this.pi.on("session_compact", async () => {
+			this.setState("idle");
+			this.refreshStatus();
+		});
 	}
 
 	private setState(s: string): void {
@@ -209,6 +217,22 @@ export class ExtensionAgentDriver extends EventEmitter {
 
 	abort(): void {
 		this.ctx?.abort();
+	}
+
+	async compact(): Promise<void> {
+		const ctx = this.ctx;
+		if (!ctx?.compact) throw new Error("compaction unavailable in this pi version");
+		if (ctx.isIdle && !ctx.isIdle()) throw new Error("the agent is busy — stop it first");
+		ctx.compact();
+	}
+
+	async newSession(): Promise<void> {
+		const ctx = this.ctx;
+		if (!ctx?.newSession) throw new Error("new session unavailable in this pi version");
+		if (ctx.isIdle && !ctx.isIdle()) throw new Error("the agent is busy — stop it first");
+		await ctx.newSession();
+		this.refreshStatus();
+		this.emit("info", this.info);
 	}
 
 	async setModel(provider: string, modelId: string): Promise<void> {

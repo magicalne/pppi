@@ -100,15 +100,17 @@ export class VoiceClient {
 	}
 
 	interrupt(): void {
-		if (this.live && this.ws?.readyState === this.ws.OPEN) {
-			this.ws.send(JSON.stringify({ type: "interrupt" }));
+		const sock = this.ws;
+		if (this.live && sock && sock.readyState === sock.OPEN) {
+			sock.send(JSON.stringify({ type: "interrupt" }));
 		}
 	}
 
 	/** The local speaker went idle — relax the server's echo-aware barge-in. */
 	playbackDone(): void {
-		if (this.live && this.ws?.readyState === this.ws.OPEN) {
-			this.ws.send(JSON.stringify({ type: "playback_done" }));
+		const sock = this.ws;
+		if (this.live && sock && sock.readyState === sock.OPEN) {
+			sock.send(JSON.stringify({ type: "playback_done" }));
 		}
 	}
 

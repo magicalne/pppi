@@ -236,7 +236,7 @@ export function useVoice() {
 				refs.current.mic = null;
 				refs.current.player = null;
 				refs.current.lastStart = null;
-				await client.close().catch(() => {});
+				client.close();
 				await mic.stop().catch(() => {});
 				setBoot(null);
 				const why = err instanceof Error ? err.message : "microphone unavailable";

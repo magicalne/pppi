@@ -369,6 +369,8 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 	async function submitUserText(text: string, source: "voice" | "text", target?: Target): Promise<{ id: string }> {
 		const id = randomUUID();
 		if (!target || target === agent.info.sessionId) {
+			// session commands ride any client's composer; peers get plain text
+			if (await handleSessionCommand(text)) return { id };
 			if (source === "voice") broadcast({ type: "transcript", id, text });
 			broadcast({ type: "user_message", id, text, source });
 			await agent.prompt(text);
@@ -376,6 +378,31 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 		}
 		await sendToPeer(text, target);
 		return { id };
+	}
+
+	/** `/new` and `/compact` — false when the text is not a session command. */
+	async function handleSessionCommand(text: string): Promise<boolean> {
+		const command = text.trim().toLowerCase();
+		if (command !== "/new" && command !== "/compact") return false;
+		if (agent.state !== "idle") {
+			broadcast({ type: "agent_notify", level: "warning", message: "the agent is still working — stop it first" });
+			return true;
+		}
+		try {
+			if (command === "/new") {
+				broadcast({ type: "agent_notify", level: "info", message: "starting a fresh session…" });
+				await agent.newSession();
+				broadcast({ type: "session_new" });
+				broadcast({ type: "agent_notify", level: "info", message: "fresh session ready" });
+			} else {
+				broadcast({ type: "agent_notify", level: "info", message: "compacting the session…" });
+				await agent.compact();
+				broadcast({ type: "agent_notify", level: "info", message: "session compacted — context freed" });
+			}
+		} catch (err) {
+			broadcast({ type: "error", message: (err as Error).message ?? "session command failed" });
+		}
+		return true;
 	}
 
 	/** Available models filtered by pi's enabledModels settings — the model popup's list. */

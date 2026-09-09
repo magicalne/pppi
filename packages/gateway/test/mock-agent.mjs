@@ -154,30 +154,53 @@ function handle(cmd) {
 		case "abort":
 			write({ id: cmd.id, type: "response", command: "abort", success: true });
 			break;
+		case "set_auto_compaction":
+			write({ id: cmd.id, type: "response", command: "set_auto_compaction", success: true });
+			break;
+		case "compact":
+			write({ type: "compaction_start", reason: "manual" });
+			write({ id: cmd.id, type: "response", command: "compact", success: true });
+			write({ type: "compaction_end", reason: "manual" });
+			break;
+		case "new_session":
+			history.length = 0;
+			state.sessionId = `mock-session-${Date.now()}`;
+			write({ id: cmd.id, type: "response", command: "new_session", success: true });
+			break;
 		case "prompt": {
 			history.push({ role: "user", content: cmd.message, timestamp: nextTs() });
 			write({ id: cmd.id, type: "response", command: "prompt", success: true });
-			// simulate an agent turn: agent_start → deltas → message_end → agent_settled
-			const text = reply.replace("{echo}", String(cmd.message).slice(0, 120));
-			write({ type: "agent_start" });
-			write({ type: "message_start", message: { role: "assistant", content: [] } });
-			for (const part of text.match(/[\s\S]{1,7}/g) ?? []) {
-				write({
-					type: "message_update",
-					usage: {},
-					assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: part },
-				});
-			}
-			const assistant = {
-				role: "assistant",
-				content: [{ type: "text", text }],
-				stopReason: "stop",
-				timestamp: nextTs(),
+			// simulate an agent turn: agent_start → deltas → message_end → agent_settled.
+			// with MOCK_DELAY, agent_start fires immediately and the rest lands later,
+			// so "busy" is a real window (tests can race commands against it)
+			const turn = () => {
+				const text = reply.replace("{echo}", String(cmd.message).slice(0, 120));
+				write({ type: "agent_start" });
+				const rest = () => {
+					write({ type: "message_start", message: { role: "assistant", content: [] } });
+					for (const part of text.match(/[\s\S]{1,7}/g) ?? []) {
+						write({
+							type: "message_update",
+							usage: {},
+							assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: part },
+						});
+					}
+					const assistant = {
+						role: "assistant",
+						content: [{ type: "text", text }],
+						stopReason: "stop",
+						timestamp: nextTs(),
+					};
+					write({ type: "message_end", message: assistant });
+					history.push(assistant);
+					write({ type: "agent_end", messages: [assistant], willRetry: false });
+					write({ type: "agent_settled" });
+				};
+				const delay = Number(process.env.MOCK_DELAY ?? 0);
+				if (delay > 0) setTimeout(rest, delay);
+				else rest();
 			};
-			write({ type: "message_end", message: assistant });
-			history.push(assistant);
-			write({ type: "agent_end", messages: [assistant], willRetry: false });
-			write({ type: "agent_settled" });
+			turn();
 			break;
 		}
 		default:

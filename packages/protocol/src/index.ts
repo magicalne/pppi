@@ -10,7 +10,7 @@
 //     Also: paged history — clients cache the recent window and pull older
 //     pages only when the user scrolls to the top.
 
-export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming";
+export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming" | "compacting";
 
 export type MessageSource = "voice" | "text";
 
@@ -115,6 +115,8 @@ export type ServerEvent =
 	// status bar (v5)
 	| { type: "status"; status: AgentStatus }
 	| { type: "model_list"; models: ModelInfo[] }
+	// the omni session was reset (/new): clients clear their mirrored history
+	| { type: "session_new" }
 	// paged history: entries older than the requested `before`, newest-last
 	| { type: "history_page"; entries: ChatEntry[]; hasMore: boolean };
 

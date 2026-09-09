@@ -78,6 +78,10 @@ without becoming a chat turn. Fenced code is never spoken — the voice says
   with timeouts, cancel-on-tap in every state, and auto-reconnect (twice)
   on mid-session drops. The models load eagerly at server boot, so the
   first utterance never pays the load cost.
+- Session commands work in any client's composer (web, Android, voice):
+  `/new` starts a fresh omni session, `/compact` compacts now. pi also
+  auto-compacts at its context threshold by default — the gateway forces
+  that on at boot, and clients show `compacting…` while it runs.
 - Sessions auto-pause after 10 idle minutes; hold-to-talk stays as the
   fallback whenever the session is off.
 

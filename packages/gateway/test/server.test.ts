@@ -56,6 +56,21 @@ describe("gateway server", () => {
 		});
 	}
 
+	function waitFor(ws: WebSocket, pred: (evt: any) => boolean, ms = 10_000): Promise<any> {
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error("condition not met within 10s")), ms);
+			const onMsg = (raw: any) => {
+				const evt = JSON.parse(raw.toString());
+				if (pred(evt)) {
+					clearTimeout(timer);
+					ws.off("message", onMsg);
+					resolve(evt);
+				}
+			};
+			ws.on("message", onMsg);
+		});
+	}
+
 	it("health reports agent and stt status", async () => {
 		const res = await fetch(`http://127.0.0.1:${port}/api/health`);
 		const body = (await res.json()) as any;
@@ -106,6 +121,53 @@ describe("gateway server", () => {
 
 		a.close();
 		b.close();
+	});
+
+	it("handles /new: resets the session and tells every client to clear", async () => {
+		const a = await connect(token);
+		await nextEvent(a, "hello_ok");
+		a.send(JSON.stringify({ type: "chat", text: "build some history" }));
+		await nextEvent(a, "assistant_final");
+
+		// arm both waiters BEFORE sending: the broadcasts can share one TCP chunk,
+		// and a waiter attached after the first resolves misses frames in between
+		const cleared = waitFor(a, (e) => e.type === "session_new");
+		const done = waitFor(a, (e) => e.type === "agent_notify" && String(e.message).includes("fresh session ready"));
+		a.send(JSON.stringify({ type: "chat", text: "/new" }));
+		await cleared;
+		await done;
+
+		// a fresh hello sees an empty conversation
+		const b = await connect(token);
+		const hello = await nextEvent(b, "hello_ok");
+		expect(hello.history).toHaveLength(0);
+		a.close();
+		b.close();
+	});
+
+	it("handles /compact: surfaces compacting state and a done notice", async () => {
+		const a = await connect(token);
+		await nextEvent(a, "hello_ok");
+
+		const compacting = waitFor(a, (e) => e.type === "agent_state" && e.state === "compacting");
+		const done = waitFor(a, (e) => e.type === "agent_notify" && String(e.message).includes("session compacted"));
+		a.send(JSON.stringify({ type: "chat", text: "/compact" }));
+		expect((await compacting).state).toBe("compacting");
+		await done;
+		a.close();
+	});
+
+	it("rejects /new while the agent is busy", async () => {
+		process.env.MOCK_DELAY = "600"; // keep the turn in flight while /new lands
+		const a = await connect(token);
+		await nextEvent(a, "hello_ok");
+		a.send(JSON.stringify({ type: "chat", text: "long task" }));
+		await waitFor(a, (e) => e.type === "agent_state" && e.state === "thinking");
+		a.send(JSON.stringify({ type: "chat", text: "/new" }));
+		const warn = await waitFor(a, (e) => e.type === "agent_notify" && String(e.message).includes("still working"));
+		expect(warn.level).toBe("warning");
+		delete process.env.MOCK_DELAY;
+		a.close();
 	});
 
 	it("returns 422 for a silent voice upload", async () => {
