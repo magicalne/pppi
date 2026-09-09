@@ -7,6 +7,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioManager
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -583,6 +584,7 @@ fun ChatScreen(
 	val voiceMachine = remember { VoicePhaseMachine() }
 	val voiceClientRef = remember { java.util.concurrent.atomic.AtomicReference<VoiceClient?>(null) }
 	val voiceEngineRef = remember { java.util.concurrent.atomic.AtomicReference<VoiceAudioEngine?>(null) }
+	val stoppingVoice = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
 
 	val client = remember {
 		clientFactory(
@@ -766,12 +768,25 @@ fun ChatScreen(
 		}
 	}
 
+	/** Single cleanup path for voice mode: safe from any thread, idempotent. */
+	fun teardownVoice() {
+		voiceEngineRef.getAndSet(null)?.stop()
+		voiceClientRef.getAndSet(null)?.close()
+		voiceOn = false
+		voicePhase = VoicePhase.LISTENING
+		VoiceForegroundService.stop(context)
+	}
+
 	fun startVoice() {
 		if (voiceOn) return
+		stoppingVoice.set(false)
 		voiceCommitted = ""
 		voiceTentative = ""
 		voiceMachine.reset()
 		voicePhase = VoicePhase.LISTENING
+		// foreground service first: with the screen off, Android freezes an app
+		// that has none — the mic uplink and websocket die within seconds
+		VoiceForegroundService.start(context)
 		thread(name = "pppi-voice") {
 			try {
 				val client = VoiceClient(
@@ -806,31 +821,30 @@ fun ChatScreen(
 						}
 					},
 					onAudio = { pcm -> voiceEngineRef.get()?.playPcm(pcm.toByteArray(), voiceRate) },
+					// the server closing back is normal right after a manual stop —
+					// only surface a drop the user didn't ask for
 					onGone = {
-						voiceOn = false
-						voiceEngineRef.get()?.stop()
-						notice = "voice session ended"
+						teardownVoice()
+						notice = if (stoppingVoice.getAndSet(false)) null else "voice session ended"
 					},
 				)
 				val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-				val engine = VoiceAudioEngine(client, audioManager)
+				val engine = VoiceAudioEngine(context, client, audioManager)
 				voiceClientRef.set(client)
 				voiceEngineRef.set(engine)
 				client.start()
 				voiceOn = true
 				engine.startMic { msg -> notice = msg }
 			} catch (e: Exception) {
+				teardownVoice()
 				notice = e.message ?: "voice unavailable"
-				voiceOn = false
 			}
 		}
 	}
 
 	fun stopVoice() {
-		voiceClientRef.getAndSet(null)?.close()
-		voiceEngineRef.getAndSet(null)?.stop()
-		voiceOn = false
-		voicePhase = VoicePhase.LISTENING
+		stoppingVoice.set(true)
+		teardownVoice()
 	}
 
 	fun interruptVoice() {
@@ -839,8 +853,8 @@ fun ChatScreen(
 		voicePhase = VoicePhase.LISTENING
 	}
 
-	val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-		if (granted) {
+	val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+		if (grants[Manifest.permission.RECORD_AUDIO] == true) {
 			micGranted = true
 			startVoice()
 		} else notice = "microphone permission denied"
@@ -1118,7 +1132,15 @@ fun ChatScreen(
 											startVoice()
 											tryAwaitRelease()
 										}
-										else -> permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+										else -> permissionLauncher.launch(
+											buildList {
+												add(Manifest.permission.RECORD_AUDIO)
+												// bluetooth headset mic routing needs this on 12+
+												if (Build.VERSION.SDK_INT >= 31) add(Manifest.permission.BLUETOOTH_CONNECT)
+												// the screen-off notification can stay hidden without it
+												if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+											}.toTypedArray(),
+										)
 									}
 								},
 							)

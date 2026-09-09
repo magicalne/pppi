@@ -132,6 +132,10 @@ bun run install:ext
 #    phone: install apps/android APK, tap ☰ → Scan QR on the /pair QR,
 #           or paste the pair link
 #    terminal: the /omni here session IS a terminal screen
+#
+#    on Android, interactive mode picks up your Bluetooth/wired headset
+#    automatically (BT needs the BLUETOOTH_CONNECT grant on 12+) and a
+#    foreground service keeps the conversation alive with the screen off.
 
 # 5. teach the omni agent about your repos (say: "register ~/Workspace/opensource/pppi")
 #    or use the omni_repos tool directly
