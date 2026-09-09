@@ -30,8 +30,9 @@ import java.util.concurrent.atomic.AtomicReference
  * communication device), wired headset, then the phone's speaker+mic pair.
  * VOICE_COMMUNICATION input is unreliable without MODE_IN_COMMUNICATION on
  * several devices (and silent on emulators); if it still delivers digital
- * silence for ~1.5 s, capture falls back to the raw MIC source once.
- * Headset plug / SCO state changes mid-session re-route capture.
+ * silence, capture walks a source chain — recognition mic, raw mic, raw mic
+ * without call-audio mode — before reporting the mic as held. Headset
+ * plug / SCO state changes mid-session re-route capture.
  */
 class VoiceAudioEngine(
 	private val context: Context,
@@ -104,10 +105,14 @@ class VoiceAudioEngine(
 			val buf = ShortArray(1600) // 100 ms @ 16 kHz
 			val bytes = ByteArray(1600 * 2)
 			var silentChunks = 0
-			var source = MediaRecorder.AudioSource.VOICE_COMMUNICATION
 			var lastSentLevel = -1
+			// Capture chain for OEM quirks: call-optimized mic → recognition mic →
+			// raw mic → raw mic without call-audio mode. Each stage gets ~1.5 s to
+			// prove it is alive; some devices deliver digital silence on every
+			// source while MODE_IN_COMMUNICATION is set, hence the mode drop.
+			var exhaustedNoticeAt = 0L
 			try {
-				openRecorder(source, onError, fatal = true)
+				openRecorder(captureStages[captureStage].source, onError, fatal = true)
 				while (keepRunning.get()) {
 					val rec = recordRef.get()
 					if (rec == null) {
@@ -129,14 +134,33 @@ class VoiceAudioEngine(
 						lastSentLevel = lvl
 						onMicLevel(lvl)
 					}
-					// dead comm mic: bit-exact silence for ~1.5 s → retry with raw MIC
-					if (max <= 1 && source == MediaRecorder.AudioSource.VOICE_COMMUNICATION) {
+					// dead mic: bit-exact silence for ~1.5 s per stage → walk the chain
+					if (max <= 1) {
 						silentChunks++
 						if (silentChunks >= 15) {
 							silentChunks = 0
-							source = MediaRecorder.AudioSource.MIC
-							onError("no signal on voice mic — fell back to the phone mic")
-							openRecorder(source, onError)
+							if (captureStage < captureStages.size - 1) {
+								val from = captureStages[captureStage]
+								captureStage++
+								val next = captureStages[captureStage]
+								android.util.Log.w("pppi-voice", "mic silent on ${from.label} — trying ${next.label}")
+								if (next.dropCommMode && commModeApplied) {
+									// known OEM quirk: no input until call-audio mode is dropped
+									commModeApplied = false
+									speakerphoneApplied = false
+									try {
+										audioManager.isSpeakerphoneOn = false
+										audioManager.mode = AudioManager.MODE_NORMAL
+									} catch (_: Exception) {
+									}
+								}
+								onError("mic silent on ${from.label} — trying ${next.label}")
+								openRecorder(next.source, onError)
+							} else if (SystemClock.uptimeMillis() - exhaustedNoticeAt > 10_000) {
+								// keep recording — the mic may free up (another app held it)
+								exhaustedNoticeAt = SystemClock.uptimeMillis()
+								onError("microphone still silent — is another app using it?")
+							}
 						}
 					} else {
 						silentChunks = 0
@@ -150,6 +174,19 @@ class VoiceAudioEngine(
 			}
 		}
 	}
+
+	private data class CaptureStage(val source: Int, val label: String, val dropCommMode: Boolean = false)
+
+	private val captureStages = listOf(
+		CaptureStage(MediaRecorder.AudioSource.VOICE_COMMUNICATION, "the call-optimized mic"),
+		CaptureStage(MediaRecorder.AudioSource.VOICE_RECOGNITION, "the recognition mic"),
+		CaptureStage(MediaRecorder.AudioSource.MIC, "the raw mic"),
+		CaptureStage(MediaRecorder.AudioSource.MIC, "the raw mic (no call-audio mode)", dropCommMode = true),
+	)
+
+	/** Index into [captureStages]; shared by the reader and reroute so they agree. */
+	@Volatile
+	private var captureStage = 0
 
 	private fun openRecorder(source: Int, onError: (String) -> Unit, fatal: Boolean = false) {
 		closeRecorder()
@@ -278,7 +315,7 @@ class VoiceAudioEngine(
 			appliedRoute = applyRoute { }
 		}
 		// fresh recorder so the new route takes effect immediately
-		if (keepRunning.get()) openRecorder(MediaRecorder.AudioSource.VOICE_COMMUNICATION, onError = { })
+		if (keepRunning.get()) openRecorder(captureStages[captureStage].source, onError = { })
 	}
 
 	private fun hasBluetoothPermission(): Boolean {
