@@ -15,6 +15,7 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlin.concurrent.thread
 import java.util.concurrent.atomic.AtomicBoolean
@@ -26,13 +27,14 @@ import java.util.concurrent.atomic.AtomicReference
  * AGC attached; the speaker side streams TTS PCM into an AudioTrack and can
  * cut playback instantly on barge-in.
  *
- * Routing, in order of preference: Bluetooth headset mic (SCO via the
- * communication device), wired headset, then the phone's speaker+mic pair.
- * VOICE_COMMUNICATION input is unreliable without MODE_IN_COMMUNICATION on
- * several devices (and silent on emulators); if it still delivers digital
- * silence, capture walks a source chain — recognition mic, raw mic, raw mic
- * without call-audio mode — before reporting the mic as held. Headset
- * plug / SCO state changes mid-session re-route capture.
+ * Capture is a ROUTE-AWARE chain of configs, most-reliable first: the plain
+ * mic in normal audio mode is what every voice app uses and works on every
+ * device, so it goes first; the call-optimized (echo-cancelled) source needs
+ * MODE_IN_COMMUNICATION — known to deliver digital silence on several OEMs —
+ * and is a later resort. Each stage gets ~1.5 s to prove it is alive before
+ * the chain advances, and every hop is surfaced in the pill. Bluetooth
+ * headsets capture through SCO (which requires call-audio mode), so their
+ * chain starts there. Headset plug / SCO state changes mid-session re-route.
  */
 class VoiceAudioEngine(
 	private val context: Context,
@@ -49,11 +51,19 @@ class VoiceAudioEngine(
 	private var trackRate = 24000
 	private var commModeApplied = false
 	private var scoRequested = false
-	private var speakerphoneApplied = false
 	private var receiverRegistered = false
 	private var appliedRoute = ""
 	private var rerouting = AtomicBoolean(false)
 	private var lastPlayLevelAt = 0L
+	private var lastLevelLogAt = 0L
+
+	private data class CaptureStage(val source: Int, val label: String, val needsCommMode: Boolean = false)
+
+	@Volatile
+	private var captureStages = listOf(CaptureStage(MediaRecorder.AudioSource.MIC, "the standard mic"))
+
+	@Volatile
+	private var captureStage = 0
 
 	/** "bt" | "wired" | "speaker" — where capture is (supposed to be) coming from. */
 	private fun routeKey(): String {
@@ -66,6 +76,20 @@ class VoiceAudioEngine(
 			if (d.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO && hasBluetoothPermission()) key = "bt"
 		}
 		return key
+	}
+
+	/** Capture configs for a route, most reliable first. */
+	private fun stagesFor(route: String): List<CaptureStage> = when (route) {
+		"bt" -> listOf(
+			// SCO needs call-audio mode; applyRoute already turned it on
+			CaptureStage(MediaRecorder.AudioSource.VOICE_COMMUNICATION, "the headset mic"),
+			CaptureStage(MediaRecorder.AudioSource.MIC, "the headset raw mic"),
+		)
+		else -> listOf(
+			CaptureStage(MediaRecorder.AudioSource.MIC, "the standard mic"),
+			CaptureStage(MediaRecorder.AudioSource.VOICE_RECOGNITION, "the recognition mic"),
+			CaptureStage(MediaRecorder.AudioSource.VOICE_COMMUNICATION, "the echo-cancelled mic", needsCommMode = true),
+		)
 	}
 
 	private val deviceListener = object : BroadcastReceiver() {
@@ -82,10 +106,10 @@ class VoiceAudioEngine(
 	fun startMic(onError: (String) -> Unit) {
 		if (!keepRunning.compareAndSet(false, true)) return
 		try {
-			commModeApplied = true
-			audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
 			audioManager.isMicrophoneMute = false
 			appliedRoute = applyRoute(onError)
+			captureStages = stagesFor(appliedRoute)
+			captureStage = 0
 			val filter = IntentFilter().apply {
 				addAction(AudioManager.ACTION_HEADSET_PLUG)
 				addAction(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED)
@@ -106,13 +130,9 @@ class VoiceAudioEngine(
 			val bytes = ByteArray(1600 * 2)
 			var silentChunks = 0
 			var lastSentLevel = -1
-			// Capture chain for OEM quirks: call-optimized mic → recognition mic →
-			// raw mic → raw mic without call-audio mode. Each stage gets ~1.5 s to
-			// prove it is alive; some devices deliver digital silence on every
-			// source while MODE_IN_COMMUNICATION is set, hence the mode drop.
 			var exhaustedNoticeAt = 0L
 			try {
-				openRecorder(captureStages[captureStage].source, onError, fatal = true)
+				openRecorder(captureStages[captureStage], onError, fatal = true)
 				while (keepRunning.get()) {
 					val rec = recordRef.get()
 					if (rec == null) {
@@ -134,6 +154,10 @@ class VoiceAudioEngine(
 						lastSentLevel = lvl
 						onMicLevel(lvl)
 					}
+					if (SystemClock.uptimeMillis() - lastLevelLogAt > 2_000) {
+						lastLevelLogAt = SystemClock.uptimeMillis()
+						Log.d("pppi-voice", "mic stage=${captureStages[captureStage].label} peak=$max level=$lvl")
+					}
 					// dead mic: bit-exact silence for ~1.5 s per stage → walk the chain
 					if (max <= 1) {
 						silentChunks++
@@ -143,19 +167,16 @@ class VoiceAudioEngine(
 								val from = captureStages[captureStage]
 								captureStage++
 								val next = captureStages[captureStage]
-								android.util.Log.w("pppi-voice", "mic silent on ${from.label} — trying ${next.label}")
-								if (next.dropCommMode && commModeApplied) {
-									// known OEM quirk: no input until call-audio mode is dropped
-									commModeApplied = false
-									speakerphoneApplied = false
+								Log.w("pppi-voice", "mic silent on ${from.label} — trying ${next.label}")
+								if (next.needsCommMode && !commModeApplied) {
+									commModeApplied = true
 									try {
-										audioManager.isSpeakerphoneOn = false
-										audioManager.mode = AudioManager.MODE_NORMAL
+										audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
 									} catch (_: Exception) {
 									}
 								}
 								onError("mic silent on ${from.label} — trying ${next.label}")
-								openRecorder(next.source, onError)
+								openRecorder(next, onError)
 							} else if (SystemClock.uptimeMillis() - exhaustedNoticeAt > 10_000) {
 								// keep recording — the mic may free up (another app held it)
 								exhaustedNoticeAt = SystemClock.uptimeMillis()
@@ -175,24 +196,11 @@ class VoiceAudioEngine(
 		}
 	}
 
-	private data class CaptureStage(val source: Int, val label: String, val dropCommMode: Boolean = false)
-
-	private val captureStages = listOf(
-		CaptureStage(MediaRecorder.AudioSource.VOICE_COMMUNICATION, "the call-optimized mic"),
-		CaptureStage(MediaRecorder.AudioSource.VOICE_RECOGNITION, "the recognition mic"),
-		CaptureStage(MediaRecorder.AudioSource.MIC, "the raw mic"),
-		CaptureStage(MediaRecorder.AudioSource.MIC, "the raw mic (no call-audio mode)", dropCommMode = true),
-	)
-
-	/** Index into [captureStages]; shared by the reader and reroute so they agree. */
-	@Volatile
-	private var captureStage = 0
-
-	private fun openRecorder(source: Int, onError: (String) -> Unit, fatal: Boolean = false) {
+	private fun openRecorder(stage: CaptureStage, onError: (String) -> Unit, fatal: Boolean = false) {
 		closeRecorder()
 		val minBuf = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
 		val rec = AudioRecord(
-			source,
+			stage.source,
 			16000,
 			AudioFormat.CHANNEL_IN_MONO,
 			AudioFormat.ENCODING_PCM_16BIT,
@@ -226,29 +234,28 @@ class VoiceAudioEngine(
 	 * Pick output/input routing for the current headset situation; returns the
 	 * *effective* route (a desired "bt" that failed reports "speaker", so the
 	 * SCO-connected broadcast still counts as a change and triggers a reroute).
+	 * Only Bluetooth needs call-audio mode here (SCO requires it) — the plain
+	 * phone-mic chain deliberately runs in normal audio mode.
 	 */
 	private fun applyRoute(onError: (String) -> Unit): String {
 		scoRequested = false
-		speakerphoneApplied = false
 		return when (routeKey()) {
 			"bt" -> {
+				if (!commModeApplied) {
+					commModeApplied = true
+					audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+				}
 				val ok = if (Build.VERSION.SDK_INT >= 31) establishScoModern() else establishScoLegacy()
 				if (!ok) {
-					// SCO didn't land yet — speak through the speaker; the SCO broadcast
-					// will trigger a reroute once the link comes up
-					audioManager.isSpeakerphoneOn = true
-					speakerphoneApplied = true
+					// SCO didn't land yet — fall back to the phone mic; the SCO
+					// broadcast will trigger a reroute once the link comes up
 					onError("bluetooth mic not ready — using the phone mic for now")
 					"speaker"
 				} else "bt"
 			}
-			"speaker" -> {
-				audioManager.isSpeakerphoneOn = true
-				speakerphoneApplied = true
-				"speaker"
-			}
-			// wired: the OS routes input/output to the headset on its own
-			else -> "wired"
+			// wired / speaker: the OS routes input on its own; TTS rides the
+			// media stream (speaker by default). No call-audio mode, ever.
+			else -> routeKey()
 		}
 	}
 
@@ -313,9 +320,11 @@ class VoiceAudioEngine(
 		synchronized(this) {
 			if (key == appliedRoute) return
 			appliedRoute = applyRoute { }
+			captureStages = stagesFor(appliedRoute)
+			captureStage = 0
 		}
 		// fresh recorder so the new route takes effect immediately
-		if (keepRunning.get()) openRecorder(captureStages[captureStage].source, onError = { })
+		if (keepRunning.get()) openRecorder(captureStages[captureStage], onError = { })
 	}
 
 	private fun hasBluetoothPermission(): Boolean {
@@ -395,13 +404,6 @@ class VoiceAudioEngine(
 			try {
 				audioManager.stopBluetoothSco()
 				audioManager.isBluetoothScoOn = false
-			} catch (_: Exception) {
-			}
-		}
-		if (speakerphoneApplied) {
-			speakerphoneApplied = false
-			try {
-				audioManager.isSpeakerphoneOn = false
 			} catch (_: Exception) {
 			}
 		}

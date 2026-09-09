@@ -429,6 +429,12 @@ fun MachinesDrawer(
 			fontSize = 12.sp,
 			lineHeight = 17.sp,
 		)
+		Spacer(Modifier.height(14.dp))
+		Text(
+			"pppi v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+			color = theme.dim,
+			fontSize = 11.sp,
+		)
 		}
 	}
 }
@@ -1023,6 +1029,12 @@ fun ChatScreen(
 							fontSize = 13.5.sp,
 							textAlign = TextAlign.Center,
 							lineHeight = 20.sp,
+						)
+						Spacer(Modifier.height(18.dp))
+						Text(
+							"v${BuildConfig.VERSION_NAME}",
+							color = theme.dim.copy(alpha = 0.6f),
+							fontSize = 11.sp,
 						)
 					}
 				}
