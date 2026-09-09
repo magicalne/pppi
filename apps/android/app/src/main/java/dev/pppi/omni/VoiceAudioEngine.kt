@@ -37,6 +37,8 @@ class VoiceAudioEngine(
 	private val context: Context,
 	private val client: VoiceClient,
 	private val audioManager: AudioManager,
+	private val onMicLevel: (Int) -> Unit = {},
+	private val onPlayLevel: (Int) -> Unit = {},
 ) {
 
 	private val recordRef = AtomicReference<AudioRecord?>(null)
@@ -50,6 +52,7 @@ class VoiceAudioEngine(
 	private var receiverRegistered = false
 	private var appliedRoute = ""
 	private var rerouting = AtomicBoolean(false)
+	private var lastPlayLevelAt = 0L
 
 	/** "bt" | "wired" | "speaker" — where capture is (supposed to be) coming from. */
 	private fun routeKey(): String {
@@ -102,6 +105,7 @@ class VoiceAudioEngine(
 			val bytes = ByteArray(1600 * 2)
 			var silentChunks = 0
 			var source = MediaRecorder.AudioSource.VOICE_COMMUNICATION
+			var lastSentLevel = -1
 			try {
 				openRecorder(source, onError, fatal = true)
 				while (keepRunning.get()) {
@@ -118,6 +122,12 @@ class VoiceAudioEngine(
 						if (v > max) max = v
 						bytes[i * 2] = (buf[i].toInt() and 0xFF).toByte()
 						bytes[i * 2 + 1] = (buf[i].toInt() shr 8).toByte()
+					}
+					// feed the soundwave: peak 0..32767 → 0..100
+					val lvl = (max * 95 / 32767).coerceIn(0, 100)
+					if (lvl != lastSentLevel) {
+						lastSentLevel = lvl
+						onMicLevel(lvl)
 					}
 					// dead comm mic: bit-exact silence for ~1.5 s → retry with raw MIC
 					if (max <= 1 && source == MediaRecorder.AudioSource.VOICE_COMMUNICATION) {
@@ -284,6 +294,21 @@ class VoiceAudioEngine(
 				if (!keepRunning.get()) return
 				val t = ensureTrackLocked(rate)
 				t.write(pcm, 0, pcm.size)
+			}
+			// feed the soundwave while the agent speaks (~12 updates/s is plenty)
+			val now = SystemClock.uptimeMillis()
+			if (now - lastPlayLevelAt >= 80) {
+				lastPlayLevelAt = now
+				var peak = 0
+				var i = 0
+				while (i + 1 < pcm.size) {
+					var v = (pcm[i].toInt() and 0xFF) or (pcm[i + 1].toInt() shl 8)
+					if (v >= 32768) v -= 65536
+					if (v < 0) v = -v
+					if (v > peak) peak = v
+					i += 2
+				}
+				onPlayLevel((peak * 95 / 32767).coerceIn(0, 100))
 			}
 		} catch (_: Exception) {
 			// track raced with stop() — drop the frame

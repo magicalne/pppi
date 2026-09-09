@@ -581,6 +581,8 @@ fun ChatScreen(
 	var voiceRate by remember { mutableIntStateOf(24000) }
 	var voiceCommitted by remember { mutableStateOf("") }
 	var voiceTentative by remember { mutableStateOf("") }
+	var voiceLevel by remember { mutableIntStateOf(0) }
+	var voiceOutLevel by remember { mutableIntStateOf(0) }
 	val voiceMachine = remember { VoicePhaseMachine() }
 	val voiceClientRef = remember { java.util.concurrent.atomic.AtomicReference<VoiceClient?>(null) }
 	val voiceEngineRef = remember { java.util.concurrent.atomic.AtomicReference<VoiceAudioEngine?>(null) }
@@ -774,6 +776,8 @@ fun ChatScreen(
 		voiceClientRef.getAndSet(null)?.close()
 		voiceOn = false
 		voicePhase = VoicePhase.LISTENING
+		voiceLevel = 0
+		voiceOutLevel = 0
 		VoiceForegroundService.stop(context)
 	}
 
@@ -829,7 +833,13 @@ fun ChatScreen(
 					},
 				)
 				val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-				val engine = VoiceAudioEngine(context, client, audioManager)
+				val engine = VoiceAudioEngine(
+					context,
+					client,
+					audioManager,
+					onMicLevel = { voiceLevel = it },
+					onPlayLevel = { voiceOutLevel = it },
+				)
 				voiceClientRef.set(client)
 				voiceEngineRef.set(engine)
 				client.start()
@@ -1031,6 +1041,11 @@ fun ChatScreen(
 					}
 				}
 			}
+		}
+
+		// ---- live soundwave while interactive mode is on (PRD §7) ----
+		if (voiceOn) {
+			VoiceWave(theme, voiceLevel, voiceOutLevel, voicePhase)
 		}
 
 		// ---- composer pill (PRD §7): input + inline mic, IME sends

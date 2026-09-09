@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- **pi: two amber asterisks over "pi" (strokes only, adaptive-icon safe zone) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+	android:width="108dp"
+	android:height="108dp"
+	android:viewportWidth="108"
+	android:viewportHeight="108">
+	<!-- asterisk 1: spokes through (41,44), r=11 -->
+	<path
+		android:pathData="M41,33 L41,55 M31.47,38.5 L50.53,49.5 M31.47,49.5 L50.53,38.5"
+		android:strokeColor="#E8965A"
+		android:strokeWidth="4"
+		android:strokeLineCap="round"/>
+	<!-- asterisk 2: spokes through (67,44), r=11 -->
+	<path
+		android:pathData="M67,33 L67,55 M57.47,38.5 L76.53,49.5 M57.47,49.5 L76.53,38.5"
+		android:strokeColor="#E8965A"
+		android:strokeWidth="4"
+		android:strokeLineCap="round"/>
+	<!-- p: stem + bowl -->
+	<path
+		android:pathData="M47,67 L47,82 M47,70.5 a5.5,5.5 0 1,1 11,0 a5.5,5.5 0 1,1 -11,0"
+		android:strokeColor="#F2EAE0"
+		android:strokeWidth="4"
+		android:strokeLineCap="round"/>
+	<!-- i: stem + dot -->
+	<path
+		android:pathData="M63,67 L63,78"
+		android:strokeColor="#F2EAE0"
+		android:strokeWidth="4"
+		android:strokeLineCap="round"/>
+	<path
+		android:pathData="M63,61.5 m-2.2,0 a2.2,2.2 0 1,0 4.4,0 a2.2,2.2 0 1,0 -4.4,0"
+		android:fillColor="#F2EAE0"/>
+</vector>
