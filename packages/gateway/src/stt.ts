@@ -68,6 +68,15 @@ export class Stt {
 		return this.status.ready;
 	}
 
+	/**
+	 * Eager-load the model so the first utterance doesn't pay the load cost.
+	 * Rejects with the reason when the model is missing or fails to load —
+	 * the audio child wraps this in boot progress events.
+	 */
+	async warm(): Promise<void> {
+		await this.ensureLoaded();
+	}
+
 	private async ensureLoaded(): Promise<void> {
 		if (this.model) return;
 		this.loading ??= (async () => {

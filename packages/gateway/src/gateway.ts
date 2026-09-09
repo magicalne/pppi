@@ -275,6 +275,19 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 		: null;
 	// bring the child up right away so /api/health reflects real voice readiness
 	void audio?.ensure();
+	// in-process voice: warm the heavy models at boot too, and expose the stage
+	// so clients can show "warming up" instead of a silent wait
+	let inProcessBoot: { stage: "starting" | "ready" } | null = opts.stt ? { stage: "starting" } : null;
+	if (opts.stt) {
+		void opts.stt
+			.warm()
+			.catch(() => undefined)
+			.finally(() => {
+				inProcessBoot = { stage: "ready" };
+			});
+		const ttsProvider = opts.tts as { warm?: () => Promise<boolean> } | null | undefined;
+		if (ttsProvider && typeof ttsProvider.warm === "function") void ttsProvider.warm().catch(() => {});
+	}
 	const speakAssistant = (fn: (s: VoiceSession) => void, toChild?: (a: AudioService) => void): void => {
 		if (audio) {
 			if (toChild) toChild(audio);
@@ -398,6 +411,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				name: "pppi",
 				agent: agentInfo(),
 				stt: status.ready ? { ready: true, modelId: status.modelId } : { ready: false, reason: status.reason },
+				boot: audio ? audio.health().boot : (inProcessBoot ?? { stage: "unavailable", reason: "no voice configured" }),
 			});
 		}
 		if (req.method === "POST" && path === "/api/voice") {

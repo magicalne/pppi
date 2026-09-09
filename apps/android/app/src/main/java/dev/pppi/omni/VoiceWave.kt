@@ -1,9 +1,15 @@
 package dev.pppi.omni
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -16,7 +22,9 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -73,6 +81,28 @@ fun VoiceWave(theme: PppiTheme, inLevel: Int, outLevel: Int, phase: VoicePhase) 
 				topLeft = Offset(i * slot + slot * 0.25f, (size.height - h) / 2f),
 				size = Size(slot * 0.5f, h),
 				cornerRadius = CornerRadius(slot * 0.25f),
+			)
+		}
+	}
+}
+
+/** Three breathing dots for the boot states — "working on it", visually. */
+@Composable
+fun PulseDots(theme: PppiTheme) {
+	val transition = rememberInfiniteTransition(label = "pulse")
+	val alpha by transition.animateFloat(
+		0.25f,
+		1f,
+		infiniteRepeatable(tween(1200, easing = LinearEasing)),
+		label = "pulse",
+	)
+	Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+		repeat(3) { _ ->
+			Box(
+				Modifier
+					.size(5.dp)
+					.clip(CircleShape)
+					.background(theme.accent.copy(alpha = alpha)),
 			)
 		}
 	}

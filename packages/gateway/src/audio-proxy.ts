@@ -15,13 +15,17 @@ export type AudioServiceOptions = {
 	env?: Record<string, string | undefined>;
 };
 
+export type AudioBootStage = "starting" | "ready" | "unavailable";
+
 export type AudioHealth = {
 	stt: { ready: true; modelId: string } | { ready: false; reason: string };
 	tts: { ready: true; provider: string; voice: string } | { ready: false; reason: string };
 	vad: boolean;
+	boot: { stage: AudioBootStage; reason?: string };
 };
 
 type Info = { port: number; stt: AudioHealth["stt"]; tts: AudioHealth["tts"]; vad: boolean };
+type BootFrame = { ev: "boot"; component: string; stage: string; reason?: string };
 
 export class AudioService {
 	private child: ChildProcess | null = null;
@@ -29,6 +33,10 @@ export class AudioService {
 	private starting: Promise<boolean> | null = null;
 	private lastStderr = "";
 	private ups = new Set<WsSocket>();
+	private authedUps = new Set<WsSocket>();
+	private bootFrames: BootFrame[] = [];
+	private bootListeners = new Set<(f: BootFrame) => void>();
+	private lastBootReason: string | null = null;
 
 	constructor(
 		private opts: AudioServiceOptions & {
@@ -56,6 +64,9 @@ export class AudioService {
 		return new Promise((resolve) => {
 			const [cmd, ...args] = this.opts.command;
 			if (!cmd) return resolve(false);
+			// a respawn starts a fresh boot story
+			this.bootFrames = [];
+			this.lastBootReason = null;
 			let child: ChildProcess;
 			try {
 				child = spawn(cmd, args, {
@@ -66,7 +77,7 @@ export class AudioService {
 				return resolve(false);
 			}
 			this.child = child;
-			const timer = setTimeout(() => fail("audio service start timeout"), 20_000);
+			const timer = setTimeout(() => fail("audio service start timeout"), 120_000);
 			const fail = (why: string) => {
 				this.lastStderr = why;
 				cleanup();
@@ -75,20 +86,36 @@ export class AudioService {
 			};
 			const onOut = (chunk: Buffer) => {
 				buf += chunk.toString("utf8");
-				const nl = buf.indexOf("\n");
-				if (nl === -1) return;
-				const line = buf.slice(0, nl);
-				try {
-					const parsed = JSON.parse(line) as Info;
-					if (typeof parsed.port !== "number") throw new Error("bad ready line");
-					this.info = parsed;
-				} catch {
-					fail("audio service printed garbage instead of a ready line");
-					return;
+				// strict JSONL: split on \n only; the last element may be a partial line
+				let nl = buf.indexOf("\n");
+				while (nl !== -1) {
+					const line = buf.slice(0, nl).replace(/\r$/, "");
+					buf = buf.slice(nl + 1);
+					let parsed: (Info & { ev?: string }) | BootFrame | null = null;
+					try {
+						parsed = JSON.parse(line) as Info | BootFrame;
+					} catch {
+						parsed = null;
+					}
+					if (parsed && (parsed as BootFrame).ev === "boot") {
+						const frame = parsed as BootFrame;
+						if (frame.stage === "failed" && frame.reason) this.lastBootReason = frame.reason;
+						this.bootFrames.push(frame);
+						for (const l of this.bootListeners) l(frame);
+						nl = buf.indexOf("\n");
+						continue;
+					}
+					const info = parsed as Info | null;
+					if (!info || typeof info.port !== "number") {
+						fail("audio service printed garbage instead of a ready line");
+						return;
+					}
+					this.info = info;
+					clearTimeout(timer);
+					cleanup();
+					resolve(true);
+					nl = buf.indexOf("\n");
 				}
-				clearTimeout(timer);
-				cleanup();
-				resolve(true);
 			};
 			const onErr = (chunk: Buffer) => {
 				this.lastStderr = chunk.toString("utf8").trim().split("\n").at(-1) ?? this.lastStderr;
@@ -113,11 +140,17 @@ export class AudioService {
 	}
 
 	health(): AudioHealth {
-		if (this.info) return { stt: this.info.stt, tts: this.info.tts, vad: this.info.vad };
+		const boot: AudioHealth["boot"] = this.info
+			? { stage: "ready" }
+			: this.starting
+				? { stage: "starting", ...(this.lastBootReason ? { reason: this.lastBootReason } : {}) }
+				: { stage: "unavailable", reason: this.lastStderr || "audio service unavailable" };
+		if (this.info) return { stt: this.info.stt, tts: this.info.tts, vad: this.info.vad, boot };
 		return {
 			stt: { ready: false, reason: this.lastStderr || "audio service unavailable" },
 			tts: { ready: false, reason: "audio service unavailable" },
 			vad: false,
+			boot,
 		};
 	}
 
@@ -169,15 +202,41 @@ export class AudioService {
 			gone = true;
 			up?.close();
 		});
+		// boot progress first — even if the child is already warm, the history
+		// tells the client what happened (and arrives before its hello_ok)
+		const onBoot = (f: BootFrame) => {
+			try {
+				client.send(
+					JSON.stringify({
+						type: "__voice_boot__",
+						component: f.component,
+						stage: f.stage,
+						...(f.reason ? { reason: f.reason } : {}),
+					}),
+					{
+						binary: false,
+					},
+				);
+			} catch {
+				// client gone mid-boot
+			}
+		};
+		this.bootListeners.add(onBoot);
+		for (const f of this.bootFrames) onBoot(f);
 		if (!(await this.ensure()) || !this.info || gone) {
+			this.bootListeners.delete(onBoot);
 			client.close();
 			return;
 		}
+		this.bootListeners.delete(onBoot); // child is warm; no more frames coming
 		const { WebSocket } = await import("ws");
 		up = new WebSocket(`ws://127.0.0.1:${this.info!.port}/voice`);
 		const sock = up;
 		const tearDown = () => {
 			this.ups.delete(sock);
+			// the child can't announce a client hang-up (its socket is already
+			// closing when onClosed fires), so the parent owns the active count
+			if (this.authedUps.delete(sock)) this.opts.setVoiceActive(this.authedUps.size > 0);
 			try {
 				client.close();
 			} catch {
@@ -212,6 +271,9 @@ export class AudioService {
 				case "__voice_active__":
 					this.opts.setVoiceActive(evt.active === true);
 					return;
+				case "voice_hello_ok":
+					this.authedUps.add(sock);
+					return client.send(data, { binary: false });
 				default:
 					return client.send(data, { binary: false });
 			}

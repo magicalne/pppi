@@ -583,6 +583,8 @@ fun ChatScreen(
 	var voiceTentative by remember { mutableStateOf("") }
 	var voiceLevel by remember { mutableIntStateOf(0) }
 	var voiceOutLevel by remember { mutableIntStateOf(0) }
+	var voiceBoot by remember { mutableStateOf<VoiceBootState>(VoiceBootState.Idle) }
+	val voiceAttempts = remember { java.util.concurrent.atomic.AtomicInteger(0) }
 	val voiceMachine = remember { VoicePhaseMachine() }
 	val voiceClientRef = remember { java.util.concurrent.atomic.AtomicReference<VoiceClient?>(null) }
 	val voiceEngineRef = remember { java.util.concurrent.atomic.AtomicReference<VoiceAudioEngine?>(null) }
@@ -781,13 +783,15 @@ fun ChatScreen(
 		VoiceForegroundService.stop(context)
 	}
 
-	fun startVoice() {
+	fun startVoice(reconnect: Boolean = false) {
 		if (voiceOn) return
+		if (!reconnect && voiceBoot.booting) return
 		stoppingVoice.set(false)
 		voiceCommitted = ""
 		voiceTentative = ""
 		voiceMachine.reset()
 		voicePhase = VoicePhase.LISTENING
+		voiceBoot = if (reconnect) VoiceBootState.Reconnecting else VoiceBootState.Connecting
 		// foreground service first: with the screen off, Android freezes an app
 		// that has none — the mic uplink and websocket die within seconds
 		VoiceForegroundService.start(context)
@@ -825,11 +829,44 @@ fun ChatScreen(
 						}
 					},
 					onAudio = { pcm -> voiceEngineRef.get()?.playPcm(pcm.toByteArray(), voiceRate) },
-					// the server closing back is normal right after a manual stop —
-					// only surface a drop the user didn't ask for
+					onBoot = { component, stage, reason ->
+						// server boot progress (model loading) → honest pill text
+						if (stage != "ready") {
+							val what = when (component) {
+								"stt" -> "the speech model"
+								"tts" -> "the agent's voice"
+								else -> "the voice models"
+							}
+							voiceBoot = VoiceBootState.Warming(
+								when {
+									reason != null && reason.length > 80 -> "${reason.take(77)}…"
+									reason != null -> reason
+									stage == "starting" -> "waking the voice service…"
+									else -> "loading $what…"
+								},
+							)
+						}
+					},
 					onGone = {
+						if (stoppingVoice.getAndSet(false)) {
+							// user cancelled — the server closing back is expected
+							teardownVoice()
+							voiceBoot = VoiceBootState.Idle
+							return@VoiceClient
+						}
+						// live drop: auto-reconnect twice before surfacing Failed
+						val attempt = voiceAttempts.incrementAndGet()
 						teardownVoice()
-						notice = if (stoppingVoice.getAndSet(false)) null else "voice session ended"
+						if (attempt <= 2) {
+							voiceBoot = VoiceBootState.Reconnecting
+							thread(name = "pppi-reconnect") {
+								Thread.sleep(2000)
+								if (voiceBoot is VoiceBootState.Reconnecting) startVoice(reconnect = true)
+							}
+						} else {
+							voiceAttempts.set(0)
+							voiceBoot = VoiceBootState.Failed("connection dropped — tap to start again")
+						}
 					},
 				)
 				val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -843,18 +880,26 @@ fun ChatScreen(
 				voiceClientRef.set(client)
 				voiceEngineRef.set(engine)
 				client.start()
-				voiceOn = true
+				voiceAttempts.set(0)
+				// headset routing can take real time (Bluetooth SCO) — name it
+				voiceBoot = VoiceBootState.Routing
 				engine.startMic { msg -> notice = msg }
+				voiceOn = true
+				voiceBoot = VoiceBootState.Ready
 			} catch (e: Exception) {
+				val cancelled = stoppingVoice.getAndSet(false)
 				teardownVoice()
-				notice = e.message ?: "voice unavailable"
+				voiceBoot = if (cancelled) VoiceBootState.Idle else VoiceBootState.Failed(e.message ?: "voice unavailable")
 			}
 		}
 	}
 
+	/** User tap: cancel whatever voice is doing (booting, live, failed). */
 	fun stopVoice() {
 		stoppingVoice.set(true)
 		teardownVoice()
+		voiceAttempts.set(0)
+		voiceBoot = VoiceBootState.Idle
 	}
 
 	fun interruptVoice() {
@@ -1060,40 +1105,61 @@ fun ChatScreen(
 					.padding(start = 18.dp, top = 4.dp, bottom = 4.dp, end = 6.dp),
 				verticalAlignment = Alignment.CenterVertically,
 			) {
-				if (voiceOn) {
+				val booting = voiceBoot.booting
+				if (voiceOn || voiceBoot !is VoiceBootState.Idle) {
 					Row(
 						Modifier.weight(1f).height(44.dp),
 						verticalAlignment = Alignment.CenterVertically,
 					) {
-						Text(
-							when (voicePhase) {
-								VoicePhase.LISTENING -> "listening — just talk"
-								VoicePhase.THINKING -> "thinking…"
-								VoicePhase.AGENT_SPEAKING -> "talking… speak up to interrupt"
-								VoicePhase.USER_SPEAKING ->
-									if (voiceCommitted.isBlank() && voiceTentative.isBlank()) "…" else voiceCommitted + " " + voiceTentative
-							},
-							color = when (voicePhase) {
-								VoicePhase.AGENT_SPEAKING -> theme.accent
-								VoicePhase.USER_SPEAKING -> theme.text
-								else -> theme.dim
-							},
-							fontSize = 14.sp,
-							maxLines = 1,
-							overflow = TextOverflow.Ellipsis,
-							modifier = Modifier.weight(1f),
-						)
-						if (voicePhase == VoicePhase.AGENT_SPEAKING) {
+						if (booting) {
+							PulseDots(theme)
+							Spacer(Modifier.width(8.dp))
 							Text(
-								"stop",
-								color = theme.text,
-								fontSize = 13.sp,
-								modifier = Modifier
-									.clip(RoundedCornerShape(999.dp))
-									.border(1.dp, theme.line, RoundedCornerShape(999.dp))
-									.padding(horizontal = 10.dp, vertical = 4.dp)
-									.clickable { interruptVoice() },
+								when (val b = voiceBoot) {
+									is VoiceBootState.Warming -> b.detail ?: "waking up the agent's ears…"
+									VoiceBootState.Connecting -> "connecting…"
+									VoiceBootState.Routing -> "setting up your headset…"
+									VoiceBootState.Reconnecting -> "connection blipped — reaching your Mac again…"
+									is VoiceBootState.Failed -> b.reason
+									else -> ""
+								},
+								color = if (voiceBoot is VoiceBootState.Failed) theme.danger else theme.dim,
+								fontSize = 14.sp,
+								maxLines = 1,
+								overflow = TextOverflow.Ellipsis,
+								modifier = Modifier.weight(1f),
 							)
+						} else {
+							Text(
+								when (voicePhase) {
+									VoicePhase.LISTENING -> "listening — just talk"
+									VoicePhase.THINKING -> "thinking…"
+									VoicePhase.AGENT_SPEAKING -> "talking… speak up to interrupt"
+									VoicePhase.USER_SPEAKING ->
+										if (voiceCommitted.isBlank() && voiceTentative.isBlank()) "…" else voiceCommitted + " " + voiceTentative
+								},
+								color = when (voicePhase) {
+									VoicePhase.AGENT_SPEAKING -> theme.accent
+									VoicePhase.USER_SPEAKING -> theme.text
+									else -> theme.dim
+								},
+								fontSize = 14.sp,
+								maxLines = 1,
+								overflow = TextOverflow.Ellipsis,
+								modifier = Modifier.weight(1f),
+							)
+							if (voicePhase == VoicePhase.AGENT_SPEAKING) {
+								Text(
+									"stop",
+									color = theme.text,
+									fontSize = 13.sp,
+									modifier = Modifier
+										.clip(RoundedCornerShape(999.dp))
+										.border(1.dp, theme.line, RoundedCornerShape(999.dp))
+										.padding(horizontal = 10.dp, vertical = 4.dp)
+										.clickable { interruptVoice() },
+								)
+							}
 						}
 					}
 				} else if (recording) {
@@ -1130,12 +1196,30 @@ fun ChatScreen(
 						.size(44.dp)
 						.testTag("pppi.mic")
 						.clip(CircleShape)
-						.background(if (voiceOn || recording) theme.danger else theme.accent)
-						.pointerInput(voiceOn) {
+						.background(
+							when {
+								voiceOn || recording -> theme.danger
+								voiceBoot.booting -> theme.surface
+								else -> theme.accent
+							},
+						)
+						.then(
+							if (voiceBoot.booting) {
+								Modifier.border(1.dp, theme.accent, CircleShape)
+							} else {
+								Modifier
+							},
+						)
+						.pointerInput(voiceOn, voiceBoot, recording, micGranted) {
 							detectTapGestures(
 								onPress = {
 									when {
+										// the button always means stop/hang-up — mid-boot it cancels
 										voiceOn -> {
+											tryAwaitRelease()
+											stopVoice()
+										}
+										voiceBoot.booting -> {
 											tryAwaitRelease()
 											stopVoice()
 										}
@@ -1164,7 +1248,7 @@ fun ChatScreen(
 				) {
 					Text(
 						if (voiceOn || recording) "■" else "●",
-						color = if (voiceOn) Color.White else theme.accentInk,
+						color = if (voiceOn || recording) Color.White else if (voiceBoot.booting) theme.accent else theme.accentInk,
 						fontSize = 16.sp,
 					)
 				}

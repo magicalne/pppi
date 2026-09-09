@@ -757,6 +757,45 @@
 	color: #fff;
 }
 
+/* boot states: connecting / warming / reconnecting — keep the pulse subtle */
+.voice-state.booting .pulse-dots {
+	display: inline-flex;
+	gap: 4px;
+	margin-right: 10px;
+}
+
+.voice-state.booting .pulse-dots i {
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: var(--accent);
+	animation: pppi-pulse 1.2s ease-in-out infinite;
+}
+
+.voice-state.booting .pulse-dots i:nth-child(2) {
+	animation-delay: 0.2s;
+}
+
+.voice-state.booting .pulse-dots i:nth-child(3) {
+	animation-delay: 0.4s;
+}
+
+@keyframes pppi-pulse {
+	0%,
+	100% {
+		opacity: 0.25;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+
+.mic.boot {
+	background: var(--surface);
+	color: var(--accent);
+	border: 1px solid var(--accent);
+}
+
 /* ---------------- status bar (context · model · thinking) ---------------- */
 
 .status-bar {

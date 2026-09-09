@@ -72,6 +72,12 @@ without becoming a chat turn. Fenced code is never spoken — the voice says
 - Magic words never become turns: `stop` (also `cancel`, `quiet`) cuts
   playback and aborts the agent; `repeat` (also `say that again`) re-speaks
   the last reply without a model round trip.
+- Interactive mode is a named state machine on every client — connecting →
+  warming (real boot progress from the audio service: `__voice_boot__`
+  frames, `/api/health` `boot` field) → routing (Bluetooth SCO) → listening —
+  with timeouts, cancel-on-tap in every state, and auto-reconnect (twice)
+  on mid-session drops. The models load eagerly at server boot, so the
+  first utterance never pays the load cost.
 - Sessions auto-pause after 10 idle minutes; hold-to-talk stays as the
   fallback whenever the session is off.
 

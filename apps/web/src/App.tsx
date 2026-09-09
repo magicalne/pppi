@@ -2,6 +2,7 @@ import type { AgentState, AgentStatus, ChatEntry, ModelInfo, ServerEvent, Sessio
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { StatusBar } from "./status/StatusBar.tsx";
 import { THEMES, type ThemeId, applyTheme, loadTheme } from "./theme.ts";
+import { VoiceWave } from "./voice/VoiceWave.tsx";
 import { useVoice } from "./voice/useVoice.ts";
 
 type Pairing = { server: string; token: string };
@@ -366,7 +367,8 @@ export default function App() {
 
 	const toggleVoice = useCallback(() => {
 		if (!conn) return;
-		if (voice.on) {
+		if (voice.on || voice.state.boot) {
+			// the button always means stop/hang up — even mid-boot it cancels
 			void voice.stop();
 			return;
 		}
@@ -574,34 +576,59 @@ export default function App() {
 			{voice.state.notice && <div className="toast">{voice.state.notice}</div>}
 
 			<div className="composer-wrap">
+				{voice.on && <VoiceWave inLevel={voice.levels.mic} outLevel={voice.levels.out} phase={voice.state.phase} />}
 				<div className="pill">
 					{busy && <div className="hairline" />}
-					{voice.on ? (
+					{(voice.on || voice.state.boot) && (
 						<>
-							<div className={`voice-state ${voice.state.phase}`}>
-								{voice.state.phase === "listening" && <span className="hint-line">listening — just talk</span>}
-								{voice.state.phase === "user-speaking" && (
-									<span className="cap">
-										{voice.state.committed && <b>{voice.state.committed} </b>}
-										{voice.state.tentative}
-										{!voice.state.committed && !voice.state.tentative && <i>…</i>}
-									</span>
-								)}
-								{voice.state.phase === "thinking" && <span className="hint-line">thinking…</span>}
-								{voice.state.phase === "agent-speaking" && (
+							{voice.state.boot ? (
+								<div className="voice-state booting">
 									<span className="hint-line">
-										talking… speak up to interrupt
-										<button type="button" className="stop" onClick={voice.interrupt}>
-											stop
-										</button>
+										<span className="pulse-dots" aria-hidden>
+											<i />
+											<i />
+											<i />
+										</span>
+										{voice.state.boot === "connecting" && "connecting…"}
+										{voice.state.boot === "reconnecting" && "connection blipped — reaching your Mac again…"}
+										{voice.state.boot === "warming" &&
+											(voice.state.bootDetail
+												? `waking up the agent's ears — ${voice.state.bootDetail}`
+												: "waking up the agent's ears…")}
 									</span>
-								)}
-							</div>
-							<button type="button" className="mic rec" onClick={toggleVoice} aria-label="end voice session">
-								■
+								</div>
+							) : (
+								<div className={`voice-state ${voice.state.phase}`}>
+									{voice.state.phase === "listening" && <span className="hint-line">listening — just talk</span>}
+									{voice.state.phase === "user-speaking" && (
+										<span className="cap">
+											{voice.state.committed && <b>{voice.state.committed} </b>}
+											{voice.state.tentative}
+											{!voice.state.committed && !voice.state.tentative && <i>…</i>}
+										</span>
+									)}
+									{voice.state.phase === "thinking" && <span className="hint-line">thinking…</span>}
+									{voice.state.phase === "agent-speaking" && (
+										<span className="hint-line">
+											talking… speak up to interrupt
+											<button type="button" className="stop" onClick={voice.interrupt}>
+												stop
+											</button>
+										</span>
+									)}
+								</div>
+							)}
+							<button
+								type="button"
+								className={`mic ${voice.on ? "rec" : "boot"}`}
+								onClick={toggleVoice}
+								aria-label={voice.on ? "end voice session" : "cancel voice startup"}
+							>
+								{voice.on ? "■" : "●"}
 							</button>
 						</>
-					) : (
+					)}
+					{!voice.on && !voice.state.boot && (
 						<>
 							<input
 								value={textInput}

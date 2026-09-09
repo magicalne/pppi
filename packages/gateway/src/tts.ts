@@ -22,6 +22,8 @@ export type TtsChunk = { pcm: Buffer; rate: number };
 
 export interface TtsProvider extends VoiceTts {
 	readonly id: "kokoro" | "macos-say";
+	/** Eager-load any engine so the first reply speaks instantly. Resolves false on failure. */
+	warm(): Promise<boolean>;
 }
 
 // ---------------------------------------------------------------- provider resolution
@@ -100,6 +102,12 @@ export class KokoroProvider implements TtsProvider {
 			yield* floatPcmChunks(audio, rate);
 		})();
 	}
+
+	async warm(): Promise<boolean> {
+		if (!this.status.ready) return false;
+		this.loading ??= loadKokoroEngine();
+		return (await this.loading) !== null;
+	}
 }
 
 type KokoroEngine = {
@@ -167,6 +175,10 @@ export class MacosSayProvider implements TtsProvider {
 			provider: this.id,
 			voice: this.voice,
 		};
+	}
+
+	async warm(): Promise<boolean> {
+		return this.status.ready;
 	}
 
 	async *synthesize(text: string): AsyncIterable<TtsChunk> {

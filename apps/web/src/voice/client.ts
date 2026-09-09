@@ -4,6 +4,9 @@
 import type { VoiceServerEvent } from "@pppi/protocol";
 import type { MicStream } from "./mic.ts";
 
+/** Server boot progress, arrives as __voice_boot__ control frames (pre-hello). */
+export type VoiceBootFrame = { component?: string; stage: string; reason?: string };
+
 export type VoiceHandlers = {
 	onState: (state: "listening" | "thinking" | "speaking") => void;
 	onVad: (speaking: boolean) => void;
@@ -14,6 +17,7 @@ export type VoiceHandlers = {
 	onTtsEnd: (interrupted: boolean) => void;
 	onError: (message: string) => void;
 	onGone: () => void;
+	onBoot?: (frame: VoiceBootFrame) => void;
 };
 
 export class VoiceClient {
@@ -32,18 +36,34 @@ export class VoiceClient {
 		await new Promise<void>((resolve, reject) => {
 			const ws = new WebSocket(`${this.base.replace(/^http/, "ws").replace(/\/$/, "")}/voice`);
 			this.ws = ws;
-			const guard = setTimeout(() => reject(new Error("voice handshake timed out")), 10_000);
+			// boot frames keep pushing the deadline out — a warming server may
+			// legitimately hold hello_ok for a while
+			let guard: ReturnType<typeof setTimeout> | null = setTimeout(fail, 10_000);
+			function fail() {
+				guard = null;
+				try {
+					ws.close();
+				} catch {
+					// already gone
+				}
+				reject(new Error("voice handshake timed out"));
+			}
 			ws.onopen = () => ws.send(JSON.stringify({ type: "hello", token: this.token, client: "web" }));
 			ws.onmessage = (m) => {
 				if (typeof m.data === "string") {
 					const evt = JSON.parse(m.data) as VoiceServerEvent;
 					if (evt.type === "voice_hello_ok") {
-						clearTimeout(guard);
+						if (guard) clearTimeout(guard);
 						this.live = true;
 						resolve();
 					} else if (evt.type === "voice_hello_fail") {
-						clearTimeout(guard);
+						if (guard) clearTimeout(guard);
 						reject(new Error(evt.error));
+					} else if ((evt as { type?: string }).type === "__voice_boot__") {
+						// fires before hello_ok while the server loads its voice models
+						if (guard) clearTimeout(guard);
+						guard = setTimeout(fail, 90_000);
+						this.handlers.onBoot?.(evt as unknown as VoiceBootFrame);
 					} else {
 						this.dispatch(evt);
 					}
@@ -56,7 +76,7 @@ export class VoiceClient {
 				/* onclose follows */
 			};
 			ws.onclose = () => {
-				clearTimeout(guard);
+				if (guard) clearTimeout(guard);
 				const wasLive = this.live;
 				this.live = false;
 				if (wasLive) this.handlers.onGone();

@@ -98,6 +98,38 @@ describe.skipIf(!bunBin)("audio service child", () => {
 		// the child starts lazily; before any voice session it reports unavailable
 		expect(res.status).toBe(200);
 		expect(body.stt.ready === true || typeof body.stt.reason === "string").toBe(true);
+		expect(["starting", "ready", "unavailable"]).toContain(body.boot?.stage);
+	});
+
+	it("sends the boot story to voice clients before hello_ok", async () => {
+		// works warm or cold: the proxy keeps the boot history and replays it at attach.
+		// the listener goes on BEFORE open — the frames ride the upgrade, so they can
+		// arrive in the same burst as the open event
+		const frames: Array<{ component: string; stage: string; reason?: string }> = [];
+		await new Promise<void>((resolve, reject) => {
+			const ws = new WebSocket(`${base}/voice`);
+			const timer = setTimeout(() => reject(new Error("no hello_ok within 15s")), 15_000);
+			ws.on("message", (raw: Buffer) => {
+				let evt: any;
+				try {
+					evt = JSON.parse(raw.toString());
+				} catch {
+					return;
+				}
+				if (evt.type === "__voice_boot__") frames.push(evt);
+				if (evt.type === "voice_hello_ok") {
+					clearTimeout(timer);
+					ws.close();
+					resolve();
+				}
+			});
+			ws.on("open", () => ws.send(JSON.stringify({ type: "hello", token, client: "test" })));
+			ws.on("error", reject);
+		});
+		expect(frames.some((f) => f.component === "vad")).toBe(true);
+		expect(frames.some((f) => f.component === "stt" && f.stage === "ready")).toBe(true);
+		// fake child has no tts — the boot story says so honestly
+		expect(frames.some((f) => f.component === "tts" && f.stage === "failed")).toBe(true);
 	});
 
 	it("turns spoken audio from the child into a chat turn and speaks the reply", async () => {

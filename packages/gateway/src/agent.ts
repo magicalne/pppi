@@ -175,6 +175,8 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 			this.emit("error", `failed to spawn omni agent: ${err.message}`);
 			this.setState("starting");
 		});
+		// teardown races can EPIPE the stdin stream itself — swallow, dispose() handles the rest
+		proc.stdin?.on("error", () => {});
 
 		proc.stdout.on("data", (chunk: Buffer) => this.onData(chunk));
 		proc.stderr.on("data", (chunk: Buffer) => {
@@ -223,7 +225,10 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 
 	private write(obj: Record<string, unknown>): void {
 		if (!this.proc?.stdin.writable) return;
-		this.proc.stdin.write(`${JSON.stringify(obj)}\n`);
+		// the child can vanish between the writable check and the write (EPIPE)
+		this.proc.stdin.write(`${JSON.stringify(obj)}\n`, (err) => {
+			void err;
+		});
 	}
 
 	private request(type: string, timeoutMs = 30_000, extra: Record<string, unknown> = {}): Promise<RpcResponse> {

@@ -15,6 +15,9 @@
 //
 // Prints one JSON line on stdout when ready:
 //   {"port":N,"stt":{…},"tts":{…},"vad":bool}
+// Before that, boot progress lines (the parent forwards them to clients so
+// interactive mode can show "waking up the agent's ears" instead of nothing):
+//   {"ev":"boot","component":"stt|tts|vad","stage":"loading|ready|failed","reason"?}
 
 import { type ServerResponse, createServer } from "node:http";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -26,6 +29,10 @@ import { WavError, decodeWav } from "./wav.ts";
 
 const token = process.env.PPPI_AUDIO_TOKEN ?? "";
 const fake = process.env.PPPI_AUDIO_FAKE === "1";
+
+function boot(component: string, stage: "loading" | "ready" | "failed", reason?: string): void {
+	process.stdout.write(`${JSON.stringify({ ev: "boot", component, stage, ...(reason ? { reason } : {}) })}\n`);
+}
 
 function json(res: ServerResponse, code: number, body: unknown): void {
 	const line = JSON.stringify(body);
@@ -62,9 +69,31 @@ const fakeStt: VoiceStt | null = fake
 const realStt = fake || process.env.PPPI_AUDIO_NO_STT === "1" ? null : Stt.create({});
 const sttPort: VoiceStt = fakeStt ?? voiceStt(realStt!);
 const tts = fake ? null : resolveTtsProvider();
+
+// Warm the heavy models NOW, not on the first utterance/reply — eager load
+// plus the boot lines above is what lets clients show honest progress.
+boot("vad", "loading");
 const vad = fake
 	? { prob: async (window: Float32Array) => (rms(window) > 0.08 ? 0.95 : 0.02) } // windows are float −1…1
 	: await SileroVad.create().catch(() => null);
+boot("vad", vad !== null ? "ready" : "failed", vad !== null ? undefined : "silero VAD failed to load");
+
+boot("stt", "loading");
+boot("tts", "loading");
+const [sttWarm, ttsWarm] = await Promise.allSettled([
+	realStt ? realStt.warm() : Promise.resolve(),
+	tts ? tts.warm() : Promise.resolve(false),
+]);
+if (fake) boot("stt", "ready");
+else if (!realStt) boot("stt", "failed", process.env.PPPI_AUDIO_NO_STT === "1" ? "STT disabled" : "no STT");
+else if (sttWarm.status === "fulfilled") boot("stt", "ready");
+else boot("stt", "failed", String((sttWarm.reason as Error)?.message ?? sttWarm.reason));
+
+if (!tts) boot("tts", "failed", fake ? "fake mode" : "unavailable");
+else if (ttsWarm.status === "fulfilled" && ttsWarm.value) boot("tts", "ready");
+else if (ttsWarm.status === "fulfilled")
+	boot("tts", "failed", tts.status.ready ? "engine failed to load" : tts.status.reason);
+else boot("tts", "failed", String((ttsWarm.reason as Error)?.message ?? ttsWarm.reason));
 
 function rms(window: Float32Array): number {
 	let sum = 0;
