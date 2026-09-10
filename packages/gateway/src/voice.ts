@@ -121,6 +121,15 @@ export class VoiceSession {
 	private preRollSamples = 0;
 	private capture: Capture | null = null;
 
+	// uplink telemetry — makes a deaf session visible ("no audio", "digital
+	// silence", "signal but no speech", or "speech flowing")
+	private telemetryTimer: NodeJS.Timeout | undefined;
+	private lastTelAt = Date.now();
+	private lastTelAudioMs = 0;
+	private lastAudioWallAt = 0;
+	private peakSinceTel = 0;
+	private vadMsSinceTel = 0;
+
 	constructor(
 		private readonly ws: WebSocket,
 		private readonly deps: VoiceSessionDeps,
@@ -189,6 +198,7 @@ export class VoiceSession {
 		this.closed = true;
 		clearTimeout(this.helloTimer);
 		clearTimeout(this.idleTimer);
+		clearInterval(this.telemetryTimer);
 		this.capture?.stream?.dispose();
 		this.capture = null;
 		this.speaker?.abort();
@@ -216,6 +226,8 @@ export class VoiceSession {
 			}
 			this.authed = true;
 			this.deps.onAuthed();
+			// every 5s: what did the uplink actually deliver? the pane reads this
+			this.telemetryTimer = setInterval(() => this.logTelemetry(), 5_000);
 			this.send({
 				type: "voice_hello_ok",
 				stt: this.deps.stt.status,
@@ -241,9 +253,15 @@ export class VoiceSession {
 
 	private onAudio(data: Buffer): void {
 		this.armIdleTimer(); // audio (even silence) = the client is still with us
+		this.lastAudioWallAt = Date.now();
 		const frames = data.length >> 1;
 		const pcm = new Float32Array(frames);
-		for (let i = 0; i < frames; i++) pcm[i] = data.readInt16LE(i * 2) / 32768;
+		for (let i = 0; i < frames; i++) {
+			const s = data.readInt16LE(i * 2) / 32768;
+			const abs = s < 0 ? -s : s;
+			if (abs > this.peakSinceTel) this.peakSinceTel = abs;
+			pcm[i] = s;
+		}
 
 		if (this.capture) {
 			this.appendCapture(pcm);
@@ -279,6 +297,7 @@ export class VoiceSession {
 				continue; // one bad window shouldn't kill the session
 			}
 			this.audioMs += windowMs;
+			if (prob >= this.timings.threshold) this.vadMsSinceTel += windowMs;
 			this.detector.feed(prob, this.audioMs);
 		}
 	}
@@ -316,6 +335,37 @@ export class VoiceSession {
 				},
 			);
 		}
+	}
+
+	// ------------------------------------------------------------- uplink health
+
+	/**
+	 * Every 5s, say what the mic uplink actually delivered, so a stuck
+	 * interactive session is diagnosable from the pane alone:
+	 *   no audio        → the client's stream/socket died
+	 *   peak 0.00       → the client's mic is digitally silent (capture problem)
+	 *   vad speech 0%   → signal arrives but never crosses the speech threshold
+	 *   vad speech >0%  → the ear is hearing the user; turn-taking is live
+	 */
+	private logTelemetry(): void {
+		if (this.closed) return;
+		const now = Date.now();
+		const windowS = (now - this.lastTelAt) / 1000;
+		const audioDelta = this.audioMs - this.lastTelAudioMs;
+		if (audioDelta <= 0) {
+			if (this.lastAudioWallAt > 0) {
+				console.error(`[voice] mic: no audio from the client in the last ${windowS.toFixed(0)}s`);
+			}
+		} else {
+			const speechPct = Math.round((this.vadMsSinceTel / audioDelta) * 100);
+			console.error(
+				`[voice] mic: ${(audioDelta / 1000).toFixed(1)}s/${windowS.toFixed(0)}s, peak ${this.peakSinceTel.toFixed(2)}, vad speech ${speechPct}%`,
+			);
+		}
+		this.lastTelAudioMs = this.audioMs;
+		this.lastTelAt = now;
+		this.peakSinceTel = 0;
+		this.vadMsSinceTel = 0;
 	}
 
 	// ------------------------------------------------------------- turn events
