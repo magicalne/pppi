@@ -123,7 +123,7 @@ export const DEFAULT_TIMINGS: VadTimings = {
 	graceMs: 400,
 	minUtteranceMs: 300,
 	maxUtteranceMs: 25_000,
-	bargeInMs: 400,
+	bargeInMs: 250,
 	ttsMuteMs: 200,
 	threshold: 0.5,
 	gapToleranceMs: 180,

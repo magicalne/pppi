@@ -60,8 +60,10 @@ export type VoiceSessionDeps = {
 	token: string;
 	stt: VoiceStt;
 	tts: VoiceTts | null;
-	/** anything with a per-window speech probability — SileroVad in prod, scripts in tests */
-	vad: { prob(window: Float32Array): Promise<number> };
+	/** anything with a per-window speech probability — SileroVad in prod, scripts in tests.
+	 *  reset() clears the detector's internal state; called between turns so one
+	 *  turn's acoustic garbage can't deafen the next. */
+	vad: { prob(window: Float32Array): Promise<number>; reset?(): void };
 	timings?: Partial<VadTimings>;
 	/** Submit a finalized utterance into the conversation. */
 	submit(text: string): Promise<void>;
@@ -129,6 +131,7 @@ export class VoiceSession {
 	private lastAudioWallAt = 0;
 	private peakSinceTel = 0;
 	private vadMsSinceTel = 0;
+	private vadPeakSinceTel = 0;
 
 	constructor(
 		private readonly ws: WebSocket,
@@ -298,6 +301,7 @@ export class VoiceSession {
 			}
 			this.audioMs += windowMs;
 			if (prob >= this.timings.threshold) this.vadMsSinceTel += windowMs;
+			if (prob > this.vadPeakSinceTel) this.vadPeakSinceTel = prob;
 			this.detector.feed(prob, this.audioMs);
 		}
 	}
@@ -359,13 +363,14 @@ export class VoiceSession {
 		} else {
 			const speechPct = Math.round((this.vadMsSinceTel / audioDelta) * 100);
 			console.error(
-				`[voice] mic: ${(audioDelta / 1000).toFixed(1)}s/${windowS.toFixed(0)}s, peak ${this.peakSinceTel.toFixed(2)}, vad speech ${speechPct}%`,
+				`[voice] mic: ${(audioDelta / 1000).toFixed(1)}s/${windowS.toFixed(0)}s, peak ${this.peakSinceTel.toFixed(2)}, vad speech ${speechPct}%, vad peak ${this.vadPeakSinceTel.toFixed(2)}`,
 			);
 		}
 		this.lastTelAudioMs = this.audioMs;
 		this.lastTelAt = now;
 		this.peakSinceTel = 0;
 		this.vadMsSinceTel = 0;
+		this.vadPeakSinceTel = 0;
 	}
 
 	// ------------------------------------------------------------- turn events
@@ -406,6 +411,7 @@ export class VoiceSession {
 			// blip — discard, back to idle
 			this.capture.stream?.dispose();
 			this.capture = null;
+			this.deps.vad.reset?.(); // a cough shouldn't poison the next turn
 			return;
 		}
 		this.capture.speechMs = totalMs;
@@ -422,6 +428,9 @@ export class VoiceSession {
 			let text = await this.finalizeStream(cap);
 			if (!text.trim()) text = await this.deps.stt.transcribeBuffer(concatAll(cap.pcm, cap.samples));
 			text = text.trim();
+			// the turn is over — clear the VAD's LSTM state so this turn's room
+			// noise / echo can't deafen the detector for the next one
+			this.deps.vad.reset?.();
 			console.error(
 				`[voice] utt: ${(cap.speechMs / 1000).toFixed(1)}s speech, first partial ${
 					cap.firstPartialAt ? `${cap.firstPartialAt - cap.startedAt}ms` : "none"

@@ -167,6 +167,7 @@ async function bootGateway(
 		pair ? `\n${pairUrl(pair)}` : "",
 		`\n${versionStamp()}`,
 		`\nvoice: ${audio ? "audio service child" : "unavailable (bun not found)"}`,
+		"\nvoice logs: ~/.pppi/logs/audio.log",
 		"stop: /omni stop — or end this session.",
 	];
 	notify(lines.filter(Boolean).join("\n") + (qr ? `\n\n${qr}` : ""), "info");

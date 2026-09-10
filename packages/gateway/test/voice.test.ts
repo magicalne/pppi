@@ -50,9 +50,14 @@ function fakeStreamingStt(text: string) {
 /** Scriptable VAD: queued probabilities consumed in window order (0.02 = silence). */
 function fakeVad() {
 	const queue: number[] = [];
+	const rec = { resets: 0 };
 	return {
 		push: (probs: number[]) => queue.push(...probs),
 		prob: async () => queue.shift() ?? 0.02,
+		reset: () => {
+			rec.resets++;
+		},
+		rec,
 	};
 }
 
@@ -605,14 +610,75 @@ describe("interactive voice websocket", () => {
 		await sayPaced(voice, v, "silence", 30);
 		const start = await nextEvent(voice, "tts_start");
 
-		// user talks over the agent: sustained speech past the echo-aware window
-		await sayPaced(voice, v, "speech", 20);
+		// user talks over the agent: bargeInMs (250ms) of sustained speech must
+		// cut the synthesis off — ~1s of speech is ample
+		await sayPaced(voice, v, "speech", 10);
 
 		const end = await nextEvent(voice, "tts_end");
 		expect(end.id).toBe(start.id);
 		expect(end.interrupted).toBe(true);
 		expect(aborted).toBeGreaterThanOrEqual(1);
 		await new Promise((r) => setTimeout(r, 200));
+		voice.close();
+	});
+
+	it("cuts the agent off after bargeInMs of speech, not minutes", async () => {
+		// regression: barge-in must react to a SHORT burst of speech over the TTS
+		const { provider } = fakeTts({ chunkDelayMs: 60 });
+		let aborted = 0;
+		const v = await boot(fakeStt("talk"), provider, "a fairly long spoken sentence for the fake voice");
+		driver.abort = async () => {
+			aborted++;
+		};
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+
+		await sayPaced(voice, v, "speech", 8);
+		await sayPaced(voice, v, "silence", 30);
+		await nextEvent(voice, "tts_start");
+
+		// exactly ~0.8s of speech: enough for 250ms sustain, impossible to
+		// satisfy if barge-in ever drifts back to needing whole seconds
+		await sayPaced(voice, v, "speech", 8);
+
+		const end = await nextEvent(voice, "tts_end");
+		expect(end.interrupted).toBe(true);
+		expect(aborted).toBeGreaterThanOrEqual(1);
+		voice.close();
+	});
+
+	it("takes a new turn after a spoken reply finishes (playback_done)", async () => {
+		// regression: speech after the agent's reply must not be swallowed —
+		// the user's report: "after the response is finished, it doesn't seem
+		// to process my request when I start to talk again"
+		const { provider } = fakeTts();
+		const v = await boot(fakeStt("first question"), provider, "one reply sentence.");
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+
+		// arm both waiters BEFORE the turn: the whole reply bursts in one
+		// socket chunk, and ws emits same-chunk messages synchronously — a
+		// listener attached after tts_start resolves misses that chunk's tts_end
+		const ttsStart = nextEvent(voice, "tts_start");
+		const ttsEnd = nextEvent(voice, "tts_end");
+
+		// turn 1 → reply spoken → client's speaker drained
+		say(voice, v, "speech", 8);
+		say(voice, v, "silence", 30);
+		expect((await nextEvent(voice, "stt_final")).text).toBe("first question");
+		await ttsStart;
+		await ttsEnd;
+		voice.send(JSON.stringify({ type: "playback_done" }));
+		await new Promise((r) => setTimeout(r, 150));
+
+		// turn 2 must dispatch exactly like the first
+		const second = nextEvent(voice, "stt_final");
+		say(voice, v, "speech", 8);
+		say(voice, v, "silence", 30);
+		expect((await second).text).toBe("first question");
+
+		// VAD hygiene: the detector was reset between the turns
+		expect(v.rec.resets).toBeGreaterThanOrEqual(1);
 		voice.close();
 	});
 });
