@@ -40,7 +40,11 @@ export function loadOrCreateConfig(
 		configPath: path,
 		token: opts.token ?? stored.token!,
 		port: opts.port ?? stored.port ?? 8787,
-		host: opts.host ?? stored.host ?? "127.0.0.1",
+		// LAN by design: phones/browsers pair over the network and the pairing
+		// token is the gate. Loopback-only here silently breaks every remote
+		// client while localhost checks keep passing — bind 0.0.0.0 unless the
+		// user pins a host.
+		host: opts.host ?? stored.host ?? "0.0.0.0",
 		cwd: opts.cwd ?? join(dir, "omni-home"),
 	};
 }
