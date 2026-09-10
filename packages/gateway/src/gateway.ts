@@ -450,6 +450,14 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				? audio.health().stt
 				: (opts.stt?.status ?? { ready: false, reason: "no stt configured" });
 			if (!sttStatus.ready) return json(res, 503, { ok: false, error: sttStatus.reason });
+			if (voiceActiveCount > 0) {
+				// the native STT model is single-threaded: a batch upload must not
+				// race an open interactive stream
+				return json(res, 503, {
+					ok: false,
+					error: "interactive voice is live — stop it first, or just talk",
+				});
+			}
 			const body = await readBody(req, maxVoiceBytes);
 			if (body.length === 0) return json(res, 400, { ok: false, error: "empty body; send a WAV" });
 			let transcript: string;

@@ -79,13 +79,20 @@ export class Stt {
 
 	private async ensureLoaded(): Promise<void> {
 		if (this.model) return;
-		this.loading ??= (async () => {
-			if (!this.status.ready) throw new Error(this.status.reason);
-			const mod = (await import("transcribe-cpp")) as {
-				TranscribeModel: { load(path: string): Promise<unknown> };
-			};
-			this.model = (await mod.TranscribeModel.load(this.status.modelPath)) as TranscribeModelLike;
-		})();
+		if (!this.loading) {
+			const loading = (async () => {
+				if (!this.status.ready) throw new Error(this.status.reason);
+				const mod = (await import("transcribe-cpp")) as {
+					TranscribeModel: { load(path: string): Promise<unknown> };
+				};
+				this.model = (await mod.TranscribeModel.load(this.status.modelPath)) as TranscribeModelLike;
+			})();
+			this.loading = loading;
+			// a failed load must not poison every future utterance — allow a retry
+			loading.catch(() => {
+				if (this.loading === loading) this.loading = null;
+			});
+		}
 		await this.loading;
 	}
 
@@ -107,29 +114,55 @@ export class Stt {
 	 * speaks, read committed/tentative partials, finalize on endpoint. Returns
 	 * null when the loaded model has no streaming mode — callers fall back to
 	 * batch transcribe().
+	 *
+	 * The native model is single-threaded: the utterance holds the model's
+	 * serialization queue for its whole life so a concurrent batch transcribe
+	 * can't race it (batch then simply waits for the utterance to end).
 	 */
 	async openUtterance(): Promise<SttUtterance | null> {
 		await this.ensureLoaded();
 		const model = this.model!;
 		if (!model.capabilities.supportsStreaming) return null;
-		const session = model.createSession();
+		// wait for the model queue to reach us (batch drained), then HOLD the
+		// slot until dispose: the release promise stays pending for the whole
+		// utterance, so any batch queued behind it simply waits its turn
+		const holder: { release: (() => void) | null } = { release: null };
+		let slotAcquired = () => {};
+		const slot = new Promise<void>((resolve) => {
+			slotAcquired = resolve;
+		});
+		const hold = this.queue.then(
+			() =>
+				new Promise<void>((resolve) => {
+					holder.release = resolve;
+					slotAcquired();
+				}),
+		);
+		this.queue = hold.catch(() => undefined);
 		try {
-			// parakeet-unified's buffered streaming: the (L=5600, C=560, R=560)ms
-			// operating point from the model's published menu — 1.12s lookahead,
-			// full-accuracy finals, live committed text ~1.6s into an utterance.
-			// Other streaming families (moonshine, voxtral, …) take no family
-			// extension, so fall back to a plain stream.
-			let stream: TranscribeStreamLike;
+			await slot;
+			const session = model.createSession();
 			try {
-				stream = await session.stream({
-					family: { kind: "parakeet_buffered", leftMs: 5600, chunkMs: 560, rightMs: 560 },
-				});
-			} catch {
-				stream = await session.stream();
+				// parakeet-unified's buffered streaming: the (L=5600, C=560, R=560)ms
+				// operating point from the model's published menu — 1.12s lookahead,
+				// full-accuracy finals, live committed text ~1.6s into an utterance.
+				// Other streaming families (moonshine, voxtral, …) take no family
+				// extension, so fall back to a plain stream.
+				let stream: TranscribeStreamLike;
+				try {
+					stream = await session.stream({
+						family: { kind: "parakeet_buffered", leftMs: 5600, chunkMs: 560, rightMs: 560 },
+					});
+				} catch {
+					stream = await session.stream();
+				}
+				return new TranscribeUtterance(session, stream, () => holder.release?.());
+			} catch (err) {
+				session.dispose();
+				throw err;
 			}
-			return new TranscribeUtterance(session, stream);
 		} catch (err) {
-			session.dispose();
+			holder.release?.();
 			throw err;
 		}
 	}
@@ -180,6 +213,7 @@ class TranscribeUtterance implements SttUtterance {
 	constructor(
 		private readonly session: TranscribeSessionLike,
 		private readonly stream: TranscribeStreamLike,
+		private readonly releaseModel: () => void,
 	) {}
 
 	async feed(pcm: Float32Array): Promise<{ committed: string; tentative: string }> {
@@ -201,12 +235,19 @@ class TranscribeUtterance implements SttUtterance {
 	}
 
 	dispose(): void {
-		this.done = true;
+		if (!this.done) {
+			this.done = true;
+			try {
+				this.stream.reset();
+			} catch (_: unknown) {
+				// already failed
+			}
+		}
 		try {
-			this.stream.reset();
-		} catch {
+			this.session.dispose();
+		} catch (_: unknown) {
 			// already failed
 		}
-		this.session.dispose();
+		this.releaseModel();
 	}
 }

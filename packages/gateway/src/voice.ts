@@ -289,7 +289,19 @@ export class VoiceSession {
 			const pcm = cap.pcm[cap.fed++]!;
 			void stream.feed(pcm).then(
 				({ committed, tentative }) => this.send({ type: "stt_partial", committed, tentative }),
-				() => this.send({ type: "voice_error", message: "stt stream failed" }),
+				(err) => {
+					// the native stream died — fall back to batch over the buffered
+					// PCM (the server holds every sample) so the utterance survives
+					stream.dispose();
+					if (cap.stream === stream) cap.stream = null;
+					if (this.capture?.stream === stream) this.capture.stream = null;
+					const why = String((err as Error)?.message ?? err).slice(0, 90);
+					console.error(`[voice] stt stream feed failed: ${why}`);
+					this.send({
+						type: "voice_error",
+						message: `stt stream failed (${why}) — will transcribe on speech end`,
+					});
+				},
 			);
 		}
 	}
