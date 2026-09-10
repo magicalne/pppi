@@ -9,6 +9,7 @@
 // repo's native voice deps when present (transcribe-cpp, kokoro, onnx).
 // Restart any running pi sessions afterwards.
 
+import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
@@ -97,6 +98,19 @@ if (existsSync(webDist)) cpSync(webDist, join(dest, "web"), { recursive: true })
 // stamp the repo root so the audio child can fall back to the repo's modules
 writeFileSync(join(dest, "repo.json"), `${JSON.stringify({ repoRoot }, null, "\t")}\n`);
 
+// stamp WHICH build this is — the gateway serves it at /api/health so a stale
+// install can't silently masquerade as the repo's current code
+const version = { sha: "unknown", committedAt: null, dirty: false, packagedAt: new Date().toISOString() };
+try {
+	version.sha = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+	version.committedAt = execFileSync("git", ["log", "-1", "--format=%cI"], { cwd: repoRoot, encoding: "utf8" }).trim();
+	version.dirty = execFileSync("git", ["status", "--porcelain"], { cwd: repoRoot, encoding: "utf8" }).trim().length > 0;
+} catch {
+	// not a git checkout — packagedAt still tells the story
+}
+writeFileSync(join(dest, "version.json"), `${JSON.stringify(version, null, "\t")}\n`);
+
 console.log(`pppi extension installed → ${dest}`);
+console.log(`gateway stamp: ${version.sha}${version.dirty ? " (dirty tree)" : ""} — packaged ${version.packagedAt}`);
 console.log("slash commands: /omni /pair /profile  ·  tool: pppi_profiles");
 console.log("/omni boots the gateway from a pi session; restart running pi sessions to pick it up.");

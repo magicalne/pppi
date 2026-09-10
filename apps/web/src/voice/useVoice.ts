@@ -23,6 +23,8 @@ export type VoiceSessionState = {
 	/** null = not started or fully ready; otherwise the pill shows boot progress. */
 	boot: VoiceBoot | null;
 	bootDetail: string | null;
+	/** VAD hears speech but STT has produced no text for a while — show it honestly. */
+	stalled: boolean;
 };
 
 /** 0-100 peak level of an s16le chunk — feeds the soundwave. */
@@ -63,6 +65,7 @@ export function useVoice() {
 		notice: null,
 		boot: null,
 		bootDetail: null,
+		stalled: false,
 	});
 	const [levels, setLevels] = useState({ mic: 0, out: 0 });
 	const refs = useRef({
@@ -75,6 +78,10 @@ export function useVoice() {
 		lastStart: null as { base: string; token: string } | null,
 		levelAt: { mic: 0, out: 0 },
 		startFn: null as ((base: string, token: string, reconnect?: boolean) => Promise<void>) | null,
+		// stall watchdog inputs: last time VAD opened the turn / STT showed text
+		speakingSince: 0,
+		lastPartialAt: 0,
+		stalled: false,
 	});
 
 	const setPhase = useCallback((phase: VoicePhase) => {
@@ -92,12 +99,23 @@ export function useVoice() {
 		refs.current.mic = null;
 		refs.current.player = null;
 		refs.current.lastStart = null;
+		refs.current.speakingSince = 0;
+		refs.current.lastPartialAt = 0;
+		refs.current.stalled = false;
 		client?.close();
 		await mic?.stop().catch(() => {});
 		await player?.close().catch(() => {});
 		setOn(false);
 		setLevels({ mic: 0, out: 0 });
-		setState({ phase: "listening", committed: "", tentative: "", notice: null, boot: null, bootDetail: null });
+		setState({
+			phase: "listening",
+			committed: "",
+			tentative: "",
+			notice: null,
+			boot: null,
+			bootDetail: null,
+			stalled: false,
+		});
 	}, []);
 
 	const start = useCallback(
@@ -123,13 +141,28 @@ export function useVoice() {
 					if (speaking) {
 						// the user's voice wins instantly: drop agent audio
 						player.stopAll();
-						setState((s) => ({ ...s, tentative: "", committed: "" }));
+						refs.current.speakingSince = Date.now();
+						refs.current.stalled = false;
+						setState((s) => ({ ...s, tentative: "", committed: "", stalled: false }));
 						setPhase("user-speaking");
-					} else if (refs.current.phase === "user-speaking") {
-						setPhase("listening");
+					} else {
+						refs.current.speakingSince = 0;
+						refs.current.stalled = false;
+						setState((s) => ({ ...s, stalled: false }));
+						if (refs.current.phase === "user-speaking") setPhase("listening");
 					}
 				},
-				onPartial: (committed, tentative) => setState((s) => ({ ...s, committed, tentative })),
+				onPartial: (committed, tentative) => {
+					if (committed || tentative) {
+						refs.current.lastPartialAt = Date.now();
+						if (refs.current.stalled) {
+							refs.current.stalled = false;
+							setState((s) => ({ ...s, committed, tentative, stalled: false }));
+							return;
+						}
+					}
+					setState((s) => ({ ...s, committed, tentative }));
+				},
 				onFinal: (text) => setState((s) => ({ ...s, committed: text, tentative: "" })),
 				onTtsStart: (rate) => {
 					refs.current.ttsRate = rate;
@@ -226,10 +259,29 @@ export function useVoice() {
 						refs.current.levelAt.mic = now;
 						setLevels((l) => ({ ...l, mic: peakFloat(pcm) }));
 					}
+					// stall watchdog: VAD opened a turn but STT went quiet — say so
+					// instead of an eternal "…" (the server falls back to batch on
+					// its side; this line tells the human what's happening)
+					if (
+						refs.current.phase === "user-speaking" &&
+						!refs.current.stalled &&
+						now - Math.max(refs.current.lastPartialAt, refs.current.speakingSince) > 5000
+					) {
+						refs.current.stalled = true;
+						setState((s) => ({ ...s, stalled: true }));
+					}
 				});
 				setOn(true);
 				setBoot(null);
-				setState({ phase: "listening", committed: "", tentative: "", notice: null, boot: null, bootDetail: null });
+				setState({
+					phase: "listening",
+					committed: "",
+					tentative: "",
+					notice: null,
+					boot: null,
+					bootDetail: null,
+					stalled: false,
+				});
 			} catch (err) {
 				clearInterval(poll);
 				refs.current.client = null;

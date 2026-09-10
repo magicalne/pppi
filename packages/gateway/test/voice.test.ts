@@ -147,7 +147,12 @@ describe("interactive voice websocket", () => {
 		});
 	}
 
-	async function boot(stt: VoiceStt, tts?: VoiceTts, mockReply = "ack from omni"): Promise<ReturnType<typeof fakeVad>> {
+	async function boot(
+		stt: VoiceStt,
+		tts?: VoiceTts,
+		mockReply = "ack from omni",
+		finalizeTimeoutMs?: number,
+	): Promise<ReturnType<typeof fakeVad>> {
 		process.env.MOCK_REPLY = mockReply;
 		const v = fakeVad();
 		driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
@@ -158,6 +163,7 @@ describe("interactive voice websocket", () => {
 			voiceStt: stt,
 			tts,
 			vad: v,
+			...(finalizeTimeoutMs ? { voiceFinalizeTimeoutMs: finalizeTimeoutMs } : {}),
 		});
 		await app.listen(0, "127.0.0.1");
 		const addr = app.address();
@@ -338,6 +344,81 @@ describe("interactive voice websocket", () => {
 		expect(partials[0]).toEqual({ committed: "", tentative: "what" });
 
 		voice.off("message", onPartial);
+		voice.close();
+	});
+
+	// --------------------------------------------------- stt failure fallbacks
+
+	it("falls back to a batch transcription when the stt stream dies mid-utterance", async () => {
+		const rec = { disposed: 0, batched: 0 };
+		const stt: VoiceStt = {
+			status: { ready: true, modelId: "fake-dying-stream" },
+			openUtterance: () =>
+				Promise.resolve({
+					feed: async () => {
+						throw new Error("native decoder died");
+					},
+					finalize: async () => {
+						throw new Error("finalize on a dead stream");
+					},
+					dispose: () => {
+						rec.disposed++;
+					},
+				}),
+			transcribeBuffer: () => {
+				rec.batched++;
+				return Promise.resolve("saved by the batch path");
+			},
+		};
+		const v = await boot(stt);
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+		// arm both waiters before any audio — frames can arrive in one burst
+		const errEvent = nextEvent(voice, "voice_error");
+		const sttFinal = nextEvent(voice, "stt_final");
+
+		say(voice, v, "speech", 8);
+		say(voice, v, "silence", 30);
+
+		expect((await errEvent).message).toMatch(/stt stream failed/);
+		expect((await sttFinal).text).toBe("saved by the batch path");
+		await new Promise((r) => setTimeout(r, 100));
+		expect(rec.disposed).toBe(1); // the dead stream was released
+		expect(rec.batched).toBe(1); // exactly one batch transcription
+		voice.close();
+	});
+
+	it("gives up on a hung stt finalize and transcribes the recording instead", async () => {
+		const rec = { disposed: 0, batched: 0 };
+		const stt: VoiceStt = {
+			status: { ready: true, modelId: "fake-hung-finalize" },
+			openUtterance: () =>
+				Promise.resolve({
+					feed: async () => ({ committed: "", tentative: "" }),
+					finalize: () => new Promise<string>(() => {}), // never resolves
+					dispose: () => {
+						rec.disposed++;
+					},
+				}),
+			transcribeBuffer: () => {
+				rec.batched++;
+				return Promise.resolve("rescued from the hang");
+			},
+		};
+		const v = await boot(stt, undefined, "ack from omni", 250);
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+		const errEvent = nextEvent(voice, "voice_error");
+		const sttFinal = nextEvent(voice, "stt_final");
+
+		say(voice, v, "speech", 8);
+		say(voice, v, "silence", 30);
+
+		expect((await errEvent).message).toMatch(/stt stalled/);
+		expect((await sttFinal).text).toBe("rescued from the hang");
+		await new Promise((r) => setTimeout(r, 100));
+		expect(rec.disposed).toBe(1);
+		expect(rec.batched).toBe(1);
 		voice.close();
 	});
 

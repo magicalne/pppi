@@ -13,7 +13,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { hostname, networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,6 +56,19 @@ async function loadGatewayModule(): Promise<GatewayModule> {
 function extDir(): string {
 	// this file lives at <ext>/src/omni-host.ts
 	return join(dirname(fileURLToPath(import.meta.url)), "..");
+}
+
+/** Which gateway build this install carries (install.mjs's version.json). */
+function versionStamp(): string {
+	try {
+		const v = JSON.parse(readFileSync(join(extDir(), "version.json"), "utf8")) as {
+			sha?: string;
+			dirty?: boolean;
+		};
+		return `gateway ${v.sha ?? "?"}${v.dirty ? " (dirty tree)" : ""}`;
+	} catch {
+		return "gateway dev build";
+	}
 }
 
 /** bun runs the .ts audio child natively; without it voice stays unavailable (health shows why). */
@@ -152,6 +165,7 @@ async function bootGateway(
 	const lines = [
 		`pppi gateway is up (while this session lives) — ${label}`,
 		pair ? `\n${pairUrl(pair)}` : "",
+		`\n${versionStamp()}`,
 		`\nvoice: ${audio ? "audio service child" : "unavailable (bun not found)"}`,
 		"stop: /omni stop — or end this session.",
 	];

@@ -74,6 +74,8 @@ export type VoiceSessionDeps = {
 	onClosed(): void;
 	/** Sent when the session dies abnormally (for logging/tests). */
 	onGone?: (reason: string) => void;
+	/** Finalize hang budget (tests); default FINALIZE_TIMEOUT_MS. */
+	finalizeTimeoutMs?: number;
 };
 
 const HELLO_TIMEOUT_MS = 10_000;
@@ -81,6 +83,8 @@ const IDLE_TIMEOUT_MS = 10 * 60_000; // no turns for 10 min → close (client fa
 const PRE_ROLL_MS = 300;
 const SAMPLE_RATE = 16_000;
 const VAD_WINDOW_SAMPLES = 512; // 32 ms @ 16 kHz
+/** A hung native finalize must not eat the turn — batch-transcribe the buffered PCM instead. */
+const FINALIZE_TIMEOUT_MS = 12_000;
 
 /** Control phrases act immediately and never become turns (plan D1: keywords command, silence ends turns). */
 const CONTROL_PHRASES = /^(stop|cancel|abort|never\s?mind|forget it|scratch that|quiet)\s*[.!,?]*$/i;
@@ -94,6 +98,10 @@ type Capture = {
 	opening: Promise<void>;
 	/** endpointed, inside the grace window — may still merge or dispatch */
 	pending: boolean;
+	// turn diagnostics: how long STT took to show life, and to finish
+	startedAt: number;
+	firstPartialAt: number | null;
+	speechMs: number;
 };
 
 export class VoiceSession {
@@ -288,12 +296,16 @@ export class VoiceSession {
 		while (cap.fed < cap.pcm.length) {
 			const pcm = cap.pcm[cap.fed++]!;
 			void stream.feed(pcm).then(
-				({ committed, tentative }) => this.send({ type: "stt_partial", committed, tentative }),
+				({ committed, tentative }) => {
+					if (!cap.firstPartialAt && (committed.length > 0 || tentative.length > 0)) cap.firstPartialAt = Date.now();
+					this.send({ type: "stt_partial", committed, tentative });
+				},
 				(err) => {
+					if (cap.stream !== stream) return; // one eulogy per stream — every queued feed rejects
 					// the native stream died — fall back to batch over the buffered
 					// PCM (the server holds every sample) so the utterance survives
 					stream.dispose();
-					if (cap.stream === stream) cap.stream = null;
+					cap.stream = null;
 					if (this.capture?.stream === stream) this.capture.stream = null;
 					const why = String((err as Error)?.message ?? err).slice(0, 90);
 					console.error(`[voice] stt stream feed failed: ${why}`);
@@ -321,6 +333,9 @@ export class VoiceSession {
 			stream: null,
 			opening: Promise.resolve(),
 			pending: false,
+			startedAt: Date.now(),
+			firstPartialAt: null,
+			speechMs: 0,
 		};
 		this.capture = cap;
 		cap.opening = (async () => {
@@ -343,6 +358,7 @@ export class VoiceSession {
 			this.capture = null;
 			return;
 		}
+		this.capture.speechMs = totalMs;
 		this.capture.pending = true; // grace window: may merge or dispatch
 	}
 
@@ -353,15 +369,52 @@ export class VoiceSession {
 		try {
 			await cap.opening; // stream may still be opening
 			this.pumpStream(cap);
-			let text = "";
-			if (cap.stream) text = await cap.stream.finalize();
-			else text = await this.deps.stt.transcribeBuffer(concatAll(cap.pcm, cap.samples));
-			cap.stream?.dispose();
+			let text = await this.finalizeStream(cap);
+			if (!text.trim()) text = await this.deps.stt.transcribeBuffer(concatAll(cap.pcm, cap.samples));
 			text = text.trim();
+			console.error(
+				`[voice] utt: ${(cap.speechMs / 1000).toFixed(1)}s speech, first partial ${
+					cap.firstPartialAt ? `${cap.firstPartialAt - cap.startedAt}ms` : "none"
+				}, dispatched in ${((Date.now() - cap.startedAt) / 1000).toFixed(1)}s (${text.length} chars)`,
+			);
 			if (text) await this.dispatchUtterance(text);
 		} catch (err) {
 			this.send({ type: "voice_error", message: String((err as Error).message ?? err) });
 		}
+	}
+
+	/**
+	 * Finalize the utterance's streaming STT. A hung or dead native finalize
+	 * must never eat the turn: race a timeout, and on any failure return ""
+	 * after disposing — the caller falls back to batch over the buffered PCM.
+	 */
+	private async finalizeStream(cap: Capture): Promise<string> {
+		const stream = cap.stream;
+		if (!stream) return "";
+		const timeoutMs = this.deps.finalizeTimeoutMs ?? FINALIZE_TIMEOUT_MS;
+		let text = "";
+		try {
+			text = await new Promise<string>((resolve, reject) => {
+				const timer = setTimeout(() => reject(new Error(`finalize timed out after ${timeoutMs}ms`)), timeoutMs);
+				stream.finalize().then(
+					(v) => {
+						clearTimeout(timer);
+						resolve(v);
+					},
+					(e) => {
+						clearTimeout(timer);
+						reject(e);
+					},
+				);
+			});
+		} catch (err) {
+			const why = String((err as Error)?.message ?? err).slice(0, 90);
+			console.error(`[voice] stt finalize failed (${why}) — transcribing the recording instead`);
+			this.send({ type: "voice_error", message: "stt stalled — transcribing the recording instead" });
+		}
+		cap.stream = null;
+		stream.dispose(); // releases the model slot either way, so batch can proceed
+		return text;
 	}
 
 	private async dispatchUtterance(text: string): Promise<void> {

@@ -166,7 +166,7 @@ describe("gateway server", () => {
 		a.send(JSON.stringify({ type: "chat", text: "/new" }));
 		const warn = await waitFor(a, (e) => e.type === "agent_notify" && String(e.message).includes("still working"));
 		expect(warn.level).toBe("warning");
-		delete process.env.MOCK_DELAY;
+		process.env.MOCK_DELAY = undefined;
 		a.close();
 	});
 

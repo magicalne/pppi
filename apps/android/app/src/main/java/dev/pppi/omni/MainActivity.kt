@@ -64,6 +64,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -590,11 +591,43 @@ fun ChatScreen(
 	var voiceLevel by remember { mutableIntStateOf(0) }
 	var voiceOutLevel by remember { mutableIntStateOf(0) }
 	var voiceBoot by remember { mutableStateOf<VoiceBootState>(VoiceBootState.Idle) }
+	var voiceSpeakingSince by remember { mutableLongStateOf(0L) }
+	var voiceLastPartialAt by remember { mutableLongStateOf(0L) }
+	var voiceStalled by remember { mutableStateOf(false) }
+	var serverVersion by remember { mutableStateOf("") }
 	val voiceAttempts = remember { java.util.concurrent.atomic.AtomicInteger(0) }
 	val voiceMachine = remember { VoicePhaseMachine() }
 	val voiceClientRef = remember { java.util.concurrent.atomic.AtomicReference<VoiceClient?>(null) }
 	val voiceEngineRef = remember { java.util.concurrent.atomic.AtomicReference<VoiceAudioEngine?>(null) }
 	val stoppingVoice = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+
+	// transcript-line honesty: server VAD says speech is flowing but STT has
+	// produced no text for 5s — say so instead of an eternal "…"
+	LaunchedEffect(voiceOn) {
+		while (voiceOn) {
+			val lastSignal = maxOf(voiceLastPartialAt, voiceSpeakingSince)
+			voiceStalled =
+				voicePhase == VoicePhase.USER_SPEAKING &&
+					lastSignal > 0 &&
+					System.currentTimeMillis() - lastSignal > 5_000
+			delay(500)
+		}
+	}
+
+	// which build is the Mac's gateway running? shown next to the app version so
+	// a stale install:ext copy can't hide (best-effort; label stays app-only)
+	LaunchedEffect(connected) {
+		if (!connected || serverVersion.isNotBlank()) return@LaunchedEffect
+		thread {
+			try {
+				val health = org.json.JSONObject(java.net.URL("$server/api/health").readText())
+				val v = health.optJSONObject("gateway")?.optString("version") ?: ""
+				if (v.isNotBlank()) serverVersion = v
+			} catch (_: Exception) {
+				// health unreachable — not worth a notice
+			}
+		}
+	}
 
 	val client = remember {
 		clientFactory(
@@ -818,6 +851,13 @@ fun ChatScreen(
 								val stop = voiceMachine.onVad(evt.speaking)
 								voicePhase = voiceMachine.phase
 								if (stop) voiceEngineRef.get()?.stopPlayback()
+								if (evt.speaking) {
+									voiceSpeakingSince = System.currentTimeMillis()
+									voiceStalled = false
+								} else {
+									voiceSpeakingSince = 0L
+									voiceStalled = false
+								}
 							}
 							is VoiceServerEvent.VoiceState -> {
 								voiceMachine.onServerState(evt.state)
@@ -826,6 +866,10 @@ fun ChatScreen(
 							is VoiceServerEvent.SttPartial -> {
 								voiceCommitted = evt.committed
 								voiceTentative = evt.tentative
+								if (evt.committed.isNotBlank() || evt.tentative.isNotBlank()) {
+									voiceLastPartialAt = System.currentTimeMillis()
+									voiceStalled = false
+								}
 							}
 							is VoiceServerEvent.SttFinal -> {
 								voiceCommitted = evt.text
@@ -1032,7 +1076,8 @@ fun ChatScreen(
 						)
 						Spacer(Modifier.height(18.dp))
 						Text(
-							"v${BuildConfig.VERSION_NAME}",
+							if (serverVersion.isBlank()) "v${BuildConfig.VERSION_NAME}"
+							else "v${BuildConfig.VERSION_NAME} · server $serverVersion",
 							color = theme.dim.copy(alpha = 0.6f),
 							fontSize = 11.sp,
 						)
@@ -1154,11 +1199,17 @@ fun ChatScreen(
 									VoicePhase.THINKING -> "thinking…"
 									VoicePhase.AGENT_SPEAKING -> "talking… speak up to interrupt"
 									VoicePhase.USER_SPEAKING ->
-										if (voiceCommitted.isBlank() && voiceTentative.isBlank()) "…" else voiceCommitted + " " + voiceTentative
+										when {
+											voiceCommitted.isNotBlank() || voiceTentative.isNotBlank() ->
+												voiceCommitted + " " + voiceTentative
+											voiceStalled -> "STT is quiet — I'll transcribe when you pause"
+											else -> "hearing you…"
+										}
 								},
-								color = when (voicePhase) {
-									VoicePhase.AGENT_SPEAKING -> theme.accent
-									VoicePhase.USER_SPEAKING -> theme.text
+								color = when {
+									voicePhase == VoicePhase.AGENT_SPEAKING -> theme.accent
+									voicePhase == VoicePhase.USER_SPEAKING && voiceStalled -> theme.dim
+									voicePhase == VoicePhase.USER_SPEAKING -> theme.text
 									else -> theme.dim
 								},
 								fontSize = 14.sp,

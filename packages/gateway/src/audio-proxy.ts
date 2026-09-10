@@ -118,7 +118,15 @@ export class AudioService {
 				}
 			};
 			const onErr = (chunk: Buffer) => {
-				this.lastStderr = chunk.toString("utf8").trim().split("\n").at(-1) ?? this.lastStderr;
+				// the child's stderr is the voice pipeline's diary (utt timings,
+				// stt failures) — mirror it so a "it hangs" report comes with
+				// evidence; the last line doubles as the health failure reason
+				for (const line of chunk.toString("utf8").split("\n")) {
+					const text = line.trim();
+					if (!text) continue;
+					this.lastStderr = text;
+					console.error(`[audio-child] ${text}`);
+				}
 			};
 			const onExit = (code: number | null) => {
 				this.info = null;
@@ -130,8 +138,8 @@ export class AudioService {
 			const cleanup = () => {
 				done = true;
 				child.stdout?.off("data", onOut);
-				child.stderr?.off("data", onErr);
 				child.off("exit", onExit);
+				// stderr stays attached for the child's whole life — it's the diary
 			};
 			child.stdout?.on("data", onOut);
 			child.stderr?.on("data", onErr);

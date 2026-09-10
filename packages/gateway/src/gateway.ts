@@ -13,7 +13,8 @@ import { randomUUID } from "node:crypto";
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { homedir } from "node:os";
-import { extname, join, normalize } from "node:path";
+import { dirname, extname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
 import { type PigeonSession, listSessions, pigeon } from "@pppi/omni/pigeon";
 import { loadRegistry } from "@pppi/omni/repos";
 import type {
@@ -60,6 +61,8 @@ export type GatewayOptions = {
 	vad?: { prob(window: Float32Array): Promise<number> };
 	/** Turn-taking timings override (tests); defaults are the tuned plan values. */
 	voiceTimings?: Partial<VadTimings>;
+	/** STT finalize hang budget (tests); default 12s before falling back to batch. */
+	voiceFinalizeTimeoutMs?: number;
 	/** Enabled-model patterns override (tests); default reads pi's settings (global + project). */
 	enabledModelsProvider?: () => string[] | undefined;
 };
@@ -80,6 +83,23 @@ function stripLevelSuffix(pattern: string): string {
 	const idx = pattern.lastIndexOf(":");
 	if (idx === -1) return pattern;
 	return THINKING_LEVELS.includes(pattern.slice(idx + 1)) ? pattern.slice(0, idx) : pattern;
+}
+
+/**
+ * The install stamp install.mjs writes next to the gateway runtime — lets
+ * clients (and humans) see WHICH build the live gateway is running, so a stale
+ * `install:ext` copy can't silently masquerade as the repo's fixes.
+ * "dev" when the gateway runs from a plain repo checkout.
+ */
+function gatewayVersion(): { version: string; packagedAt?: string } {
+	try {
+		// installed layout: <ext>/node_modules/@pppi/gateway/src/ → ×4 = <ext>/
+		const stampPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "version.json");
+		const stamp = JSON.parse(readFileSync(stampPath, "utf8")) as { sha?: string; packagedAt?: string };
+		return { version: stamp.sha ?? "unknown", packagedAt: stamp.packagedAt };
+	} catch {
+		return { version: "dev" };
+	}
 }
 
 /** pi's enabledModels semantics: exact `provider/id` or bare `id`, or a glob over either. */
@@ -436,6 +456,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			return json(res, 200, {
 				ok: true,
 				name: "pppi",
+				gateway: gatewayVersion(),
 				agent: agentInfo(),
 				stt: status.ready ? { ready: true, modelId: status.modelId } : { ready: false, reason: status.reason },
 				boot: audio ? audio.health().boot : (inProcessBoot ?? { stage: "unavailable", reason: "no voice configured" }),
@@ -657,6 +678,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				tts: opts.tts ?? null,
 				vad: vad ?? { prob: async () => 0 },
 				timings: opts.voiceTimings,
+				finalizeTimeoutMs: opts.voiceFinalizeTimeoutMs,
 				submit: async (text) => {
 					await submitUserText(text, "voice");
 				},

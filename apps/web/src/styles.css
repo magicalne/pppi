@@ -559,6 +559,13 @@
 	line-height: 1.5;
 	margin: 10px 2px 0;
 }
+.conn-ver {
+	color: var(--dim);
+	font-size: 11px;
+	font-family: ui-monospace, monospace;
+	margin: 4px 2px 0;
+	opacity: 0.8;
+}
 
 /* ---------------- delegated (profiled) replies ---------------- */
 

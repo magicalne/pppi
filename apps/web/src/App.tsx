@@ -118,6 +118,7 @@ export default function App() {
 	const [sessions, setSessions] = useState<SessionsResponse | null>(null);
 	const [textInput, setTextInput] = useState("");
 	const [hasMoreHistory, setHasMoreHistory] = useState(false);
+	const [serverVersion, setServerVersion] = useState("");
 	const wsRef = useRef<WebSocket | null>(null);
 	const listRef = useRef<HTMLDivElement | null>(null);
 	/** guards one in-flight older-page load at a time */
@@ -214,6 +215,14 @@ export default function App() {
 		} catch {
 			// offline — keep the host name
 		}
+		// which build is the gateway running? (machines drawer; catches a stale install:ext)
+		try {
+			const health = await fetch(`${c.url.replace(/\/$/, "")}/api/health`).then((r) => r.json());
+			const v = (health as { gateway?: { version?: string } })?.gateway?.version;
+			if (v) setServerVersion(String(v));
+		} catch {
+			// best-effort
+		}
 	}, []);
 
 	function handleEvent(evt: ServerEvent) {
@@ -288,7 +297,8 @@ export default function App() {
 				break;
 			case "agent_state":
 				setAgentState(evt.state);
-				if (evt.state !== "tool") setToolLabel(null);				break;
+				if (evt.state !== "tool") setToolLabel(null);
+				break;
 			case "agent_notify":
 				showNotice(evt.message);
 				break;
@@ -500,6 +510,7 @@ export default function App() {
 							connections={connections}
 							activeId={conn?.id ?? null}
 							connected={connected}
+							serverVersion={serverVersion}
 							onSwitch={(id) => {
 								setActiveId(id);
 								setConnOpen(false);
@@ -610,7 +621,9 @@ export default function App() {
 										<span className="cap">
 											{voice.state.committed && <b>{voice.state.committed} </b>}
 											{voice.state.tentative}
-											{!voice.state.committed && !voice.state.tentative && <i>…</i>}
+											{!voice.state.committed && !voice.state.tentative && (
+												<i>{voice.state.stalled ? "STT is quiet — I'll transcribe when you pause" : "hearing you…"}</i>
+											)}
 										</span>
 									)}
 									{voice.state.phase === "thinking" && <span className="hint-line">thinking…</span>}
@@ -682,6 +695,7 @@ function ConnectionsDrawer(props: {
 	connections: Connection[];
 	activeId: string | null;
 	connected: boolean;
+	serverVersion: string;
 	onSwitch: (id: string) => void;
 	onRemove: (id: string) => void;
 	onAdd: (c: Connection) => void;
@@ -699,6 +713,7 @@ function ConnectionsDrawer(props: {
 	return (
 		<div className="conn-drawer" onClick={(e) => e.stopPropagation()}>
 			<h3>Machines</h3>
+			{props.serverVersion && <p className="conn-ver">gateway {props.serverVersion}</p>}
 			{props.connections.length === 0 && <p className="conn-empty">No machines paired yet.</p>}
 			{props.connections.map((c) => (
 				<div key={c.id} className={`crow ${c.id === props.activeId ? "active" : ""}`}>
