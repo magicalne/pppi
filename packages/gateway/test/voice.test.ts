@@ -18,6 +18,39 @@ function fakeStt(text: string): VoiceStt {
 	};
 }
 
+/** A VoiceStt that hears a different phrase per utterance, in order. */
+function scriptedStt(texts: string[]): VoiceStt {
+	let i = 0;
+	return {
+		status: { ready: true, modelId: "scripted-stt" },
+		openUtterance: () => Promise.resolve(null),
+		transcribeBuffer: () => Promise.resolve(texts[Math.min(i++, texts.length - 1)] ?? ""),
+	};
+}
+
+/** Poll until fn() is true — dispatches land mid-stream, sleeps race. */
+async function until(fn: () => boolean, ms = 10_000): Promise<void> {
+	const end = Date.now() + ms;
+	while (!fn()) {
+		if (Date.now() > end) throw new Error("condition not met in time");
+		await new Promise((r) => setTimeout(r, 25));
+	}
+}
+
+/** Collect stt_final texts on a voice socket (dispatches land mid-stream). */
+function collectFinals(ws: WebSocket): string[] {
+	const finals: string[] = [];
+	ws.on("message", (raw: Buffer) => {
+		try {
+			const e = JSON.parse(raw.toString()) as any;
+			if (e.type === "stt_final") finals.push(e.text);
+		} catch {
+			// binary
+		}
+	});
+	return finals;
+}
+
 /** A VoiceStt with a streaming utterance: partials grow with each feed, finalize returns the text. */
 function fakeStreamingStt(text: string) {
 	const rec = { feedCalls: [] as Float32Array[], finalized: 0, disposed: 0 };
@@ -180,6 +213,8 @@ describe("interactive voice websocket", () => {
 	}
 
 	afterEach(async () => {
+		process.env.MOCK_DELAY = undefined;
+		process.env.MOCK_DELTA_MS = undefined;
 		driver?.dispose();
 		if (app) await app.close();
 	});
@@ -460,6 +495,168 @@ describe("interactive voice websocket", () => {
 		expect(finals).toEqual(["the real question"]);
 		expect(v.rec.resets).toBeGreaterThanOrEqual(1); // the blip reset the detector
 		voice.close();
+	});
+
+	// --------------------------------------------------- appended-speech merging
+
+	it("merges speech appended while the agent thinks into one prompt", async () => {
+		// the user's scenario: a fragment lands while the agent is still working
+		// on the first one — the agent must read the WHOLE thought exactly once
+		const prompts: string[] = [];
+		let aborts = 0;
+		process.env.MOCK_DELAY = "4500"; // before boot: the child inherits the env at spawn
+		const v = await boot(scriptedStt(["what is the build status", "and did the tests pass"]), undefined, "ack: {echo}");
+		{
+			const realPrompt = driver.prompt.bind(driver);
+			const realAbort = driver.abort.bind(driver);
+			driver.prompt = (text: string) => {
+				prompts.push(text);
+				return realPrompt(text);
+			};
+			driver.abort = () => {
+				aborts++;
+				console.error(`ABORT #${aborts}\n${new Error().stack?.split("\n").slice(1, 4).join("\n")}`);
+				return realAbort();
+			};
+		}
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+		const sttFinals = collectFinals(voice); // both fragments dispatch as speech
+		const chat = await chatConnect();
+		await nextEvent(chat, "hello_ok");
+		const replies: string[] = [];
+		chat.on("message", (raw: Buffer) => {
+			try {
+				const e = JSON.parse(raw.toString()) as any;
+				if (e.type === "assistant_final") replies.push(e.text);
+			} catch {
+				// binary
+			}
+		});
+
+		say(voice, v, "speech", 8); // fragment 1 dispatches; the agent thinks for 4.5s
+		await sayPaced(voice, v, "silence", 40);
+		await until(() => prompts.length === 1);
+
+		say(voice, v, "speech", 8); // appended while the agent thinks
+		await sayPaced(voice, v, "silence", 40);
+		await until(() => prompts.length === 2);
+
+		expect(prompts[0]).toBe("what is the build status");
+		// the merged prompt carries the WHOLE thought — not just the last fragment
+		const merged = prompts[1] ?? "";
+		expect(merged).toContain("what is the build status");
+		expect(merged).toContain("and did the tests pass");
+		expect(merged.indexOf("what is the build status")).toBeLessThan(merged.indexOf("and did the tests pass"));
+		expect(aborts).toBe(1); // the unreplied first attempt was cut, not left running
+		expect(sttFinals.length).toBe(2); // both fragments were transcribed and dispatched
+
+		// the agent completed exactly ONE reply — to the merged thought
+		await until(() => replies.length >= 1, 15_000);
+		await new Promise((r) => setTimeout(r, 500));
+		expect(replies.length).toBe(1);
+		expect(replies[0]).toContain("what is the build status");
+		expect(replies[0]).toContain("and did the tests pass");
+		voice.close();
+		chat.close();
+	});
+
+	it("never re-sends a turn the agent already replied to", async () => {
+		// once the agent has started replying, that turn is consumed: appended
+		// speech goes out alone when the agent settles — old content never repeats
+		const prompts: string[] = [];
+		let aborts = 0;
+		process.env.MOCK_DELAY = "4000";
+		process.env.MOCK_DELTA_MS = "300"; // the agent starts replying early → replied
+		const v = await boot(scriptedStt(["first thought", "second thought"]), undefined, "ack: {echo}");
+		{
+			const realPrompt = driver.prompt.bind(driver);
+			const realAbort = driver.abort.bind(driver);
+			driver.prompt = (text: string) => {
+				prompts.push(text);
+				return realPrompt(text);
+			};
+			driver.abort = () => {
+				aborts++;
+				return realAbort();
+			};
+		}
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+		const chat = await chatConnect();
+		await nextEvent(chat, "hello_ok");
+
+		// wait to hear the agent START replying (assistant_delta) before
+		// speaking again — that's the "already replied" side of the contract
+		const deltaArrived = nextEvent(chat, "assistant_delta");
+
+		say(voice, v, "speech", 8); // fragment 1 dispatches; reply begins at 300ms
+		await sayPaced(voice, v, "silence", 40);
+		await until(() => prompts.length === 1);
+		await deltaArrived;
+
+		say(voice, v, "speech", 8); // appended after the reply began
+		await sayPaced(voice, v, "silence", 40);
+		await until(() => prompts.length === 2, 15_000);
+
+		expect(prompts[0]).toBe("first thought");
+		expect(prompts[1]).toBe("second thought"); // the first thought is NOT re-sent
+		expect(aborts).toBe(0); // the in-flight reply was left alone
+		voice.close();
+	});
+
+	it("echoes the whole merged thought back to the speaker, exactly once", async () => {
+		// the user's scenario, end to end: no LLM — the mock agent replies with
+		// exactly what it was prompted ("{echo}"). Say "hello", then keep
+		// talking before the agent replies: the unprocessed first attempt is
+		// folded in, and the single echo the user hears is the MERGED speech.
+		process.env.MOCK_DELAY = "4500"; // before boot: the agent stays busy while the user keeps talking
+		const v = await boot(scriptedStt(["hello", "hello and one more thing"]), undefined, "{echo}");
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+		// the voice socket hears the reply as AUDIO; the text echo lands on the
+		// chat socket — mirror the user by watching both
+		const chat = await chatConnect();
+		await nextEvent(chat, "hello_ok");
+
+		const heard: string[] = [];
+		chat.on("message", (raw: Buffer) => {
+			try {
+				const e = JSON.parse(raw.toString()) as any;
+				if (e.type === "assistant_final") heard.push(e.text);
+			} catch {
+				// binary audio
+			}
+		});
+
+		// track dispatched prompts so the second utterance is spoken while the
+		// agent is still busy — BEFORE its reply lands (that's the merge case)
+		const prompts: string[] = [];
+		{
+			const realPrompt = driver.prompt.bind(driver);
+			driver.prompt = (text: string) => {
+				prompts.push(text);
+				return realPrompt(text);
+			};
+		}
+
+		say(voice, v, "speech", 8); // "hello" dispatches; the agent thinks for 4.5s
+		await sayPaced(voice, v, "silence", 40);
+		await until(() => prompts.length === 1);
+
+		say(voice, v, "speech", 8); // keep talking before the agent replies
+		await sayPaced(voice, v, "silence", 40);
+		await until(() => prompts.length === 2, 15_000);
+
+		// exactly ONE echo, and it carries the WHOLE merged thought — the
+		// aborted first attempt stays unheard, nothing is duplicated
+		await until(() => heard.length === 1, 15_000);
+		expect(prompts[1]).toBe("hello hello and one more thing");
+		expect(heard[0]).toBe("hello hello and one more thing");
+		await new Promise((r) => setTimeout(r, 300)); // stability: no late stragglers
+		expect(heard.length).toBe(1);
+		voice.close();
+		chat.close();
 	});
 
 	it("streams partials for a spoken utterance and finalizes once", async () => {

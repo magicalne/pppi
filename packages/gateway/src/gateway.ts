@@ -327,9 +327,49 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 		};
 	};
 
-	agent.on("state", (state, toolName) => broadcast({ type: "agent_state", state, toolName }));
+	// ---- voice turn coalescing ------------------------------------------------
+	// Dictation produces several dispatched fragments while the agent is still
+	// working on the first one. The agent must read the WHOLE thought, exactly
+	// once: a fragment landing while a voice turn has NOT yet replied aborts
+	// that turn and folds its text into a pending merge, flushed as one prompt
+	// when the agent settles. Turns the agent already replied to are consumed —
+	// their content is never re-sent, so nothing duplicates.
+	let pendingVoiceText: string | null = null;
+	let voiceInFlight: { text: string; replied: boolean } | null = null;
+	let flushTimer: NodeJS.Timeout | undefined;
+	const joinThought = (a: string | null, b: string): string => (a ? `${a} ${b}` : b);
+	const flushPendingVoice = (): void => {
+		clearTimeout(flushTimer);
+		const text = pendingVoiceText;
+		if (!text) return;
+		pendingVoiceText = null;
+		voiceInFlight = { text, replied: false };
+		agent.prompt(text).catch((err) => console.error(`[voice] merged turn failed: ${String(err)}`));
+	};
+	const foldVoiceFragment = (text: string): void => {
+		if (voiceInFlight && !voiceInFlight.replied) {
+			// the agent hasn't said anything yet — cut it and fold the thought in
+			void agent.abort();
+			pendingVoiceText = joinThought(pendingVoiceText, voiceInFlight.text);
+			voiceInFlight = null;
+		}
+		pendingVoiceText = joinThought(pendingVoiceText, text);
+		// the idle-edge flush usually fires when the agent settles — but state
+		// transitions can be suppressed (already idle), so a fold must never
+		// depend on that edge alone: short-debounce fallback while idle
+		if (agent.state === "idle") {
+			clearTimeout(flushTimer);
+			flushTimer = setTimeout(() => flushPendingVoice(), 400);
+		}
+	};
+
+	agent.on("state", (state, toolName) => {
+		broadcast({ type: "agent_state", state, toolName });
+		if (state === "idle") flushPendingVoice();
+	});
 	agent.on("status", (status) => broadcast({ type: "status", status }));
 	agent.on("assistant-delta", (id: string, delta: string) => {
+		if (voiceInFlight) voiceInFlight.replied = true; // the agent is talking — never fold this turn away
 		broadcast({ type: "assistant_delta", id, delta });
 		speakAssistant(
 			(s) => s.assistantDelta(id, delta),
@@ -338,6 +378,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 	});
 	let lastReply: string | null = null;
 	agent.on("assistant-final", (id: string, text: string) => {
+		if (voiceInFlight) voiceInFlight.replied = true;
 		lastReply = text;
 		broadcast({ type: "assistant_final", id, text });
 		speakAssistant(
@@ -393,6 +434,12 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			if (await handleSessionCommand(text)) return { id };
 			if (source === "voice") broadcast({ type: "transcript", id, text });
 			broadcast({ type: "user_message", id, text, source });
+			// appended speech while the agent works coalesces (see the block above)
+			if (source === "voice" && (agent.state !== "idle" || voiceInFlight)) {
+				foldVoiceFragment(text);
+				return { id };
+			}
+			if (source === "voice") voiceInFlight = { text, replied: false };
 			await agent.prompt(text);
 			return { id };
 		}

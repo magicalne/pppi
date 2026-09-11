@@ -77,10 +77,16 @@ function clampLevel(model, level) {
 }
 
 function write(obj) {
+	if (process.env.MOCK_TRACE) {
+		process.stderr.write(`MOCK ${Date.now() % 100000} ${obj.type} ${obj.command ?? ""} ${obj.error ?? ""}\n`);
+	}
 	process.stdout.write(`${JSON.stringify(obj)}\n`);
 }
 
 const history = [];
+
+// the in-flight turn's timer — abort cancels it so the turn dies unheard
+let pendingTurnTimer = null;
 
 // strictly-increasing fake clock: rapid prompts can land in the same
 // Date.now() millisecond, which would break before-timestamp pagination
@@ -152,6 +158,15 @@ function handle(cmd) {
 			write({ id: cmd.id, type: "response", command: "set_thinking_level", success: true });
 			break;
 		case "abort":
+			// an aborted turn dies unheard: cancel any pending output and settle,
+			// so the driver returns to idle exactly like pi does
+			if (pendingTurnTimer) {
+				clearTimeout(pendingTurnTimer);
+				pendingTurnTimer = null;
+				state.isStreaming = false;
+				write({ type: "agent_end", messages: [], willRetry: false });
+				write({ type: "agent_settled" });
+			}
 			write({ id: cmd.id, type: "response", command: "abort", success: true });
 			break;
 		case "set_auto_compaction":
@@ -172,12 +187,35 @@ function handle(cmd) {
 			write({ id: cmd.id, type: "response", command: "prompt", success: true });
 			// simulate an agent turn: agent_start → deltas → message_end → agent_settled.
 			// with MOCK_DELAY, agent_start fires immediately and the rest lands later,
-			// so "busy" is a real window (tests can race commands against it)
+			// so "busy" is a real window (tests can race commands against it).
+			// with MOCK_DELTA_MS, a first text delta lands early — the agent has
+			// "started replying" even though the turn is still busy.
 			const turn = () => {
 				const text = reply.replace("{echo}", String(cmd.message).slice(0, 120));
+				state.isStreaming = true; // truthful, like real pi — status syncs rely on it
 				write({ type: "agent_start" });
+				let started = false;
+				const ensureStart = () => {
+					if (!started) {
+						started = true;
+						write({ type: "message_start", message: { role: "assistant", content: [] } });
+					}
+				};
+				const deltaDelay = Number(process.env.MOCK_DELTA_MS ?? 0);
+				if (deltaDelay > 0) {
+					pendingTurnTimer = setTimeout(() => {
+						ensureStart();
+						write({
+							type: "message_update",
+							usage: {},
+							assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "starting to reply… " },
+						});
+					}, deltaDelay);
+				}
 				const rest = () => {
-					write({ type: "message_start", message: { role: "assistant", content: [] } });
+					pendingTurnTimer = null;
+					state.isStreaming = false;
+					ensureStart();
 					for (const part of text.match(/[\s\S]{1,7}/g) ?? []) {
 						write({
 							type: "message_update",
@@ -197,7 +235,7 @@ function handle(cmd) {
 					write({ type: "agent_settled" });
 				};
 				const delay = Number(process.env.MOCK_DELAY ?? 0);
-				if (delay > 0) setTimeout(rest, delay);
+				if (delay > 0) pendingTurnTimer = setTimeout(rest, delay);
 				else rest();
 			};
 			turn();

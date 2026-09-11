@@ -82,7 +82,10 @@ export type VoiceSessionDeps = {
 
 const HELLO_TIMEOUT_MS = 10_000;
 const IDLE_TIMEOUT_MS = 10 * 60_000; // no turns for 10 min → close (client falls back to hold-to-talk)
-const PRE_ROLL_MS = 300;
+// Generous pre-roll: silero lags physical onset by a few hundred ms on soft
+// speech starts, and the detector then needs sustained speech on top — a tight
+// cap here crops the first words of the utterance right out of the transcript.
+const PRE_ROLL_MS = 1200;
 const SAMPLE_RATE = 16_000;
 const VAD_WINDOW_SAMPLES = 512; // 32 ms @ 16 kHz
 /** A hung native finalize must not eat the turn — batch-transcribe the buffered PCM instead. */

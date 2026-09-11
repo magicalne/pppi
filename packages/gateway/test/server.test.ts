@@ -158,8 +158,25 @@ describe("gateway server", () => {
 	});
 
 	it("rejects /new while the agent is busy", async () => {
+		// self-booted: MOCK_DELAY must be in the env before the mock child
+		// spawns (it snapshots env at spawn), which the shared beforeEach is
+		// already past — so this test brings its own gateway
 		process.env.MOCK_DELAY = "600"; // keep the turn in flight while /new lands
-		const a = await connect(token);
+		const busyDriver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
+		const busyApp = await createGateway({ token, agent: busyDriver, stt: Stt.create({ disabled: true }) });
+		await busyApp.listen(0, "127.0.0.1");
+		const busyPort = busyApp.address()?.port ?? 0;
+		busyDriver.start();
+		await new Promise<void>((r) => busyDriver.once("ready", r));
+
+		const a = await new Promise<WebSocket>((resolve, reject) => {
+			const ws = new WebSocket(`ws://127.0.0.1:${busyPort}/ws`);
+			ws.on("open", () => {
+				ws.send(JSON.stringify({ type: "hello", token, client: "test" }));
+				resolve(ws);
+			});
+			ws.on("error", reject);
+		});
 		await nextEvent(a, "hello_ok");
 		a.send(JSON.stringify({ type: "chat", text: "long task" }));
 		await waitFor(a, (e) => e.type === "agent_state" && e.state === "thinking");
@@ -168,6 +185,8 @@ describe("gateway server", () => {
 		expect(warn.level).toBe("warning");
 		process.env.MOCK_DELAY = undefined;
 		a.close();
+		busyDriver.dispose();
+		await busyApp.close();
 	});
 
 	it("returns 422 for a silent voice upload", async () => {
