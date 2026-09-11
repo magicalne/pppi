@@ -176,7 +176,7 @@ export type SessionsResponse = {
 	omniSessionId: string;
 	projects: ProjectGroup[];
 	others: PeerSession[];
-	/** profiles by session id — explicit (/profile) entries plus derived ones for unnamed sessions */
+	/** profiles by session id — explicit (/pppi_profile) entries plus derived ones for unnamed sessions */
 	profiles: Record<string, Profile>;
 };
 

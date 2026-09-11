@@ -255,7 +255,7 @@ export default function pppiOmniExtension(pi: ExtensionAPI) {
 
 	// ---------------------------------------------------------------- command
 
-	pi.registerCommand("omni", {
+	pi.registerCommand("pppi_tree", {
 		description: "Show the pppi hierarchy (omni -> repos -> worktrees)",
 		handler: async (_args, ctx: ExtensionContext) => {
 			const reg = loadRegistry();

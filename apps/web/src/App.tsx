@@ -732,7 +732,7 @@ function ConnectionsDrawer(props: {
 				<input name="token" placeholder="Token (skip if the link has one)" autoComplete="off" />
 				<button type="submit">Add machine</button>
 			</form>
-			<p className="conn-hint">Run /pair in any pi session on the machine to get a link or QR.</p>
+			<p className="conn-hint">Run /pppi_pair in any pi session on the machine to get a link or QR.</p>
 		</div>
 	);
 }
@@ -815,7 +815,7 @@ function Pairing({ onDone, notice }: { onDone: (p: Pairing) => void; notice: str
    └──────┘        └──────┘        └──────┘`}</pre>
 			<h1 style={{ fontSize: 22 }}>Pair with your omni agent</h1>
 			<p style={{ color: "var(--dim)" }}>
-				Paste the pair link from <code style={{ fontFamily: "var(--font-mono)" }}>/pair</code> — or run the pppi server
+				Paste the pair link from <code style={{ fontFamily: "var(--font-mono)" }}>/pppi_pair</code> — or run the pppi server
 				on your Mac and enter its URL + token. Secrets never leave the machine.
 			</p>
 			<form

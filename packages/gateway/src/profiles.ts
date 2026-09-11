@@ -1,9 +1,9 @@
 // Session profiles: identity for pi sessions (name/color/description).
 //
 // Explicit profiles live at $PPPI_DIR/profiles/<sessionId>.json (written by
-// the /profile pi command). Sessions without one get a *derived* profile —
+// the /pppi_profile pi command). Sessions without one get a *derived* profile —
 // deterministic name/color from the registry — so attribution coloring works
-// before anyone has run /profile. The JSON shape here is the contract the
+// before anyone has run /pppi_profile. The JSON shape here is the contract the
 // pi extension writes; keep the two in sync.
 
 import { createHash } from "node:crypto";

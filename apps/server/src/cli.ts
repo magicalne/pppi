@@ -50,7 +50,7 @@ const pair = buildPairInfo(cfg);
 writePairFile(pair);
 
 // ------------------------------------------------------------- omni marking
-// `/omni` (pi extension) writes omni.json marking which session is the
+// `/pppi_gateway mark` (pi extension) writes omni.json marking which session is the
 // machine's omni; the gateway resumes that session by id.
 
 function markedOmniSession(): string | null {
@@ -103,7 +103,7 @@ console.log(`
   lan       http://${shownHost}:${cfg.port}
   pair      ${pairUrl}?pair=${cfg.token}
             machine "${pair.machine}" · fingerprint ${pair.fingerprint}
-  omni      session ${omniSessionId}${markedOmniSession() ? " (marked via /omni)" : ""}
+  omni      session ${omniSessionId}${markedOmniSession() ? " (marked via /pppi_gateway mark)" : ""}
   agent     ${agentCmd.join(" ")}
   stt       ${sttStatus.ready ? `ready (${sttStatus.modelId})` : sttStatus.reason}
   tts       ${tts.status.ready ? `ready (${tts.id} · ${tts.status.voice})` : tts.status.reason}

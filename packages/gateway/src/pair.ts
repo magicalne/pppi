@@ -1,5 +1,5 @@
 // Pairing facts for this machine: what a phone or browser needs to reach the
-// gateway. Written to $PPPI_DIR/pair.json so the /pair pi command can show the
+// gateway. Written to $PPPI_DIR/pair.json so the /pppi_pair pi command can show the
 // QR without the gateway running.
 
 import { createHash } from "node:crypto";

@@ -22,7 +22,7 @@ sessions. Read README.md for the full picture.
   (parakeet-unified-en-0.6b is the recommendation from pi-transcribe's
   catalog). No cloud STT.
 - **Agents have identities.** Every pi session can carry a profile
-  (name/color/description — `/profile` writes `$PPPI_DIR/profiles/`).
+  (name/color/description — `/pppi_profile` writes `$PPPI_DIR/profiles/`).
   Delegated replies render tinted with the agent's color and labeled with its
   name; descriptions are for other agents to pick delegation targets.
 - **Design source of truth:** docs/design/ui-prd.md — five themes as design
@@ -49,11 +49,11 @@ sessions. Read README.md for the full picture.
 - `packages/gateway/` — the gateway core both hosts share: wire transport
   (node:http + ws, no framework), voice stack, `AgentPort` seam,
   `RpcAgentDriver`. Hosted by apps/server's cli AND by the pi extension.
-- `packages/pi-ext/` — the /omni /pair /profile commands + pppi_profiles tool
+- `packages/pi-ext/` — the /pppi_gateway /pppi_pair /pppi_profile commands + pppi_profiles tool
   (install: `bun run install:ext` → `~/.pi/agent/extensions/pppi/`; the
   installer also materializes ext node_modules + web dist for /omni).
-- `packages/pi-ext/src/omni-host.ts` — /omni boots the gateway from a pi
-  session (default: rpc child · `here`: the host session IS the omni ·
+- `packages/pi-ext/src/omni-host.ts` — /pppi_gateway boots the gateway from
+  a pi session (default: rpc child · `here`: the host session IS the omni ·
   `stop` · `mark`). Gateway stops on session_shutdown.
 - `packages/pi-ext/src/session-driver.ts` — in-process AgentPort over pi's
   extension API; prompt delivery must ask pi (ctx.isIdle), not a local flag.
