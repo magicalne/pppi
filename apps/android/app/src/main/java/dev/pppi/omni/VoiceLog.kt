@@ -33,12 +33,13 @@ object VoiceLog {
 	fun init(context: Context) {
 		synchronized(fileLock) {
 			if (logFile != null) return
-			logFile = File(context.filesDir, "pppi-voice.log")
-			if (logFile.length() > ROTATE_BYTES) {
-				logFile.renameTo(File(context.filesDir, "pppi-voice.log.old"))
+			val f = File(context.filesDir, "pppi-voice.log")
+			if (f.length() > ROTATE_BYTES) {
+				f.renameTo(File(context.filesDir, "pppi-voice.log.old"))
 			}
+			logFile = f
 		}
-		i("log started (uptime ${SystemClock.uptimeMillis() / 1000}s, pid ${android.os.Process.myPid()})")
+		i("log", "started (uptime ${SystemClock.uptimeMillis() / 1000}s, pid ${android.os.Process.myPid()})")
 	}
 
 	fun d(tag: String, msg: String) = write("D", tag, msg)

@@ -67,9 +67,9 @@ jobs:
       - name: test suite (bun workspaces)
         run: |
           bun install --frozen-lockfile
-          # 2-core runners run the mock-agent suites concurrently; the default
-          # 30s testTimeout starves under that load, not under real failures
-          bun run test --testTimeout=120000
+          # serialized: 9 files × several mock-agent children each swamp a
+          # 2-vCPU runner and stall event-driven tests (no internal timeouts)
+          bun run test --pool=threads --poolOptions.threads.maxThreads=1 --testTimeout=120000
 
       - name: simulate the pi git install (npm, --omit=dev)
         run: |
