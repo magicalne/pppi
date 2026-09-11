@@ -348,6 +348,120 @@ describe("interactive voice websocket", () => {
 		voice.close();
 	});
 
+	// ------------------------- real-conversation turn merging (the fragmentation family)
+	// Timings under test: endpoint after 0.9s silence, then a 1.2s grace to
+	// resume and merge. A person pausing between sentences must read as ONE
+	// turn; a genuine stop must still split. All assertions go through a
+	// collector attached before any audio — dispatches land mid-stream.
+
+	it("reads a series of sentences with thinking pauses as one turn", async () => {
+		const v = await boot(fakeStt("a series of questions"));
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+
+		const finals: string[] = [];
+		voice.on("message", (raw) => {
+			try {
+				const e = JSON.parse(raw.toString()) as any;
+				if (e.type === "stt_final") finals.push(e.text);
+			} catch {
+				// binary
+			}
+		});
+
+		say(voice, v, "speech", 8); // question 1
+		await sayPaced(voice, v, "silence", 12); // ~1.2s thinking pause
+		say(voice, v, "speech", 8); // question 2
+		await sayPaced(voice, v, "silence", 12); // ~1.2s thinking pause
+		say(voice, v, "speech", 8); // question 3
+		await sayPaced(voice, v, "silence", 40); // actually done
+
+		await new Promise((r) => setTimeout(r, 300));
+		expect(finals).toEqual(["a series of questions"]); // the whole thought, one turn
+		voice.close();
+	});
+
+	it("still merges when speech resumes just inside the grace window", async () => {
+		// resume ~1.0s after the endpoint (grace is 1.2s) — the tight case
+		const v = await boot(fakeStt("merged at the edge"));
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+
+		const finals: string[] = [];
+		voice.on("message", (raw) => {
+			try {
+				const e = JSON.parse(raw.toString()) as any;
+				if (e.type === "stt_final") finals.push(e.text);
+			} catch {
+				// binary
+			}
+		});
+
+		say(voice, v, "speech", 8);
+		await sayPaced(voice, v, "silence", 19); // 1.9s: endpoint at 0.9s, resume 1.0s into grace
+		say(voice, v, "speech", 8);
+		await sayPaced(voice, v, "silence", 40);
+
+		await new Promise((r) => setTimeout(r, 300));
+		expect(finals).toEqual(["merged at the edge"]);
+		voice.close();
+	});
+
+	it("splits into two turns when a pause truly exceeds the grace window", async () => {
+		// the deliberate counterpart: a real stop is still a turn boundary —
+		// resume ~1.7s past the endpoint (grace is 1.2s) must dispatch separately
+		const v = await boot(fakeStt("next thought"));
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+
+		const finals: string[] = [];
+		voice.on("message", (raw) => {
+			try {
+				const e = JSON.parse(raw.toString()) as any;
+				if (e.type === "stt_final") finals.push(e.text);
+			} catch {
+				// binary
+			}
+		});
+
+		say(voice, v, "speech", 8);
+		await sayPaced(voice, v, "silence", 26); // 2.6s: endpoint at 0.9s, grace over at 2.1s
+		say(voice, v, "speech", 8);
+		await sayPaced(voice, v, "silence", 40);
+
+		await new Promise((r) => setTimeout(r, 300));
+		expect(finals.length).toBe(2);
+		voice.close();
+	});
+
+	it("discards a false start and hears the real question as the only turn", async () => {
+		// "interrupting myself": a sub-0.3s false start is a blip (discarded,
+		// vad reset), then the rephrased question is the one and only turn
+		const v = await boot(fakeStt("the real question"));
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+
+		const finals: string[] = [];
+		voice.on("message", (raw) => {
+			try {
+				const e = JSON.parse(raw.toString()) as any;
+				if (e.type === "stt_final") finals.push(e.text);
+			} catch {
+				// binary
+			}
+		});
+
+		say(voice, v, "speech", 2); // false start (~0.2s, under minUtterance)
+		await sayPaced(voice, v, "silence", 25); // stop yourself
+		say(voice, v, "speech", 8); // the rephrase
+		await sayPaced(voice, v, "silence", 40);
+
+		await new Promise((r) => setTimeout(r, 300));
+		expect(finals).toEqual(["the real question"]);
+		expect(v.rec.resets).toBeGreaterThanOrEqual(1); // the blip reset the detector
+		voice.close();
+	});
+
 	it("streams partials for a spoken utterance and finalizes once", async () => {
 		const { stt, rec } = fakeStreamingStt("what is the status");
 		const v = await boot(stt);
