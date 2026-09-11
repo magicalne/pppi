@@ -61,6 +61,7 @@ class VoiceClient(
 			request,
 			object : WebSocketListener() {
 				override fun onOpen(webSocket: WebSocket, response: Response) {
+					VoiceLog.i(TAG, "ws open → $url")
 					webSocket.send(VoiceClientMessages.hello(token))
 				}
 
@@ -79,10 +80,12 @@ class VoiceClient(
 						when (evt) {
 							is VoiceServerEvent.VoiceHelloOk -> {
 								live = true
+								VoiceLog.i(TAG, "hello ok — stt=${evt.stt} tts=${evt.tts}")
 								startPinger()
 								latch.countDown()
 							}
 							is VoiceServerEvent.VoiceHelloFail -> {
+								VoiceLog.w(TAG, "hello fail: ${evt.error}")
 								failure = Exception(evt.error)
 								latch.countDown()
 							}
@@ -99,6 +102,7 @@ class VoiceClient(
 
 				override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
 					live = false
+					VoiceLog.e(TAG, "ws failure", t)
 					if (latch.count > 0) {
 						failure = t
 						latch.countDown()
@@ -107,6 +111,7 @@ class VoiceClient(
 
 				override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
 					live = false
+					VoiceLog.w(TAG, "ws closed code=$code reason=$reason")
 					if (latch.count > 0) latch.countDown() else onGone()
 				}
 			},
@@ -121,8 +126,28 @@ class VoiceClient(
 	}
 
 	fun sendAudio(pcm16: ByteArray) {
-		if (live) ws?.send(pcm16.toByteString())
+		if (live) {
+			ws?.send(pcm16.toByteString())
+			// uplink telemetry every 10s — mirrors the gateway's mic line, so a
+			// starving uplink is visible from BOTH ends of the wire
+			val now = System.currentTimeMillis()
+			sentBytes += pcm16.size
+			if (now - lastUplinkLogAt >= 10_000) {
+				val windowS = (now - lastUplinkLogAt) / 1000.0
+				VoiceLog.i(TAG, "uplink: ${sentBytes / 2 / 16000.0}s audio in ${"%.1f".format(windowS)}s")
+				lastUplinkLogAt = now
+			}
+		} else {
+			droppedWhileDead++
+			if (droppedWhileDead == 1 || droppedWhileDead % 100 == 0) {
+				VoiceLog.w(TAG, "mic audio dropped — ws not live (dropped $droppedWhileDead chunks)")
+			}
+		}
 	}
+
+	private var sentBytes = 0L
+	private var lastUplinkLogAt = 0L
+	private var droppedWhileDead = 0
 
 	/**
 	 * A silent zombie socket (server died without a clean FIN reaching the
@@ -150,7 +175,12 @@ class VoiceClient(
 
 	fun close() {
 		live = false
+		VoiceLog.i(TAG, "ws close (bye)")
 		ws?.close(1000, "bye")
 		ws = null
+	}
+
+	private companion object {
+		const val TAG = "vclient"
 	}
 }

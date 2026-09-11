@@ -110,6 +110,7 @@ class VoiceAudioEngine(
 			appliedRoute = applyRoute(onError)
 			captureStages = stagesFor(appliedRoute)
 			captureStage = 0
+			VoiceLog.i(TAG, "mic starting — route=$appliedRoute stages=${captureStages.joinToString { it.label }}")
 			val filter = IntentFilter().apply {
 				addAction(AudioManager.ACTION_HEADSET_PLUG)
 				addAction(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED)
@@ -156,7 +157,7 @@ class VoiceAudioEngine(
 					}
 					if (SystemClock.uptimeMillis() - lastLevelLogAt > 2_000) {
 						lastLevelLogAt = SystemClock.uptimeMillis()
-						Log.d("pppi-voice", "mic stage=${captureStages[captureStage].label} peak=$max level=$lvl")
+						VoiceLog.d(TAG, "mic stage=${captureStages[captureStage].label} peak=$max level=$lvl")
 					}
 					// dead mic: bit-exact silence for ~1.5 s per stage → walk the chain
 					if (max <= 1) {
@@ -167,7 +168,7 @@ class VoiceAudioEngine(
 								val from = captureStages[captureStage]
 								captureStage++
 								val next = captureStages[captureStage]
-								Log.w("pppi-voice", "mic silent on ${from.label} — trying ${next.label}")
+								VoiceLog.w(TAG, "mic silent on ${from.label} — trying ${next.label}")
 								if (next.needsCommMode && !commModeApplied) {
 									commModeApplied = true
 									try {
@@ -189,8 +190,12 @@ class VoiceAudioEngine(
 					if (keepRunning.get()) client.sendAudio(bytes.copyOf(n * 2))
 				}
 			} catch (_: Exception) {
-				if (keepRunning.get()) onError("microphone error")
+				if (keepRunning.get()) {
+					VoiceLog.e(TAG, "mic reader died")
+					onError("microphone error")
+				}
 			} finally {
+				VoiceLog.i(TAG, "mic reader exited (running=${keepRunning.get()})")
 				closeRecorder()
 			}
 		}
@@ -317,6 +322,7 @@ class VoiceAudioEngine(
 	/** Headset plugged/unplugged or SCO state flipped mid-session → re-route capture. */
 	private fun reroute() {
 		val key = routeKey()
+		VoiceLog.i(TAG, "audio route change → $key")
 		synchronized(this) {
 			if (key == appliedRoute) return
 			appliedRoute = applyRoute { }
@@ -377,6 +383,7 @@ class VoiceAudioEngine(
 	fun stop() {
 		keepRunning.set(false)
 		closeRecorder()
+		VoiceLog.i(TAG, "engine stopped")
 		synchronized(trackLock) {
 			track?.let {
 				try {
@@ -448,6 +455,7 @@ class VoiceAudioEngine(
 	}
 
 	private companion object {
+		const val TAG = "audio"
 		const val SCO_WAIT_MS = 2500L
 	}
 }
