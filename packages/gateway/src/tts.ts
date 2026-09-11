@@ -21,7 +21,7 @@ import { decodeWav } from "./wav.ts";
 export type TtsChunk = { pcm: Buffer; rate: number };
 
 export interface TtsProvider extends VoiceTts {
-	readonly id: "kokoro" | "macos-say";
+	readonly id: "kokoro" | "piper" | "macos-say";
 	/** Eager-load any engine so the first reply speaks instantly. Resolves false on failure. */
 	warm(): Promise<boolean>;
 }
@@ -31,9 +31,105 @@ export interface TtsProvider extends VoiceTts {
 export function resolveTtsProvider(): TtsProvider {
 	const explicit = (process.env.PPPI_TTS_PROVIDER ?? "auto").toLowerCase();
 	if (explicit === "macos-say") return new MacosSayProvider();
+	if (explicit === "piper") return new SherpaPiperProvider();
 	const kokoro = new KokoroProvider();
 	if (explicit === "kokoro") return kokoro;
+	// auto: PPPI_TTS_MODEL pointing at a sherpa vits dir selects piper (the
+	// same env var would otherwise confuse kokoro's resolver, and anyone who
+	// downloaded a piper model clearly wants it)
+	const piper = new SherpaPiperProvider();
+	if (piper.status.ready) return piper;
 	return kokoro.status.ready ? kokoro : new MacosSayProvider();
+}
+
+// ---------------------------------------------------------------- piper (sherpa-onnx)
+
+/**
+ * Fast path for live chat: a VITS/Piper model in sherpa-onnx's native runtime.
+ * Piper trades some naturalness vs kokoro but decodes ~5x faster on CPU
+ * (~170ms for a 10-word phrase, RTF ~0.05 on an M4) — with text-level
+ * streaming that means near-instant first audio. Needs the sherpa-onnx-node
+ * addon and a model dir:
+ *   PPPI_TTS_PROVIDER=piper PPPI_TTS_MODEL=/path/to/vits-piper-en_US-amy-medium
+ * (tarball: vits-piper-en_US-amy-medium.tar.bz2 from k2-fsa/sherpa-onnx
+ *  releases, tts-models tag — contains the .onnx, tokens.txt, espeak-ng-data)
+ */
+export function resolvePiperModel(): { dir: string; onnx: string } | { reason: string } {
+	const explicit = process.env.PPPI_TTS_MODEL;
+	if (!explicit) {
+		return { reason: "piper needs PPPI_TTS_MODEL pointing at a sherpa-onnx vits model dir (see tts.ts)" };
+	}
+	if (!existsSync(explicit)) return { reason: `PPPI_TTS_MODEL dir missing: ${explicit}` };
+	const onnx = readdirSync(explicit).find((f) => f.endsWith(".onnx"));
+	if (!onnx) return { reason: `PPPI_TTS_MODEL dir has no .onnx: ${explicit}` };
+	for (const need of ["tokens.txt", "espeak-ng-data"]) {
+		if (!existsSync(join(explicit, need))) return { reason: `piper model dir lacks ${need}: ${explicit}` };
+	}
+	return { dir: explicit, onnx: join(explicit, onnx) };
+}
+
+export class SherpaPiperProvider implements TtsProvider {
+	readonly id = "piper" as const;
+	private loading: Promise<PiperEngine | null> | null = null;
+	readonly status: VoiceTtsStatus;
+
+	constructor() {
+		const model = resolvePiperModel();
+		this.status =
+			"reason" in model
+				? ({ ready: false, reason: model.reason } as VoiceTtsStatus)
+				: ({ ready: true, provider: this.id, voice: model.onnx.split("/").pop() ?? "piper" } as VoiceTtsStatus);
+	}
+
+	synthesize(text: string): AsyncIterable<TtsChunk> {
+		const provider = this;
+		return (async function* () {
+			if (!provider.status.ready) throw new Error(provider.status.reason);
+			provider.loading ??= loadPiperEngine();
+			const engine = await provider.loading;
+			if (!engine) throw new Error("sherpa-onnx piper engine failed to load");
+			// same text-level streaming as kokoro: short first phrase, larger rest
+			for (const seg of streamSegments(text)) {
+				const { samples, rate } = await engine.generate(seg);
+				yield* floatPcmChunks(samples, rate);
+			}
+		})();
+	}
+
+	async warm(): Promise<boolean> {
+		if (!this.status.ready) return false;
+		this.loading ??= loadPiperEngine();
+		return (await this.loading) !== null;
+	}
+}
+
+type PiperEngine = { generate(text: string): Promise<{ samples: Float32Array; rate: number }> };
+
+async function loadPiperEngine(): Promise<PiperEngine | null> {
+	const model = resolvePiperModel();
+	if ("reason" in model) return null;
+	let addon: { OfflineTts: new (cfg: Record<string, unknown>) => any };
+	try {
+		// optional native dependency — absent addon means "provider unavailable".
+		// CJS module: createRequire, because a bare dynamic import of it loses
+		// the constructor through ESM interop.
+		const { createRequire } = await import("node:module");
+		addon = createRequire(import.meta.url)("sherpa-onnx-node");
+	} catch {
+		return null;
+	}
+	const tts = new addon.OfflineTts({
+		model: { vits: { model: model.onnx, tokens: join(model.dir, "tokens.txt"), dataDir: join(model.dir, "espeak-ng-data") } },
+		numThreads: 2,
+		debug: false,
+		provider: "cpu",
+	});
+	return {
+		generate: async (text) => {
+			const audio = await tts.generateAsync({ text, sid: 0, speed: 1.0 });
+			return { samples: audio.samples as Float32Array, rate: audio.sampleRate as number };
+		},
+	};
 }
 
 // ---------------------------------------------------------------- kokoro
@@ -98,10 +194,24 @@ export class KokoroProvider implements TtsProvider {
 			provider.loading ??= loadKokoroEngine();
 			const engine = await provider.loading;
 			if (!engine) throw new Error("kokoro engine failed to load");
+			// kokoro-js has no native streaming, so stream at the TEXT level:
+			// generate a short first phrase for fast first-audio, then larger
+			// phrases that stay hidden behind the audio already playing. Whole-
+			// sentence generation (old behavior) with PPPI_TTS_STREAM=0.
+			if (provider.streaming) {
+				for (const seg of streamSegments(text)) {
+					const { audio, rate } = await engine.generate(seg, DEFAULT_KOKORO_VOICE);
+					yield* floatPcmChunks(audio, rate);
+				}
+				return;
+			}
 			const { audio, rate } = await engine.generate(text, DEFAULT_KOKORO_VOICE);
 			yield* floatPcmChunks(audio, rate);
 		})();
 	}
+
+	/** phrase-chunked synthesis (see synthesize); default on */
+	private readonly streaming = (process.env.PPPI_TTS_STREAM ?? "1") !== "0";
 
 	async warm(): Promise<boolean> {
 		if (!this.status.ready) return false;
@@ -142,6 +252,50 @@ async function loadKokoroEngine(): Promise<KokoroEngine | null> {
 			return { audio: out.audio, rate };
 		},
 	};
+}
+
+/**
+ * Split prose into phrase-sized generation units for text-level streaming.
+ * The first unit is kept short — it alone gates time-to-first-audio — while
+ * later units are larger because playback of earlier audio hides their
+ * generation. Breaks prefer natural boundaries (sentence end, then comma)
+ * and only fall back to a word boundary when a clause is far too long.
+ */
+export function streamSegments(text: string, firstWords = 6, restWords = 20): string[] {
+	const clauses: string[] = [];
+	for (const sentence of text.split(/(?<=[.!?])\s+/)) {
+		const trimmed = sentence.trim();
+		if (!trimmed) continue;
+		// split overly long sentences at commas so no unit blows the budget
+		let current = "";
+		for (const part of trimmed.split(/(?<=[,;:])\s+/)) {
+			const candidate = current ? `${current} ${part}` : part;
+			if (wordCount(candidate) > Math.max(restWords, wordCount(part)) && current) {
+				clauses.push(current);
+				current = part;
+			} else {
+				current = candidate;
+			}
+		}
+		if (current) clauses.push(current);
+	}
+	const segments: string[] = [];
+	for (const clause of clauses) {
+		const budget = segments.length === 0 ? firstWords : restWords;
+		if (wordCount(clause) <= budget) {
+			segments.push(clause);
+			continue;
+		}
+		const words = clause.split(/\s+/);
+		for (let off = 0; off < words.length; off += budget) {
+			segments.push(words.slice(off, off + budget).join(" "));
+		}
+	}
+	return segments.filter((s) => s.trim().length > 0);
+}
+
+function wordCount(s: string): number {
+	return s.trim() ? s.trim().split(/\s+/).length : 0;
 }
 
 /** Float32 (-1..1) → s16le Buffer chunks of ~50 ms. */

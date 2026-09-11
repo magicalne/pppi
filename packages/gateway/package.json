@@ -15,5 +15,11 @@
 		"onnxruntime-node": "^1.21.0",
 		"transcribe-cpp": "0.2.2",
 		"ws": "^8.18.1"
+	},
+	"devDependencies": {
+		"sherpa-onnx-node": "^1.13.8"
+	},
+	"optionalDependencies": {
+		"sherpa-onnx-node": "^1.13.8"
 	}
 }
