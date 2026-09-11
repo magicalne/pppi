@@ -99,8 +99,8 @@ class VoiceForegroundService : Service() {
 		super.onDestroy()
 	}
 
-	private companion object {
-		const val TAG = "fgs"
+	companion object {
+		private const val TAG = "fgs"
 		const val CHANNEL = "voice"
 		const val NOTIF_ID = 7
 		const val LOCK_TIMEOUT_MS = 6 * 60 * 60 * 1000L
