@@ -5,11 +5,12 @@
 	"description": "pppi gateway core: wire protocol transport, voice stack, pi RPC driver.",
 	"type": "module",
 	"exports": {
-		".": "./src/index.ts"
+		".": "./src/index.ts",
+		"./src/*": "./src/*"
 	},
 	"dependencies": {
-		"@pppi/omni": "workspace:*",
-		"@pppi/protocol": "workspace:*",
+		"@pppi/omni": "*",
+		"@pppi/protocol": "*",
 		"kokoro-js": "^1.2.1",
 		"minimatch": "10.2.5",
 		"onnxruntime-node": "^1.21.0",

@@ -11,8 +11,8 @@
 		"start": "bun run src/cli.ts"
 	},
 	"dependencies": {
-		"@pppi/gateway": "workspace:*",
-		"@pppi/protocol": "workspace:*",
+		"@pppi/gateway": "*",
+		"@pppi/protocol": "*",
 		"qrcode": "^1.5.4"
 	}
 }

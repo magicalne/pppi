@@ -14,6 +14,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { hostname, networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,15 +72,35 @@ function versionStamp(): string {
 	}
 }
 
-/** bun runs the .ts audio child natively; without it voice stays unavailable (health shows why). */
+/**
+ * How to run the voice child: bun runs the .ts natively; node 22.7+ can strip
+ * types as a fallback (all relative imports carry .ts extensions). The entry
+ * resolves through node module resolution so BOTH install shapes work — the
+ * bun-installed extension dir (node_modules sits next to src/) and a
+ * `pi install git:` checkout (npm links the workspace at the repo root).
+ * Null → no voice child; health reports why.
+ */
 function audioCommand(): string[] | null {
+	let entry: string;
+	try {
+		entry = createRequire(import.meta.url).resolve("@pppi/gateway/src/audio-service.ts");
+	} catch {
+		return null;
+	}
 	try {
 		const bin = execFileSync("which", ["bun"], { encoding: "utf8" }).trim();
-		if (bin) return [bin, join(extDir(), "node_modules", "@pppi", "gateway", "src", "audio-service.ts")];
+		if (bin) return [bin, entry];
 	} catch {
-		// bun missing → no voice child
+		// bun missing → try node
 	}
-	return null;
+	try {
+		execFileSync(process.execPath, ["--experimental-strip-types", "-e", 'console.log("ok")'], {
+			stdio: "ignore",
+		});
+		return [process.execPath, "--experimental-strip-types", entry];
+	} catch {
+		return null;
+	}
 }
 
 function lanIps(): string[] {

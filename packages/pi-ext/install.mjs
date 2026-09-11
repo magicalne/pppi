@@ -53,7 +53,7 @@ function depDir(dep) {
 		return null;
 	}
 }
-for (const dep of ["ws", "minimatch"]) {
+for (const dep of ["ws", "minimatch", "typebox"]) {
 	const from = depDir(dep);
 	if (from) {
 		const to = join(dest, "node_modules", dep);
