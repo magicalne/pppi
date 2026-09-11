@@ -316,6 +316,38 @@ describe("interactive voice websocket", () => {
 		chat.close();
 	});
 
+	it("keeps a thinking pause between sentences inside one turn", async () => {
+		// regression for real-conversation fragmentation: the user asks a series
+		// of questions, pausing ~1-2s between them — the agent must read the
+		// whole thought, not answer each sentence as it lands
+		const v = await boot(fakeStt("a series of questions"));
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+
+		const finals: string[] = [];
+		voice.on("message", (raw) => {
+			try {
+				const e = JSON.parse(raw.toString()) as any;
+				if (e.type === "stt_final") finals.push(e.text);
+			} catch {
+				// binary
+			}
+		});
+
+		say(voice, v, "speech", 8); // first sentence
+		await sayPaced(voice, v, "silence", 12); // 1.2s pause → endpoint, grace opens
+		await new Promise((r) => setTimeout(r, 600)); // 0.6s into the 1.2s grace
+		expect(finals.length).toBe(0); // nothing dispatched mid-thought
+		say(voice, v, "speech", 8); // resumed → merges into the same turn
+		await sayPaced(voice, v, "silence", 40); // truly done → endpoint + grace expiry
+
+		// the dispatch fires mid-loop (grace expiry beats the last chunk), so the
+		// collector above is the source of truth — a waiter armed here would race
+		await new Promise((r) => setTimeout(r, 300));
+		expect(finals).toEqual(["a series of questions"]); // exactly one turn for the whole thought
+		voice.close();
+	});
+
 	it("streams partials for a spoken utterance and finalizes once", async () => {
 		const { stt, rec } = fakeStreamingStt("what is the status");
 		const v = await boot(stt);

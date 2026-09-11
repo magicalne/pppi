@@ -142,9 +142,10 @@ describe.skipIf(!bunBin)("audio service child", () => {
 		const voiceActive = nextEvent(chat, "voice_active");
 		const voice = await connect("/voice", token);
 
-		// speech long enough to open an utterance, then trailing silence to close it
+		// speech long enough to open an utterance, then trailing silence to close
+		// it: endpoint (0.9s) + grace (1.2s) before the turn dispatches
 		await say(voice, true, 0.9);
-		await say(voice, false, 1.2);
+		await say(voice, false, 2.5);
 
 		expect((await voiceActive).active).toBe(true);
 		expect((await userMessage).text).toBe("hello world");

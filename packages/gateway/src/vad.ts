@@ -119,8 +119,14 @@ export type VadTimings = {
 
 export const DEFAULT_TIMINGS: VadTimings = {
 	startMs: 150,
-	endSilenceMs: 650,
-	graceMs: 400,
+	// ~0.9s of silence before we even call it an endpoint — a thinking breath
+	// between sentences must not become a turn boundary
+	endSilenceMs: 900,
+	// after an endpoint, a full 1.2s to resume and merge into the same turn.
+	// People pause 1–2s between sentences; a listener reads the whole thought
+	// before replying instead of answering each sentence as it lands.
+	// (Cost: dispatch waits endSilence + grace ≈ 2.1s after the last word.)
+	graceMs: 1200,
 	minUtteranceMs: 300,
 	maxUtteranceMs: 25_000,
 	bargeInMs: 250,
