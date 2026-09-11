@@ -161,6 +161,8 @@ fun themeById(id: String): PppiTheme = PppiThemes.firstOrNull { it.id == id } ?:
 class MainActivity : ComponentActivity() {
 	override fun onCreate(savedInstanceState: Bundle?) {
 		super.onCreate(savedInstanceState)
+		VoiceLog.init(this)
+		VoiceLog.i("ui", "activity created")
 		setContent {
 			val prefs = remember { getSharedPreferences("pppi", Context.MODE_PRIVATE) }
 			var themeId by remember { mutableStateOf(prefs.getString("theme", "dusk") ?: "dusk") }
@@ -181,6 +183,18 @@ class MainActivity : ComponentActivity() {
 				}
 			}
 		}
+	}
+
+	override fun onPause() {
+		super.onPause()
+		// the app left the foreground — with the voice session on, what happens
+		// next is exactly what the foreground service exists for; log the moment
+		VoiceLog.i("ui", "activity paused (voice relies on the foreground service now)")
+	}
+
+	override fun onDestroy() {
+		VoiceLog.w("ui", "activity destroyed")
+		super.onDestroy()
 	}
 }
 
@@ -819,6 +833,7 @@ fun ChatScreen(
 
 	/** Single cleanup path for voice mode: safe from any thread, idempotent. */
 	fun teardownVoice() {
+		VoiceLog.i("ui", "voice teardown")
 		voiceEngineRef.getAndSet(null)?.stop()
 		voiceClientRef.getAndSet(null)?.close()
 		voiceOn = false
@@ -831,6 +846,8 @@ fun ChatScreen(
 	fun startVoice(reconnect: Boolean = false) {
 		if (voiceOn) return
 		if (!reconnect && voiceBoot.booting) return
+		VoiceLog.init(context)
+		VoiceLog.i("ui", "voice starting${if (reconnect) " (reconnect)" else ""}")
 		stoppingVoice.set(false)
 		voiceCommitted = ""
 		voiceTentative = ""
