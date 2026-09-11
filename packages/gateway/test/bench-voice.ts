@@ -119,7 +119,7 @@ async function benchSttBatch(dir: string): Promise<void> {
 	await stt.dispose();
 }
 
-async function benchTts(id: "kokoro" | "macos-say"): Promise<void> {
+async function benchTts(id: "piper" | "kokoro" | "macos-say"): Promise<void> {
 	const save = process.env.PPPI_TTS_PROVIDER;
 	process.env.PPPI_TTS_PROVIDER = id;
 	const provider = resolveTtsProvider();

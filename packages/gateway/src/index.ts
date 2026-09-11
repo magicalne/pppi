@@ -1,7 +1,7 @@
 // @pppi/gateway — the pppi gateway core: HTTP+WS transport, wire-protocol
 // mapping, voice stack, and the RPC agent driver. Hosted today by the
 // standalone cli (apps/server); hosted inside a pi session by the pppi
-// extension's /omni command.
+// extension's /pppi_gateway command.
 
 export {
 	type AgentPort,

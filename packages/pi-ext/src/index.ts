@@ -1,8 +1,9 @@
 // pppi pi extension: the slash commands that wire any pi session into pppi.
 //
-//   /omni     mark this session as the machine's omni agent
-//   /pair     show the pairing QR + link for web/android clients
-//   /profile  give this session an identity (name/color/description)
+//   /pppi_gateway [here|mark|stop]  boot the gateway from this session
+//   /pppi_pair                     show the pairing QR + link for web/android
+//   /pppi_profile                  give this session an identity
+//                                  (name/color/description)
 //
 // plus the `pppi_profiles` tool, which lets agents read each other's
 // profiles — the description is how an omni decides whom to delegate to.
@@ -16,7 +17,7 @@ import { startOmniHere, startOmniHost, stopOmniHost } from "./omni-host.ts";
 import { pairUrl, qrText } from "./pair.ts";
 import { listProfiles, loadPair, readProfile, selfSessionId, writeOmniMark, writeProfile } from "./store.ts";
 
-// same palette the gateway derives colors from — /profile just picks among these
+// same palette the gateway derives colors from — /pppi_profile just picks among these
 const COLORS = [
 	"amber #e8b14a",
 	"matcha #5b8c51",
@@ -44,7 +45,7 @@ export default function pppiExtension(pi: ExtensionAPI) {
 		await stopOmniHost();
 	});
 
-	pi.registerCommand("omni", {
+	pi.registerCommand("pppi_gateway", {
 		description:
 			"pppi: boot the gateway from this session (clients pair while this session lives). Modes: (default) launch the omni as an rpc child · `here` THIS session becomes the omni · `mark` tag this session as the child target · `stop`.",
 		handler: async (args, ctx) => {
@@ -75,7 +76,7 @@ export default function pppiExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("pair", {
+	pi.registerCommand("pppi_pair", {
 		description: "Show the pppi pairing QR code + link for web/android clients",
 		handler: async (_args, ctx) => {
 			const pair = loadPair();
@@ -93,7 +94,7 @@ export default function pppiExtension(pi: ExtensionAPI) {
 				ctx.ui.notify(
 					mismatch
 						? `A gateway is running on :8787, but this session has no pair info in ${dir}/pair.json.\nThe gateway was started with a different PPPI_DIR — restart it without PPPI_DIR (default ~/.pppi), or export the same PPPI_DIR here, then retry.`
-						: `No pppi pairing info found (${dir}/pair.json).\nRun /omni (or start the standalone gateway), then retry.`,
+						: `No pppi pairing info found (${dir}/pair.json).\nRun /pppi_gateway (or start the standalone gateway), then retry.`,
 					"error",
 				);
 				return;
@@ -114,7 +115,7 @@ export default function pppiExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("profile", {
+	pi.registerCommand("pppi_profile", {
 		description: "Create or update this session's pppi profile (name · color · description)",
 		handler: async (args, ctx) => {
 			const id = sessionIdOf(ctx);
@@ -127,7 +128,7 @@ export default function pppiExtension(pi: ExtensionAPI) {
 			let color = existing?.color ?? "#e8b14a";
 			let description = existing?.description ?? "";
 
-			// non-interactive form: /profile Joe #e8b14a Maintains the pigeon repo
+			// non-interactive form: /pppi_profile Joe #e8b14a Maintains the pigeon repo
 			const parts = args.trim().length ? args.trim().split(/\s+/) : [];
 			if (parts.length) {
 				name = parts[0] ?? name;
@@ -164,7 +165,7 @@ export default function pppiExtension(pi: ExtensionAPI) {
 			const profiles = listProfiles();
 			if (profiles.length === 0) {
 				return {
-					content: [{ type: "text", text: "no profiles yet — sessions can create one with /profile" }],
+					content: [{ type: "text", text: "no profiles yet — sessions can create one with /pppi_profile" }],
 					details: {},
 				};
 			}

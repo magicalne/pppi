@@ -104,7 +104,7 @@ pppi/
 ├── packages/
 │   ├── gateway/             # gateway core: wire transport, voice stack, pi rpc driver
 │   ├── omni/                # omni core: repo registry, worktrees, pigeon bridge, pi tools
-│   ├── pi-ext/              # pi extension: /omni /pair /profile — /omni boots the gateway
+│   ├── pi-ext/              # pi extension: /pppi_gateway /pppi_pair /pppi_profile
 │   └── protocol/            # shared wire protocol (server ⇄ clients)
 ├── apps/
 │   ├── server/              # standalone gateway host (headless/daemon cli)
@@ -125,23 +125,23 @@ ln -s ~/Workspace/opensource/pigeon/bin/pigeon ~/.local/bin/pigeon
 bun install
 bun run build:web
 
-# 2. install the pi extension (also ships the gateway runtime for /omni)
+# 2. install the pi extension (also ships the gateway runtime for /pppi_gateway)
 bun run install:ext
 
-# 3a. start the gateway from any pi session — type /omni in pi
+# 3a. start the gateway from any pi session — type /pppi_gateway in pi
 #    → prints the LAN URL + QR; clients pair while that session lives
 #    (or run the standalone host: bun run dev:server -- --host 0.0.0.0)
 #    → both read the same ~/.pppi/config.json token, so clients stay paired
 
-# 3b. or make THIS pi session the omni itself (/omni here)
+# 3b. or make THIS pi session the omni itself (/pppi_gateway here)
 #    → no child session; the terminal and clients mirror one conversation
 
 # 4. talk to it
 #    web:   open http://<mac>:8787 on any device, paste the token once
 #           (or open the printed pair link — it ends in /?pair=<token>)
-#    phone: install apps/android APK, tap ☰ → Scan QR on the /pair QR,
+#    phone: install apps/android APK, tap ☰ → Scan QR on the /pppi_pair QR,
 #           or paste the pair link
-#    terminal: the /omni here session IS a terminal screen
+#    terminal: the /pppi_gateway here session IS a terminal screen
 #
 #    on Android, interactive mode picks up your Bluetooth/wired headset
 #    automatically (BT needs the BLUETOOTH_CONNECT grant on 12+) and a
@@ -162,9 +162,9 @@ pigeon.
 omni. Clients keep a *list* of paired machines — the ☰ machines drawer on
 web/Android switches between them; `+` pairs a new one by QR (Android) or
 pair link (both). The gateway prints the QR and the pair link at startup, and
-`/pair` reprints them from any pi session on the machine.
+`/pppi_pair` reprints them from any pi session on the machine.
 
-**Every session can have an identity.** Run `/profile` in any pi session to
+**Every session can have an identity.** Run `/pppi_profile` in any pi session to
 give it a name, color, and description (all optional — missing fields are
 auto-generated). The gateway merges explicit profiles with deterministic
 derived ones and ships them to clients, so when the omni delegates work to
@@ -178,12 +178,12 @@ once with `bun run install:ext` (copies it to `~/.pi/agent/extensions/pppi/`):
 
 | Command / tool | Purpose |
 |---|---|
-| `/omni` | boot the gateway from this session (clients pair while it lives); the omni is an rpc child |
-| `/omni here` | this session itself becomes the omni — terminal and clients mirror one conversation (asks first if history exists) |
-| `/omni mark` | tag this session as the omni target the child attaches to |
-| `/omni stop` | shut the gateway down |
-| `/pair` | print the pairing QR + link for web/Android clients |
-| `/profile` | set this session's name / color / description |
+| `/pppi_gateway` | boot the gateway from this session (clients pair while it lives); the omni is an rpc child |
+| `/pppi_gateway here` | this session itself becomes the omni — terminal and clients mirror one conversation (asks first if history exists) |
+| `/pppi_gateway mark` | tag this session as the omni target the child attaches to |
+| `/pppi_gateway stop` | shut the gateway down |
+| `/pppi_pair` | print the pairing QR + link for web/Android clients |
+| `/pppi_profile` | set this session's name / color / description |
 | `pppi_profiles` | tool: list profiles (agents read descriptions to pick targets) |
 
 ## Omni tools (what the agent gets)
@@ -195,7 +195,7 @@ once with `bun run install:ext` (copies it to `~/.pi/agent/extensions/pppi/`):
 | `omni_send` | delegate a task to a repo's session (async, msgId ticket) |
 | `omni_replies` | collect replies to sent messages |
 | `omni_worktree` | create / list / remove git worktrees per repo |
-| `/omni` | print the current hierarchy |
+| `/pppi_tree` | print the current hierarchy (omni session only) |
 
 ## Releases & the hosted web client
 

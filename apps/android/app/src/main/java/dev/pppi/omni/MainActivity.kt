@@ -241,7 +241,7 @@ fun PppiApp(theme: PppiTheme, setTheme: (String) -> Unit) {
 		if (activeId == id) activeId = connections.firstOrNull()?.id
 	}
 
-	// QR scanner for /pair codes (journeyapps zxing-embedded; CaptureActivity handles the camera)
+	// QR scanner for /pppi_pair codes (journeyapps zxing-embedded; CaptureActivity handles the camera)
 	val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { res ->
 		val text = res.contents ?: return@rememberLauncherForActivityResult
 		val parsed = parsePairInput(text)
@@ -269,7 +269,7 @@ fun PppiApp(theme: PppiTheme, setTheme: (String) -> Unit) {
 			onScan = {
 				val options = ScanOptions().apply {
 					setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-					setPrompt("scan the /pair QR on your machine")
+					setPrompt("scan the /pppi_pair QR on your machine")
 					setBeepEnabled(false)
 				}
 				scanLauncher.launch(options)
@@ -301,7 +301,7 @@ fun PppiApp(theme: PppiTheme, setTheme: (String) -> Unit) {
 			onScan = {
 				val options = ScanOptions().apply {
 					setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-					setPrompt("scan the /pair QR on your machine")
+					setPrompt("scan the /pppi_pair QR on your machine")
 					setBeepEnabled(false)
 				}
 				scanLauncher.launch(options)
@@ -439,7 +439,7 @@ fun MachinesDrawer(
 		}
 		Spacer(Modifier.height(10.dp))
 		Text(
-			"Run /pair in any pi session on the machine to get a link or QR.",
+			"Run /pppi_pair in any pi session on the machine to get a link or QR.",
 			color = theme.dim,
 			fontSize = 12.sp,
 			lineHeight = 17.sp,
@@ -480,7 +480,7 @@ fun PairingScreen(theme: PppiTheme, onScan: () -> Unit = {}, onPair: (String, St
 		Text("Pair with your omni agent", fontSize = 20.sp, color = theme.text)
 		Spacer(Modifier.height(8.dp))
 		Text(
-			"Scan the /pair QR, or paste the pair link. Secrets stay on the machine.",
+			"Scan the /pppi_pair QR, or paste the pair link. Secrets stay on the machine.",
 			fontSize = 13.sp,
 			color = theme.dim,
 		)

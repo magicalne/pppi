@@ -1,5 +1,5 @@
 // Audio service child: hosts the voice stack OUTSIDE the gateway host process.
-// The cli host runs voice in-process under bun; the /omni extension host spawns
+// The cli host runs voice in-process under bun; the /pppi_gateway extension host spawns
 // this child instead, so native STT, silero ONNX and kokoro never load into
 // pi's process (kokoro's runtime vs worker threads is a known deadlock, and an
 // audio crash must not take the conversation host down).

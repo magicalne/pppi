@@ -122,7 +122,7 @@ class VoiceClient(
 			if (latch.await(minOf(remaining, 2_000), TimeUnit.MILLISECONDS)) break
 		}
 		failure?.let { throw it }
-		if (!live) throw Exception("couldn't reach the voice service — is /omni running on the Mac?")
+		if (!live) throw Exception("couldn't reach the voice service — is /pppi_gateway running on the Mac?")
 	}
 
 	fun sendAudio(pcm16: ByteArray) {

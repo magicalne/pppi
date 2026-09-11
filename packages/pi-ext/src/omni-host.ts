@@ -1,9 +1,10 @@
-// /omni host: boots the pppi gateway INSIDE this pi session (it lives as long
-// as the session does). Two agent modes:
-//   /omni        — launcher: the omni conversation is a separate `pi --mode
-//                  rpc` child this session drives (also `/omni child`)
-//   /omni here   — THIS session is the omni: no child, clients mirror exactly
-//                  what the terminal shows (guarded when history exists)
+// /pppi_gateway host: boots the pppi gateway INSIDE this pi session (it lives
+// as long as the session does). Two agent modes:
+//   /pppi_gateway        — launcher: the omni conversation is a separate `pi
+//                          --mode rpc` child this session drives
+//   /pppi_gateway here   — THIS session is the omni: no child, clients mirror
+//                          exactly what the terminal shows (guarded when
+//                          history exists)
 // Voice runs in a spawned audio-service child either way, so native STT,
 // silero and kokoro never load into pi's process.
 //
@@ -14,6 +15,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { hostname, networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,15 +73,35 @@ function versionStamp(): string {
 	}
 }
 
-/** bun runs the .ts audio child natively; without it voice stays unavailable (health shows why). */
+/**
+ * How to run the voice child: bun runs the .ts natively; node 22.7+ can strip
+ * types as a fallback (all relative imports carry .ts extensions). The entry
+ * resolves through node module resolution so BOTH install shapes work — the
+ * bun-installed extension dir (node_modules sits next to src/) and a
+ * `pi install git:` checkout (npm links the workspace at the repo root).
+ * Null → no voice child; health reports why.
+ */
 function audioCommand(): string[] | null {
+	let entry: string;
+	try {
+		entry = createRequire(import.meta.url).resolve("@pppi/gateway/src/audio-service.ts");
+	} catch {
+		return null;
+	}
 	try {
 		const bin = execFileSync("which", ["bun"], { encoding: "utf8" }).trim();
-		if (bin) return [bin, join(extDir(), "node_modules", "@pppi", "gateway", "src", "audio-service.ts")];
+		if (bin) return [bin, entry];
 	} catch {
-		// bun missing → no voice child
+		// bun missing → try node
 	}
-	return null;
+	try {
+		execFileSync(process.execPath, ["--experimental-strip-types", "-e", 'console.log("ok")'], {
+			stdio: "ignore",
+		});
+		return [process.execPath, "--experimental-strip-types", entry];
+	} catch {
+		return null;
+	}
 }
 
 function lanIps(): string[] {
@@ -168,12 +190,12 @@ async function bootGateway(
 		`\n${versionStamp()}`,
 		`\nvoice: ${audio ? "audio service child" : "unavailable (bun not found)"}`,
 		"\nvoice logs: ~/.pppi/logs/audio.log",
-		"stop: /omni stop — or end this session.",
+		"stop: /pppi_gateway stop — or end this session.",
 	];
 	notify(lines.filter(Boolean).join("\n") + (qr ? `\n\n${qr}` : ""), "info");
 }
 
-/** `/omni` + `/omni child`: launcher form — the omni conversation is an RPC child. */
+/** `/pppi_gateway`: launcher form — the omni conversation is an RPC child. */
 export async function startOmniHost(notify: Notify): Promise<void> {
 	if (running) {
 		notify("The pppi gateway is already running from this session — it stops when the session ends.");
@@ -200,7 +222,7 @@ export async function startOmniHost(notify: Notify): Promise<void> {
 	await bootGateway(notify, gw, cfg, driver, () => driver.start(), `omni session: ${omniSession}`);
 }
 
-/** `/omni here`: THIS session is the omni — clients mirror what the TUI shows. */
+/** `/pppi_gateway here`: THIS session is the omni — clients mirror what the TUI shows. */
 export async function startOmniHere(pi: unknown, ctx: ExtensionCommandContext, notify: Notify): Promise<void> {
 	if (running) {
 		notify("The pppi gateway is already running from this session — it stops when the session ends.");
@@ -214,7 +236,7 @@ export async function startOmniHere(pi: unknown, ctx: ExtensionCommandContext, n
 	const messages = ctx.sessionManager.getEntries().filter((e) => e?.type === "message");
 	if (messages.length > 0) {
 		const ok = await ctx.ui.confirm(
-			"/omni here",
+			"/pppi_gateway here",
 			"This session already has conversation history — clients would share it. Make this session the omni?",
 		);
 		if (!ok) return;

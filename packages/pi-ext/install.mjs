@@ -53,7 +53,7 @@ function depDir(dep) {
 		return null;
 	}
 }
-for (const dep of ["ws", "minimatch"]) {
+for (const dep of ["ws", "minimatch", "typebox"]) {
 	const from = depDir(dep);
 	if (from) {
 		const to = join(dest, "node_modules", dep);
@@ -112,5 +112,5 @@ writeFileSync(join(dest, "version.json"), `${JSON.stringify(version, null, "\t")
 
 console.log(`pppi extension installed → ${dest}`);
 console.log(`gateway stamp: ${version.sha}${version.dirty ? " (dirty tree)" : ""} — packaged ${version.packagedAt}`);
-console.log("slash commands: /omni /pair /profile  ·  tool: pppi_profiles");
-console.log("/omni boots the gateway from a pi session; restart running pi sessions to pick it up.");
+console.log("slash commands: /pppi_gateway /pppi_pair /pppi_profile  ·  tool: pppi_profiles");
+console.log("/pppi_gateway boots the gateway from a pi session; restart running pi sessions to pick it up.");

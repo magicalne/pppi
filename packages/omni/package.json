@@ -10,7 +10,7 @@
 		"./pigeon": "./src/pigeon.ts"
 	},
 	"dependencies": {
-		"@pppi/protocol": "workspace:*"
+		"@pppi/protocol": "*"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",
