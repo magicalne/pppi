@@ -116,7 +116,7 @@ pppi/
 ## Quick start
 
 ```bash
-# 0. prerequisites: pi (>=0.84), bun, git, and pigeon for inter-session messaging
+# 0. prerequisites: pi (>=1.0), bun, git, and pigeon for inter-session messaging
 git clone https://github.com/magicalne/pigeon ~/Workspace/opensource/pigeon
 ln -s ~/Workspace/opensource/pigeon/src/extension ~/.pi/agent/extensions/pigeon
 ln -s ~/Workspace/opensource/pigeon/bin/pigeon ~/.local/bin/pigeon
@@ -155,6 +155,11 @@ The headless omni session persists across gateway restarts (`--session-id
 pppi-omni`). To run an interactive omni session in a terminal, load the same
 extension; both flavors share the tools, and cross-session messaging rides on
 pigeon.
+
+The omni child runs pi 1.x with pi's built-in extensions enabled, so the omni
+can mount MCP servers from `~/.pi/agent/mcp.json` and gets the `codemode`
+tool out of the box (add `--no-mcp`-style settings in pi if you want them
+off). The rpc driver also still speaks pi 0.83 — only the built-ins differ.
 
 ## Machines, profiles, and the pi extension
 

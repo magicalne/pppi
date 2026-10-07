@@ -151,6 +151,7 @@ async function bootGateway(
 	agent: unknown,
 	start: (() => void) | null,
 	label: string,
+	stopExtra?: () => void | Promise<void>,
 ): Promise<void> {
 	const webDist = join(extDir(), "web");
 	const audio = audioCommand();
@@ -170,6 +171,7 @@ async function bootGateway(
 	running = {
 		stop: async () => {
 			await gateway.close();
+			await stopExtra?.();
 		},
 	};
 
@@ -254,5 +256,6 @@ export async function startOmniHere(pi: unknown, ctx: ExtensionCommandContext, n
 		driver,
 		null,
 		`this session as omni (${driver.info.sessionId?.slice(0, 8) ?? ""}…)`,
+		() => driver.dispose(),
 	);
 }

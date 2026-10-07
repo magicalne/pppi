@@ -113,12 +113,18 @@ export function toolLabel(toolName: string, args: any): string {
 			return `writing ${p(a.path ?? a.file_path)}`;
 		case "bash":
 			return `running ${(String(a.command ?? "shell").split(/\s+/)[0] || "shell").slice(0, 24)}`;
+		case "codemode":
+			return "running a script";
 		case "glob":
 		case "grep":
 			return `searching ${String(a.pattern ?? "").slice(0, 24)}`;
 		case "pigeon":
 			return a.action === "send" ? `asking ${a.target ?? "a session"}` : "coordinating";
 		default:
+			// pi 1.x mounts MCP servers as mcp__<server>__<tool> — show the tool
+			if (toolName.startsWith("mcp__")) {
+				return `running ${(toolName.split("__").pop() ?? toolName).slice(0, 24)}`;
+			}
 			if (toolName.startsWith("omni_")) return "coordinating";
 			return `running ${toolName}`;
 	}
@@ -357,15 +363,28 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 	/** Send a user message; queues behind an active turn (followUp semantics). */
 	async prompt(text: string): Promise<void> {
 		const extra: Record<string, unknown> = this.isStreaming ? { streamingBehavior: "followUp" } : {};
-		const res = await this.request("prompt", 30_000, { message: text, ...extra });
+		let res = await this.request("prompt", 30_000, { message: text, ...extra });
 		if (!res.success) {
 			// Race: streaming started between our check and the command.
 			if (!this.isStreaming || /stream/i.test(res.error ?? "")) {
-				const retry = await this.request("prompt", 30_000, { message: text, streamingBehavior: "followUp" });
-				if (!retry.success) throw new Error(retry.error ?? "prompt rejected");
-				return;
+				res = await this.request("prompt", 30_000, { message: text, streamingBehavior: "followUp" });
+				if (!res.success) throw new Error(res.error ?? "prompt rejected");
+			} else {
+				throw new Error(res.error ?? "prompt rejected");
 			}
-			throw new Error(res.error ?? "prompt rejected");
+		}
+		this.noteDisposition(res);
+	}
+
+	/**
+	 * pi ≥1.0 tags prompt responses with what became of the input: "started"
+	 * runs a turn, "queued" waits behind one, "handled" was consumed by an
+	 * extension (e.g. a /command) and no turn will start — say so instead of
+	 * leaving clients waiting for events that never come.
+	 */
+	private noteDisposition(res: RpcResponse): void {
+		if (res.data?.disposition === "handled") {
+			this.emit("notify", "info", "handled by an extension — no agent turn");
 		}
 	}
 

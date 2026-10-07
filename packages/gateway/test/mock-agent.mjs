@@ -183,8 +183,26 @@ function handle(cmd) {
 			write({ id: cmd.id, type: "response", command: "new_session", success: true });
 			break;
 		case "prompt": {
+			// pi ≥1.0: an extension that consumes the input (e.g. a slash command)
+			// answers disposition "handled" and no agent turn runs.
+			if (String(cmd.message).startsWith("/")) {
+				write({
+					id: cmd.id,
+					type: "response",
+					command: "prompt",
+					success: true,
+					data: { disposition: "handled" },
+				});
+				break;
+			}
 			history.push({ role: "user", content: cmd.message, timestamp: nextTs() });
-			write({ id: cmd.id, type: "response", command: "prompt", success: true });
+			write({
+				id: cmd.id,
+				type: "response",
+				command: "prompt",
+				success: true,
+				data: { disposition: state.isStreaming ? "queued" : "started" },
+			});
 			// simulate an agent turn: agent_start → deltas → message_end → agent_settled.
 			// with MOCK_DELAY, agent_start fires immediately and the rest lands later,
 			// so "busy" is a real window (tests can race commands against it).

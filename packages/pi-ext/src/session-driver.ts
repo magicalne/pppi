@@ -87,6 +87,8 @@ export class ExtensionAgentDriver extends EventEmitter {
 	private isStreaming = false;
 	private assistantId: string | null = null;
 	private _state = "starting";
+	/** unsubscribe handles from pi.on (pi ≥0.86 returns them) */
+	private detachers: Array<() => void> = [];
 	private snapshot: {
 		model: ModelInfo | null;
 		thinkingLevel: string;
@@ -113,58 +115,65 @@ export class ExtensionAgentDriver extends EventEmitter {
 
 	/** Subscribe to the session's event bus; call once before first use. */
 	attach(): void {
-		this.pi.on("agent_start", async () => {
-			this.isStreaming = true;
-			this.assistantId = null;
-			this.setState("thinking");
-		});
-		this.pi.on("agent_settled", async (_event: unknown, ctx: Ctx) => {
-			this.isStreaming = false;
-			this.setState("idle");
-			this.ctx = ctx;
-			this.refreshStatus();
-		});
-		// error turns end without a settle — agent_end is the reliable "not busy"
-		this.pi.on("agent_end", async (_event: unknown, ctx: Ctx) => {
-			this.isStreaming = false;
-			this.ctx = ctx;
-		});
-		this.pi.on("tool_execution_start", async (event: any, ctx: Ctx) => {
-			this.ctx = ctx;
-			this.setState("tool");
-			this.emit("tool", event.toolName, "start", toolLabel(event.toolName, event.args));
-		});
-		this.pi.on("tool_execution_end", async (event: any) => {
-			this.emit("tool", event.toolName, "end");
-			this.setState("streaming");
-		});
-		this.pi.on("message_update", async (event: any) => {
-			const delta = event.assistantMessageEvent;
-			if (delta?.type !== "text_delta") return;
-			if (!this.assistantId) this.assistantId = randomUUID();
-			this.setState("streaming");
-			this.emit("assistant-delta", this.assistantId, delta.delta ?? "");
-		});
-		this.pi.on("message_end", async (event: any) => {
-			const message = event.message;
-			if (message?.role !== "assistant") return;
-			if (message.stopReason === "error") {
-				this.emit("notify", "error", `agent error: ${message.errorMessage ?? "unknown"}`);
-			}
-			const text = textOf(message);
-			if (text) this.emit("assistant-final", this.assistantId ?? randomUUID(), text);
-			this.assistantId = null;
-		});
-		this.pi.on("model_select", async (_event: unknown, ctx: Ctx) => {
-			this.ctx = ctx;
-			this.refreshStatus();
-			this.emit("info", this.info);
-		});
-		this.pi.on("session_before_compact", async () => this.setState("compacting"));
-		this.pi.on("session_compact", async () => {
-			this.setState("idle");
-			this.refreshStatus();
-		});
+		this.detachers.push(
+			this.pi.on("agent_start", async () => {
+				this.isStreaming = true;
+				this.assistantId = null;
+				this.setState("thinking");
+			}),
+			this.pi.on("agent_settled", async (_event: unknown, ctx: Ctx) => {
+				this.isStreaming = false;
+				this.setState("idle");
+				this.ctx = ctx;
+				this.refreshStatus();
+			}),
+			// error turns end without a settle — agent_end is the reliable "not busy"
+			this.pi.on("agent_end", async (_event: unknown, ctx: Ctx) => {
+				this.isStreaming = false;
+				this.ctx = ctx;
+			}),
+			this.pi.on("tool_execution_start", async (event: any, ctx: Ctx) => {
+				this.ctx = ctx;
+				this.setState("tool");
+				this.emit("tool", event.toolName, "start", toolLabel(event.toolName, event.args));
+			}),
+			this.pi.on("tool_execution_end", async (event: any) => {
+				this.emit("tool", event.toolName, "end");
+				this.setState("streaming");
+			}),
+			this.pi.on("message_update", async (event: any) => {
+				const delta = event.assistantMessageEvent;
+				if (delta?.type !== "text_delta") return;
+				if (!this.assistantId) this.assistantId = randomUUID();
+				this.setState("streaming");
+				this.emit("assistant-delta", this.assistantId, delta.delta ?? "");
+			}),
+			this.pi.on("message_end", async (event: any) => {
+				const message = event.message;
+				if (message?.role !== "assistant") return;
+				if (message.stopReason === "error") {
+					this.emit("notify", "error", `agent error: ${message.errorMessage ?? "unknown"}`);
+				}
+				const text = textOf(message);
+				if (text) this.emit("assistant-final", this.assistantId ?? randomUUID(), text);
+				this.assistantId = null;
+			}),
+			this.pi.on("model_select", async (_event: unknown, ctx: Ctx) => {
+				this.ctx = ctx;
+				this.refreshStatus();
+				this.emit("info", this.info);
+			}),
+			this.pi.on("session_before_compact", async () => this.setState("compacting")),
+			this.pi.on("session_compact", async () => {
+				this.setState("idle");
+				this.refreshStatus();
+			}),
+		);
+	}
+
+	/** Unsubscribe from the session event bus (the gateway host calls this on stop). */
+	dispose(): void {
+		for (const detach of this.detachers.splice(0)) detach();
 	}
 
 	private setState(s: string): void {
