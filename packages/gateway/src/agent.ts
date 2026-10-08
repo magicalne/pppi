@@ -10,7 +10,16 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { AgentStatus, ContextInfo, ModelInfo } from "@pppi/protocol";
 
-export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming" | "compacting";
+export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming" | "compacting" | "waiting";
+
+/**
+ * How long a pi extension-UI dialog stays open ("waiting") before the RPC
+ * driver auto-dismisses it. Humans on paired screens get a window to react;
+ * the agent is never blocked indefinitely.
+ */
+function dialogHoldMs(): number {
+	return Number(process.env.PPPI_DIALOG_HOLD_MS ?? 2_000);
+}
 
 export type AgentSnapshot = {
 	model: ModelInfo | null;
@@ -61,7 +70,7 @@ export interface AgentPort extends EventEmitter {
 	/** Last known status-bar snapshot; safest read is the `status` event. */
 	get status(): AgentStatus;
 	/** Send a user message; queues behind an active turn (followUp semantics). */
-	prompt(text: string): Promise<void>;
+	prompt(text: string, opts?: { deliver?: "followUp" | "steer" }): Promise<void>;
 	abort(): void | Promise<void>;
 	/** Compact the session now (LLM summarization; seconds to minutes). */
 	compact(): Promise<void>;
@@ -75,7 +84,7 @@ export interface AgentPort extends EventEmitter {
 }
 
 /** Map pi's Model (pi-ai) to the wire ModelInfo; tolerant of partial data (mock/tests). */
-function toModelInfo(m: any): ModelInfo | null {
+export function toModelInfo(m: any): ModelInfo | null {
 	if (!m || typeof m !== "object" || !m.provider || !m.id) return null;
 	return {
 		provider: String(m.provider),
@@ -288,9 +297,21 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 	private onEvent(ev: RpcEvent): void {
 		switch (ev.type) {
 			case "extension_ui_request": {
-				// Headless: never block the agent on dialogs; auto-dismiss.
+				// Headless: never block the agent on dialogs forever — but pi 1.x
+				// finally tells us the agent needs a human, so hold the question
+				// briefly ("waiting" state, status line says "needs you") before
+				// auto-dismissing. There is no remote dialog UI (yet).
 				const dialog = ["select", "confirm", "input", "editor"].includes(ev.method);
-				if (dialog) this.write({ type: "extension_ui_response", id: ev.id, cancelled: true });
+				if (dialog) {
+					const prev = this._state;
+					this.setState("waiting");
+					this.emit("notify", "info", `the agent needs you (${ev.method}) — answering "no/dismiss"`);
+					setTimeout(() => {
+						this.write({ type: "extension_ui_response", id: ev.id, cancelled: true });
+						// a run may have settled/started during the hold — don't clobber it
+						if (this._state === "waiting") this.setState(prev === "waiting" ? "idle" : prev);
+					}, dialogHoldMs());
+				}
 				// Only real notifications reach clients; setStatus/setWidget/setTitle are TUI noise.
 				if (ev.method === "notify") this.emit("notify", ev.notifyType ?? "info", ev.message ?? "");
 				break;
@@ -360,9 +381,12 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 		}
 	}
 
-	/** Send a user message; queues behind an active turn (followUp semantics). */
-	async prompt(text: string): Promise<void> {
-		const extra: Record<string, unknown> = this.isStreaming ? { streamingBehavior: "followUp" } : {};
+	/**
+	 * Send a user message. Busy turns get the text queued (followUp) unless
+	 * `deliver: "steer"` injects it into the running turn (streaming feedback).
+	 */
+	async prompt(text: string, opts?: { deliver?: "followUp" | "steer" }): Promise<void> {
+		const extra: Record<string, unknown> = this.isStreaming ? { streamingBehavior: opts?.deliver ?? "followUp" } : {};
 		let res = await this.request("prompt", 30_000, { message: text, ...extra });
 		if (!res.success) {
 			// Race: streaming started between our check and the command.
@@ -506,7 +530,7 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 	}
 }
 
-function textFromUser(m: any): string {
+export function textFromUser(m: any): string {
 	if (typeof m.content === "string") return m.content;
 	if (Array.isArray(m.content)) {
 		return m.content
@@ -517,7 +541,7 @@ function textFromUser(m: any): string {
 	return "";
 }
 
-function textFromAssistant(m: any): string {
+export function textFromAssistant(m: any): string {
 	if (Array.isArray(m.content)) {
 		return m.content
 			.filter((c: any) => c.type === "text")

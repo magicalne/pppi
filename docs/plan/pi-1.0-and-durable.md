@@ -1,6 +1,6 @@
 # Reaction plan — pi 1.0, pi-durable, and "run fewer agents"
 
-**Date:** 2026-10-07 · **Status:** phase 1 implemented (this branch); phases 2–4 pending
+**Date:** 2026-10-07 · **Status:** phases 1–3.2 implemented; 3.3 parked; 3.4 designed; phase 4 decided (watch)
 **Inputs consumed:** pi v1.0.0 (clone at `~/Workspace/opensource/pi`, tag
 `v1.0.0`; v1.0.4 is the current patch), `@earendil-works/pi-durable` +
 `@earendil-works/chord` (same monorepo), and
@@ -72,6 +72,17 @@ declares TypeBox parameters, and the RPC child spawn line
 
 ## Phase 2 — SDK spike (opt-in, behind a flag)
 
+**Shipped.** `SdkAgentDriver` (`packages/gateway/src/sdk-driver.ts`) is the
+third `AgentPort` implementation: it hosts the omni via pi's documented
+`createAgentSession()` in-process — no child process, typed events, dispositions
+via `preflightResult`. Select it on the standalone host with
+`bun run dev:server -- --agent sdk`. Parity with the RPC driver is locked by a
+test that runs the same scripted turn through both and compares the observable
+event sequence (`packages/gateway/test/sdk-driver.test.ts`). Caveats that keep
+it a spike: no process isolation, and pi's built-in codemode/MCP extensions do
+not auto-load in SDK sessions (pass `createCodemodeExtension()`/
+`createMcpExtension()` via a custom factory when needed).
+
 1.0 ships a documented in-process embedding story: `createAgentSession()`
 (`packages/coding-agent/docs/sdk.md`) with typed `prompt()/steer()/
 followUp()/abort()/waitForIdle()/subscribe()` and injectable boundaries.
@@ -92,34 +103,76 @@ parity-tested against `RpcAgentDriver`. Keep or drop based on results.
 
 Ordered by leverage:
 
-1. **Streaming feedback** (the post's latency-hiding experiment). We
-   already stream live partials (`openUtterance()` in
-   `packages/gateway/src/stt.ts`); feed stable prefixes to the omni as
-   they're spoken (`streamingBehavior`/steer on the RPC path, `deliverAs`
-   in-process) and let it start thinking before the user finishes. Cancel
-   on barge-in (we already have the machinery in `voice.ts`). This is the
-   single biggest "talk to a person" win available to us.
-2. **"Needs you" status.** 1.0 exposes `ui_prompt_start`/`ui_prompt_end`
-   — the gateway currently auto-dismisses dialogs (`agent.ts:284-290`);
-   with a new AgentState ("waiting") the status line can say so instead.
-   Crosses the wire: protocol bump, `StatusBar.tsx` + `StatusBar.kt`.
+1. **Streaming feedback** — **shipped** (config `streamingFeedback: true` in
+   `~/.pppi/config.json`, or `PPPI_STREAMING_FEEDBACK=1`; in-process voice
+   sessions only). While the user is still talking, the stable prefix of the
+   utterance (parakeet's committed text, ≥32 chars) is dispatched to an idle
+   agent; when the utterance endpoints, only the remainder goes out — as a
+   steer into the running turn (`AgentPort.prompt(text, {deliver:"steer"})`,
+   pi `streamingBehavior`). If STT rewrote the early words the whole
+   corrected text is steered; if the final equals the prefix nothing more is
+   sent. Barge-in cancels the stale prefix answer and the full utterance
+   re-asks exactly once (`cancelPendingTurn` keeps the coalescing honest).
+   `packages/gateway/src/voice.ts` (`maybeDispatchPrefix`,
+   `dispatchUtterance`), `gateway.ts` (`steer` dep), tests in
+   `voice.test.ts` ("streaming feedback").
+2. **"Needs you" status** — **shipped** (protocol v6). New `AgentState`
+   `"waiting"`: the RPC driver holds a pi extension-UI dialog open for a
+   short window (`PPPI_DIALOG_HOLD_MS`, default 2s) with the state set and a
+   notify, then auto-dismisses as before; `here` mode tracks
+   `ui_prompt_start`/`ui_prompt_end` around the human answering at the
+   terminal. Web + Android status lines say "needs you…".
 3. **Show-and-tell, Android first.** The post's shipped feature: record
    screen + audio while the user talks, word-level timestamps, hand the
-   artifact to the agent. Natural fit for hold-to-talk; park as an
-   experiment until 1–2 land.
-4. **Shared live artifact.** The post's DOM-recorded "decisions / open
-   questions / diffs" artifact maps to a pppi session document rendered by
-   clients — and to phase 4's documents. Design once, against durable
-   docs if phase 4 happens.
+   artifact to the agent. Natural fit for hold-to-talk; parked until 1–2
+   land (they have).
+4. **Shared live artifact** — designed (below); build when a client need
+   crystallizes.
 
-## Phase 4 — pi-durable (decision point)
+### 3.4 design note — the shared live artifact
 
-The honest framing first: pi-durable is the whole loop (generation/tool/
-compaction as durable tasks, submissions with `whenBusy:
-steer|followUp|reject`, Chord-op document watches, SQLite/JSONL storage,
-crash recovery from checkpoints). It cannot wrap our pi children. Postures:
+The post's DOM-recorded artifact (decisions / open questions / examples /
+diffs, updated live while the user talks at it) maps onto pppi as a
+**session document**: a typed, fork-aware JSON doc per conversation that
+the omni writes and every client renders. Concretely:
 
-- **(a) Watch — recommended now.** Experimental API (unstable between
+- Shape: `{ decisions: [], openQuestions: [], diffs: [] }`, one document per
+  conversation, written by the omni via a `pppi_artifact` tool (TypeBox
+  schema, whole-doc writes first — no op-level API yet).
+- Transport: broadcast the full artifact on change over the existing ws
+  (`artifact` server event, profileId-stamped); clients render a tab/drawer.
+  This is deliberately pi-durable-shaped: if phase 4 ever moves the loop
+  onto `Harness`, the document becomes a `defineDoc` (history
+  `"rewindable"`, fork `"asOf"`) and `watchDoc` replaces the broadcast —
+  the client shape does not change.
+- Voice grammar: "put that in the artifact" / "what's still open?" — the
+  artifact is the shared page the post argues replaces agent sprawl: one
+  conversation, one live page, no task board.
+
+## Phase 4 — pi-durable (decision: watch)
+
+Decision on 2026-10-08, per the plan's recommendation (a): **watch**. pi-durable
+re-implements the agent loop as durable tasks over pi-ai — it cannot wrap our
+pi children — and its README carries "Experimental. The API changes without
+notice between releases". pppi's persistence needs are met today (pi session
+files, `--session-id` resume, paged history).
+
+Revisit triggers (the pilot in posture (b) becomes attractive when any of
+these is true):
+- pi-durable ships a stable-API release (or we need restart-surviving
+  background repo sessions badly enough to eat churn);
+- delegated repo sessions must survive gateway/Mac restarts mid-task — the
+  pilot shape is `Harness.open(openNodeSqliteStorage(...))` per repo session,
+  `/tools` CodingTools, clients reattach via `watch()` op-frames;
+- we build §3.4's artifact and want it rewindable/forkable for free.
+
+The phase 2 SDK spike de-risks part of (b) regardless: `AgentPort` now has an
+in-process implementation, so swapping the *loop* behind that seam no longer
+touches the wire or clients.
+
+Postures considered:
+
+- **(a) Watch — chosen.** Experimental API (unstable between
   releases), single-process-per-storage, no HTTP layer shipped. pppi's
   persistence needs (session files, `new_session`, `get_messages` history)
   are met today.

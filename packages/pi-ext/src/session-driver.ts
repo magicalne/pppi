@@ -89,6 +89,8 @@ export class ExtensionAgentDriver extends EventEmitter {
 	private _state = "starting";
 	/** unsubscribe handles from pi.on (pi ≥0.86 returns them) */
 	private detachers: Array<() => void> = [];
+	/** state to restore when a blocking ui prompt ("waiting") ends */
+	private prevState = "idle";
 	private snapshot: {
 		model: ModelInfo | null;
 		thinkingLevel: string;
@@ -168,6 +170,15 @@ export class ExtensionAgentDriver extends EventEmitter {
 				this.setState("idle");
 				this.refreshStatus();
 			}),
+			// pi 1.x: the session is blocked on a dialog the human at the terminal
+			// must answer — say "needs you" on every paired screen until it ends
+			this.pi.on("ui_prompt_start", async () => {
+				this.prevState = this._state;
+				this.setState("waiting");
+			}),
+			this.pi.on("ui_prompt_end", async () => {
+				if (this._state === "waiting") this.setState(this.prevState === "waiting" ? "idle" : this.prevState);
+			}),
 		);
 	}
 
@@ -216,12 +227,13 @@ export class ExtensionAgentDriver extends EventEmitter {
 		};
 	}
 
-	async prompt(text: string): Promise<void> {
-		// busy turns get followUp delivery — pi queues the message instead of
-		// racing. Ask PI (ctx.isIdle) rather than trusting our own flag: an
-		// error turn can settle without our handlers seeing a clean transition.
+	async prompt(text: string, opts?: { deliver?: "followUp" | "steer" }): Promise<void> {
+		// busy turns get followUp delivery (or a steer) — pi queues/steers the
+		// message instead of racing. Ask PI (ctx.isIdle) rather than trusting our
+		// own flag: an error turn can settle without our handlers seeing a clean
+		// transition.
 		const busy = this.ctx?.isIdle ? !this.ctx.isIdle() : this.isStreaming;
-		await this.pi.sendUserMessage(text, busy ? { deliverAs: "followUp" } : undefined);
+		await this.pi.sendUserMessage(text, busy ? { deliverAs: opts?.deliver ?? "followUp" } : undefined);
 	}
 
 	abort(): void {

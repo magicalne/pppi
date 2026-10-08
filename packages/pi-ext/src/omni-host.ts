@@ -25,7 +25,13 @@ import { ExtensionAgentDriver } from "./session-driver.ts";
 import { type PairFile, loadPair, readOmniMark, writePair } from "./store.ts";
 
 type GatewayModule = {
-	loadOrCreateConfig: (opts?: Record<string, unknown>) => { token: string; port: number; host: string; cwd: string };
+	loadOrCreateConfig: (opts?: Record<string, unknown>) => {
+		token: string;
+		port: number;
+		host: string;
+		cwd: string;
+		streamingFeedback?: boolean;
+	};
 	createGateway: (opts: Record<string, unknown>) => Promise<{
 		listen: (port: number, host: string) => Promise<void>;
 		close: () => Promise<void>;
@@ -36,7 +42,7 @@ type GatewayModule = {
 	};
 };
 
-type BootConfig = { token: string; port: number; host: string; cwd: string };
+type BootConfig = { token: string; port: number; host: string; cwd: string; streamingFeedback?: boolean };
 type Notify = (message: string, level?: "info" | "error") => void;
 
 let running: { stop: () => Promise<void> } | null = null;
@@ -160,6 +166,7 @@ async function bootGateway(
 		agent: agent as never,
 		webDist: existsSync(webDist) ? webDist : undefined,
 		audioService: audio ? { command: audio } : undefined,
+		streamingFeedback: cfg.streamingFeedback === true,
 	});
 	try {
 		await gateway.listen(cfg.port, cfg.host);

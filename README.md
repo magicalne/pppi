@@ -161,6 +161,13 @@ can mount MCP servers from `~/.pi/agent/mcp.json` and gets the `codemode`
 tool out of the box (add `--no-mcp`-style settings in pi if you want them
 off). The rpc driver also still speaks pi 0.83 — only the built-ins differ.
 
+Two optional gateway knobs (set in `~/.pppi/config.json` or via env):
+`"streamingFeedback": true` (or `PPPI_STREAMING_FEEDBACK=1`) dispatches the
+stable prefix of your utterance to the omni while you're still talking —
+the rest of the thought follows as a steer, so answers start sooner. The
+standalone host can also run the omni in-process with pi's SDK instead of
+an rpc child: `bun run dev:server -- --agent sdk`.
+
 ## Machines, profiles, and the pi extension
 
 **One machine = one connection.** Each machine runs a gateway with its own

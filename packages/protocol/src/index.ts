@@ -9,8 +9,11 @@
 //     switch model / thinking level and list the enabled models (pi settings).
 //     Also: paged history — clients cache the recent window and pull older
 //     pages only when the user scrolls to the top.
+// v6: "waiting" agent state — the agent asked a human something (pi 1.x
+//     extension UI dialogs); the status line says "needs you" instead of
+//     the gateway silently auto-dismissing.
 
-export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming" | "compacting";
+export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming" | "compacting" | "waiting";
 
 export type MessageSource = "voice" | "text";
 

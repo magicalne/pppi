@@ -88,6 +88,11 @@ const history = [];
 // the in-flight turn's timer — abort cancels it so the turn dies unheard
 let pendingTurnTimer = null;
 
+// MOCK_DIALOG=1: every prompt first opens a blocking extension-UI dialog; the
+// turn resumes only when the client answers it (extension_ui_response).
+let resumeTurn = null;
+let uiSeq = 0;
+
 // strictly-increasing fake clock: rapid prompts can land in the same
 // Date.now() millisecond, which would break before-timestamp pagination
 let clock = Date.now() - 10_000;
@@ -182,6 +187,12 @@ function handle(cmd) {
 			state.sessionId = `mock-session-${Date.now()}`;
 			write({ id: cmd.id, type: "response", command: "new_session", success: true });
 			break;
+		case "extension_ui_response": {
+			const r = resumeTurn;
+			resumeTurn = null;
+			r?.();
+			break;
+		}
 		case "prompt": {
 			// pi ≥1.0: an extension that consumes the input (e.g. a slash command)
 			// answers disposition "handled" and no agent turn runs.
@@ -256,6 +267,12 @@ function handle(cmd) {
 				if (delay > 0) pendingTurnTimer = setTimeout(rest, delay);
 				else rest();
 			};
+			if (process.env.MOCK_DIALOG) {
+				// pi asks a human something — the turn is blocked until answered
+				write({ type: "extension_ui_request", id: `ui-${++uiSeq}`, method: "select", title: "Proceed?" });
+				resumeTurn = turn;
+				break;
+			}
 			turn();
 			break;
 		}
