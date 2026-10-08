@@ -11,6 +11,7 @@ export {
 	toolLabel,
 } from "./agent.ts";
 export { SdkAgentDriver, type SdkSessionFactory, type SdkSessionLike } from "./sdk-driver.ts";
+export { DurableAgentDriver, type DurableOmni } from "./durable/durable-driver.ts";
 export { loadOrCreateConfig, pppiDir, tokensMatch, type ServerConfig } from "./config.ts";
 export { buildPairInfo, lanIps, writePairFile } from "./pair.ts";
 export { AudioService, type AudioHealth } from "./audio-proxy.ts";

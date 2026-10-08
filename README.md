@@ -168,6 +168,19 @@ the rest of the thought follows as a steer, so answers start sooner. The
 standalone host can also run the omni in-process with pi's SDK instead of
 an rpc child: `bun run dev:server -- --agent sdk`.
 
+**Durable omni (experimental):** `bun run dev:server -- --agent durable` hosts
+the omni on
+[`@earendil-works/pi-durable`](https://www.npmjs.com/package/@earendil-works/pi-durable)
+— in-process, with every turn committed to SQLite (`~/.pppi/omni-durable.sqlite`)
+before it is shown. If the gateway dies mid-turn, the next start resumes the run
+from its last checkpoint and the turn completes; prompts are idempotent by
+request id. The omni's own tools (`omni_*`, `pppi_profiles`) are ported, and
+repo sessions stay ordinary pi processes driven via pigeon. Trade-offs: no
+MCP/codemode/skills on the omni in this mode (pi-durable runs its own loop over
+pi-ai), and pi-durable's API is explicitly experimental — the default rpc child
+is unchanged. Set `PPPI_DURABLE_STORAGE=memory|jsonl:<dir>|sqlite:<path>` to
+override the storage.
+
 ## Machines, profiles, and the pi extension
 
 **One machine = one connection.** Each machine runs a gateway with its own

@@ -149,6 +149,19 @@ the omni writes and every client renders. Concretely:
   artifact is the shared page the post argues replaces agent sprawl: one
   conversation, one live page, no task board.
 
+## Phase 4 — pi-durable (decision: watch → durable-omni pilot shipped)
+
+**Update 2026-10-09:** the split was re-decided — durability lands on the **omni**
+(the only agent that dies with the gateway; repo sessions are independent
+processes and already survive restarts), while repo sessions keep the full
+pi ecosystem. Shipped as `--agent durable` (fourth `AgentPort`,
+`packages/gateway/src/durable/`, plan: `durable-omni-pilot.md`): in-process
+pi-durable harness, SQLite storage, omni tools ported, restart-resume locked by
+test. MCP/codemode/skills remain unported (documented loss); the default rpc
+child is unchanged. Posture (b) (durable repo sessions) stays shelved.
+
+Original decision below.
+
 ## Phase 4 — pi-durable (decision: watch)
 
 Decision on 2026-10-08, per the plan's recommendation (a): **watch**. pi-durable

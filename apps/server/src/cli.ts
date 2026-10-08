@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+	DurableAgentDriver,
 	RpcAgentDriver,
 	SdkAgentDriver,
 	Stt,
@@ -73,9 +74,18 @@ const agentCmd = args["agent-cmd"]
 
 mkdirSync(cfg.cwd, { recursive: true });
 
-// --agent sdk hosts the omni in-process (pi SDK); default stays the rpc child.
-const driver =
-	args.agent === "sdk" ? new SdkAgentDriver({ cwd: cfg.cwd }) : new RpcAgentDriver({ command: agentCmd, cwd: cfg.cwd });
+// --agent sdk hosts the omni in-process (pi SDK); --agent durable hosts it on
+// pi-durable (durable turns; survives gateway restarts mid-run); default: rpc child.
+let driver: InstanceType<typeof RpcAgentDriver> | InstanceType<typeof SdkAgentDriver> | DurableAgentDriver;
+if (args.agent === "durable") {
+	// dynamic import keeps pi-durable out of every host that doesn't ask for it
+	const { createDurableOmni } = await import("@pppi/gateway/src/durable/boot.ts");
+	driver = new DurableAgentDriver({ cwd: cfg.cwd, create: () => createDurableOmni({ cwd: cfg.cwd }) });
+} else if (args.agent === "sdk") {
+	driver = new SdkAgentDriver({ cwd: cfg.cwd });
+} else {
+	driver = new RpcAgentDriver({ command: agentCmd, cwd: cfg.cwd });
+}
 const stt = Stt.create({ disabled: args["no-stt"] === true });
 const sttStatus = stt.status;
 
@@ -108,7 +118,13 @@ console.log(`
   pair      ${pairUrl}?pair=${cfg.token}
             machine "${pair.machine}" · fingerprint ${pair.fingerprint}
   omni      session ${omniSessionId}${markedOmniSession() ? " (marked via /pppi_gateway mark)" : ""}
-  agent     ${agentCmd.join(" ")}
+  agent     ${
+		args.agent === "durable"
+			? "pi-durable (in-process, durable turns — experimental)"
+			: args.agent === "sdk"
+				? "pi sdk (in-process)"
+				: agentCmd.join(" ")
+	}
   stt       ${sttStatus.ready ? `ready (${sttStatus.modelId})` : sttStatus.reason}
   tts       ${tts.status.ready ? `ready (${tts.id} · ${tts.status.voice})` : tts.status.reason}
   clients   scan this on the android app, or open the pair link in a browser.

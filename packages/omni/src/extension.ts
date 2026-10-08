@@ -17,7 +17,7 @@ import { type PigeonSession, listSessions, pigeon, sessionsForRepo } from "./pig
 import { type RepoRegistry, addRepo, displayPath, findRepo, loadRegistry, removeRepo } from "./repos.ts";
 import { addWorktree, listWorktrees, parseWorktrees, removeWorktree } from "./worktree.ts";
 
-const OMNI_SYSTEM_PROMPT = `## pppi — the omni agent
+export const OMNI_SYSTEM_PROMPT = `## pppi — the omni agent
 
 You are the omni agent of pppi ("**pi"): a pointer-pointer to pi. You do not do repo work
 yourself; you coordinate pi sessions that do. You manage a two-level hierarchy:
@@ -69,7 +69,7 @@ function selfSessionId(ctx: ExtensionContext): string | undefined {
 	return id || undefined;
 }
 
-function describeSessions(sessions: PigeonSession[], reg: RepoRegistry): string {
+export function describeSessions(sessions: PigeonSession[], reg: RepoRegistry): string {
 	if (sessions.length === 0) return "no open pi sessions registered (pigeon registry is empty)";
 	return sessions
 		.map((s) => {
