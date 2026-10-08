@@ -190,6 +190,7 @@ describe("interactive voice websocket", () => {
 		tts?: VoiceTts,
 		mockReply = "ack from omni",
 		finalizeTimeoutMs?: number,
+		gatewayOpts: Record<string, unknown> = {},
 	): Promise<ReturnType<typeof fakeVad>> {
 		process.env.MOCK_REPLY = mockReply;
 		const v = fakeVad();
@@ -202,6 +203,7 @@ describe("interactive voice websocket", () => {
 			tts,
 			vad: v,
 			...(finalizeTimeoutMs ? { voiceFinalizeTimeoutMs: finalizeTimeoutMs } : {}),
+			...gatewayOpts,
 		});
 		await app.listen(0, "127.0.0.1");
 		const addr = app.address();
@@ -1023,5 +1025,88 @@ describe("interactive voice websocket", () => {
 		// VAD hygiene: the detector was reset between the turns
 		expect(v.rec.resets).toBeGreaterThanOrEqual(1);
 		voice.close();
+	});
+
+	// -------------------------------------------------- streaming feedback (3.1)
+
+	/** Collect user_message texts on a chat socket (what the agent was actually sent). */
+	function collectUserMessages(ws: WebSocket): string[] {
+		const texts: string[] = [];
+		ws.on("message", (raw: Buffer) => {
+			try {
+				const e = JSON.parse(raw.toString()) as any;
+				if (e.type === "user_message") texts.push(e.text);
+			} catch {
+				// binary
+			}
+		});
+		return texts;
+	}
+
+	it("streaming feedback: dispatches a stable prefix mid-speech and steers the remainder", async () => {
+		const utterance = "what's the current status of the voice build";
+		const v = await boot(fakeStreamingStt(utterance).stt, undefined, "ack from omni", undefined, {
+			streamingFeedback: true,
+		});
+		const chat = await chatConnect();
+		await nextEvent(chat, "hello_ok");
+		const sent = collectUserMessages(chat);
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+
+		// feed 7 → committed = "what's the current status of the" (32 chars) → prefix fires
+		await sayPaced(voice, v, "speech", 7);
+		await until(() => sent.length >= 1);
+		expect(sent[0]).toBe("what's the current status of the");
+
+		// finish the thought: the remainder goes out as a steer, prefix not repeated
+		say(voice, v, "silence", 30); // ~3s of silence: endpoint + grace
+		await until(() => sent.length >= 2, 15_000);
+		expect(sent[1]).toBe("voice build");
+		expect(sent.join("|")).not.toContain(utterance); // never re-asked in full
+
+		// the voice pane still saw the whole utterance as the final transcript
+		voice.close();
+		chat.close();
+	});
+
+	it("streaming feedback: a final identical to the prefix is not submitted twice", async () => {
+		// STT whose committed text stalls at six words and whose finalize returns
+		// exactly that — the utterance's final text equals the dispatched prefix
+		const committed = "what's the current status of the";
+		let feeds = 0;
+		const stt: VoiceStt = {
+			status: { ready: true, modelId: "fake-stream" },
+			openUtterance: () =>
+				Promise.resolve({
+					feed: async () => {
+						feeds++;
+						return { committed: feeds >= 6 ? committed : "", tentative: "" };
+					},
+					finalize: async () => committed,
+					dispose: () => {},
+				}),
+			transcribeBuffer: () => Promise.resolve(""),
+		};
+		const v = await boot(stt, undefined, "ack from omni", undefined, { streamingFeedback: true });
+		const chat = await chatConnect();
+		await nextEvent(chat, "hello_ok");
+		const sent = collectUserMessages(chat);
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+
+		await sayPaced(voice, v, "speech", 5); // committed = 4 words = 25 chars — not yet
+		await sayPaced(voice, v, "speech", 2); // feed 7 → 6 words = 32 chars → prefix fires
+		await until(() => sent.length >= 1);
+
+		// the finalize returns exactly the committed prefix — no remainder, so
+		// nothing further may be submitted (no duplicate turn)
+		const dispatched = nextEvent(voice, "stt_final");
+		say(voice, v, "silence", 30);
+		expect((await dispatched).text).toBe("what's the current status of the");
+		await new Promise((r) => setTimeout(r, 500));
+		expect(sent).toHaveLength(1);
+		voice.close();
+		chat.close();
 	});
 });

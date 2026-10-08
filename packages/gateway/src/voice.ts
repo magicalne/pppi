@@ -67,6 +67,18 @@ export type VoiceSessionDeps = {
 	timings?: Partial<VadTimings>;
 	/** Submit a finalized utterance into the conversation. */
 	submit(text: string): Promise<void>;
+	/** Steering: text into a turn the agent is already running (streaming feedback). */
+	steer?(text: string): Promise<void>;
+	/** False when the agent is idle; prefix dispatch only fires on an idle agent. */
+	agentBusy?(): boolean;
+	/** Drop a pending voice turn (barge-in killed it — the next utterance stands alone). */
+	cancelPendingTurn?(): void;
+	/**
+	 * Streaming feedback (docs/plan/pi-1.0-and-durable.md §3.1): dispatch a
+	 * stable prefix of the utterance while the user is still talking; the rest
+	 * of the thought follows as a steer when the utterance endpoints.
+	 */
+	streamingFeedback?: { minChars?: number };
 	/** Barge-in: abort the in-flight agent turn. */
 	abortAgent(): void;
 	/** The last assistant reply (magic-word `repeat`). */
@@ -103,6 +115,10 @@ type Capture = {
 	opening: Promise<void>;
 	/** endpointed, inside the grace window — may still merge or dispatch */
 	pending: boolean;
+	/** streaming feedback: prefix already dispatched for this utterance */
+	sentPrefix: string | null;
+	/** barge-in killed the prefix answer — the full utterance re-asks fresh */
+	prefixCancelled: boolean;
 	// turn diagnostics: how long STT took to show life, and to finish
 	startedAt: number;
 	firstPartialAt: number | null;
@@ -154,8 +170,13 @@ export class VoiceSession {
 			onSpeechEnd: (totalMs) => this.onSpeechEnd(totalMs),
 			onGraceExpired: () => void this.dispatchCapture(),
 			onBargeIn: () => {
-				// talking over the agent: stop synthesis + agent NOW; the open
-				// capture becomes the next user turn when it endpoints
+				// talking over the agent: stop synthesis + agent NOW. If we had
+				// dispatched a streaming prefix, its answer is stale — kill the
+				// pending turn so the full utterance re-asks without duplication.
+				if (this.capture?.sentPrefix) {
+					this.capture.prefixCancelled = true;
+					this.deps.cancelPendingTurn?.();
+				}
 				this.speaker?.abort();
 				this.deps.abortAgent();
 			},
@@ -325,6 +346,7 @@ export class VoiceSession {
 				({ committed, tentative }) => {
 					if (!cap.firstPartialAt && (committed.length > 0 || tentative.length > 0)) cap.firstPartialAt = Date.now();
 					this.send({ type: "stt_partial", committed, tentative });
+					this.maybeDispatchPrefix(cap, committed);
 				},
 				(err) => {
 					if (cap.stream !== stream) return; // one eulogy per stream — every queued feed rejects
@@ -391,6 +413,8 @@ export class VoiceSession {
 			stream: null,
 			opening: Promise.resolve(),
 			pending: false,
+			sentPrefix: null,
+			prefixCancelled: false,
 			startedAt: Date.now(),
 			firstPartialAt: null,
 			speechMs: 0,
@@ -437,12 +461,40 @@ export class VoiceSession {
 			console.error(
 				`[voice] utt: ${(cap.speechMs / 1000).toFixed(1)}s speech, first partial ${
 					cap.firstPartialAt ? `${cap.firstPartialAt - cap.startedAt}ms` : "none"
-				}, dispatched in ${((Date.now() - cap.startedAt) / 1000).toFixed(1)}s (${text.length} chars)`,
+				}, dispatched in ${((Date.now() - cap.startedAt) / 1000).toFixed(1)}s (${text.length} chars${
+					cap.sentPrefix ? ", prefix dispatched" : ""
+				})`,
 			);
-			if (text) await this.dispatchUtterance(text);
+			if (text) await this.dispatchUtterance(text, cap);
 		} catch (err) {
 			this.send({ type: "voice_error", message: String((err as Error).message ?? err) });
 		}
+	}
+
+	// ------------------------------------------------------ streaming feedback
+
+	/**
+	 * Phase 3.1 of the pi-1.0 plan (latency hiding, voice-first): while the
+	 * user is still speaking, hand the agent the stable prefix of the utterance
+	 * (parakeet's committed text) so it starts thinking early. The rest of the
+	 * thought follows as a steer when the utterance endpoints. Only an idle
+	 * agent gets a prefix — mid-turn dispatches would fight the coalescing.
+	 */
+	private maybeDispatchPrefix(cap: Capture, committed: string): void {
+		if (!this.deps.streamingFeedback) return;
+		if (cap.sentPrefix || cap.prefixCancelled) return;
+		const text = committed.trim();
+		if (text.length < (this.deps.streamingFeedback.minChars ?? 32)) return;
+		if (this.deps.agentBusy?.() === true) return;
+		if (this.speaker?.playing) return; // the agent is talking — this speech is barge-in, not a turn
+		cap.sentPrefix = text;
+		this.send({ type: "voice_state", state: "thinking" });
+		this.speaker?.beginTurn();
+		console.error(`[voice] prefix dispatched early (${text.length} chars, still listening)`);
+		this.deps.submit(text).catch((err) => {
+			cap.sentPrefix = null; // let a later partial try again
+			this.send({ type: "voice_error", message: String((err as Error).message ?? err) });
+		});
 	}
 
 	/**
@@ -479,7 +531,7 @@ export class VoiceSession {
 		return text;
 	}
 
-	private async dispatchUtterance(text: string): Promise<void> {
+	private async dispatchUtterance(text: string, cap?: Capture): Promise<void> {
 		// "stop" while the agent talks: abort now, no turn, back to listening
 		if (CONTROL_PHRASES.test(text)) {
 			this.send({ type: "stt_final", id: randomUUID(), text });
@@ -498,6 +550,25 @@ export class VoiceSession {
 				this.send({ type: "voice_error", message: "nothing to repeat yet" });
 				this.send({ type: "voice_state", state: "listening" });
 			}
+			return;
+		}
+		// streaming feedback: the prefix turn is already running — send only
+		// what it doesn't know yet. If STT rewrote the early words, steer the
+		// whole corrected text; if the final equals the prefix, the agent is
+		// already answering exactly this.
+		const prefix = cap?.sentPrefix && !cap.prefixCancelled ? cap.sentPrefix : null;
+		if (prefix) {
+			const remainder = text === prefix ? "" : text.startsWith(prefix) ? text.slice(prefix.length).trim() : text;
+			this.send({ type: "stt_final", id: randomUUID(), text });
+			if (remainder) {
+				try {
+					if (this.deps.steer) await this.deps.steer(remainder);
+					else await this.deps.submit(remainder);
+				} catch (err) {
+					this.send({ type: "voice_error", message: String((err as Error).message ?? err) });
+				}
+			}
+			if (!this.deps.tts) this.send({ type: "voice_state", state: "listening" });
 			return;
 		}
 		const id = randomUUID();
@@ -570,6 +641,13 @@ export class Speaker {
 	private lastStartedId: string | null = null;
 	/** per assistant message: how much of its final text has been enqueued */
 	private chunker = { id: "", pending: "", emitted: "" };
+	/** syntheses currently producing audio (streaming feedback reads this) */
+	private liveSynths = 0;
+
+	/** True while a synthesis is producing audio for the client. */
+	get playing(): boolean {
+		return this.liveSynths > 0;
+	}
 
 	constructor(
 		private readonly tts: VoiceTts,
@@ -627,17 +705,22 @@ export class Speaker {
 			while (this.queue.length > 0 && !this.aborted) {
 				const item = this.queue.shift()!;
 				let started = false;
-				for await (const chunk of this.tts.synthesize(item.text)) {
-					if (this.aborted) break;
-					if (!started) {
-						this.lastStartedId = item.id;
-						this.sendEvent({ type: "tts_start", id: item.id, rate: chunk.rate });
-						this.sendEvent({ type: "voice_state", state: "speaking" });
-						this.onPlayback?.(true); // stays on until the client reports playback_done
-						started = true;
-						this.everStarted = true;
+				this.liveSynths++;
+				try {
+					for await (const chunk of this.tts.synthesize(item.text)) {
+						if (this.aborted) break;
+						if (!started) {
+							this.lastStartedId = item.id;
+							this.sendEvent({ type: "tts_start", id: item.id, rate: chunk.rate });
+							this.sendEvent({ type: "voice_state", state: "speaking" });
+							this.onPlayback?.(true); // stays on until the client reports playback_done
+							started = true;
+							this.everStarted = true;
+						}
+						this.sendBinary(chunk.pcm);
 					}
-					this.sendBinary(chunk.pcm);
+				} finally {
+					this.liveSynths--;
 				}
 				if (started && this.aborted) {
 					this.emitInterruptedEnd();

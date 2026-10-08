@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { RpcAgentDriver } from "../src/agent.ts";
+import { RpcAgentDriver, toolLabel } from "../src/agent.ts";
 
 const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "mock-agent.mjs");
 
@@ -15,6 +15,8 @@ describe("rpc agent driver", () => {
 
 	afterEach(async () => {
 		driver.dispose();
+		process.env.MOCK_DIALOG = undefined;
+		process.env.PPPI_DIALOG_HOLD_MS = undefined;
 	});
 
 	it("reports agent info once started", async () => {
@@ -61,6 +63,50 @@ describe("rpc agent driver", () => {
 		// other-1's map omits minimal → pi's default marks it supported
 		expect(driver.status.thinkingLevels).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 		await expect(driver.setModel("mock", "nope")).rejects.toThrow(/Model not found/);
+	});
+
+	it("labels pi 1.x built-in and mcp tool calls for the status line", () => {
+		expect(toolLabel("codemode", {})).toBe("running a script");
+		expect(toolLabel("mcp__github__create_issue", {})).toBe("running create_issue");
+		expect(toolLabel("omni_repos", {})).toBe("coordinating");
+	});
+
+	it("a handled prompt notifies instead of waiting for a turn", async () => {
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		const notified = new Promise<string>((r) => driver.once("notify", (_level, message) => r(message)));
+		await driver.prompt("/pppi_profile");
+		expect(await notified).toMatch(/handled/);
+		expect(driver.state).toBe("idle");
+	});
+
+	it("shows waiting while the agent needs a human, then auto-dismisses", async () => {
+		process.env.MOCK_DIALOG = "1";
+		process.env.PPPI_DIALOG_HOLD_MS = "80";
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		const states: string[] = [];
+		const notified = new Promise<string>((r) => driver.once("notify", (_l, m) => r(m)));
+		driver.on("state", (s) => states.push(s));
+		const done = new Promise<void>((r) => driver.once("assistant-final", r));
+		await driver.prompt("hello");
+		await done;
+		// the mock emits synchronously — idle may already have fired
+		if (driver.state !== "idle") {
+			await new Promise<void>((r, j) => {
+				const timer = setTimeout(() => j(new Error("never settled to idle")), 5_000);
+				driver.on("state", (s) => {
+					if (s === "idle") {
+						clearTimeout(timer);
+						r();
+					}
+				});
+			});
+		}
+		expect(states).toContain("waiting");
+		expect(await notified).toMatch(/needs you/);
+		// after the dismissal the turn ran to completion — back to business
+		expect(driver.state).toBe("idle");
 	});
 
 	it("refreshes context usage after each settled turn", async () => {

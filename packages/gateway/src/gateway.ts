@@ -63,6 +63,9 @@ export type GatewayOptions = {
 	voiceTimings?: Partial<VadTimings>;
 	/** STT finalize hang budget (tests); default 12s before falling back to batch. */
 	voiceFinalizeTimeoutMs?: number;
+	/** Streaming feedback (§3.1 of the pi-1.0 plan): dispatch a stable prefix of
+	 *  the utterance while the user still talks; in-process voice sessions only. */
+	streamingFeedback?: boolean;
 	/** Enabled-model patterns override (tests); default reads pi's settings (global + project). */
 	enabledModelsProvider?: () => string[] | undefined;
 };
@@ -729,6 +732,22 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				submit: async (text) => {
 					await submitUserText(text, "voice");
 				},
+				steer: opts.streamingFeedback
+					? async (text) => {
+							const id = randomUUID();
+							broadcast({ type: "transcript", id, text });
+							broadcast({ type: "user_message", id, text, source: "voice" });
+							// the remainder completes the thought the prefix started —
+							// track it as one voice turn for the coalescing logic
+							voiceInFlight = { text: joinThought(voiceInFlight?.text ?? null, text), replied: false };
+							await agent.prompt(text, { deliver: "steer" });
+						}
+					: undefined,
+				agentBusy: () => agent.state !== "idle",
+				cancelPendingTurn: () => {
+					voiceInFlight = null; // barge-in killed it; the full utterance re-asks
+				},
+				...(opts.streamingFeedback ? { streamingFeedback: {} } : {}),
 				abortAgent: () => void agent.abort(),
 				lastReply: () => lastReply,
 				onAuthed: () => setVoiceActive(true),

@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	RpcAgentDriver,
+	SdkAgentDriver,
 	Stt,
 	buildPairInfo,
 	createGateway,
@@ -72,7 +73,9 @@ const agentCmd = args["agent-cmd"]
 
 mkdirSync(cfg.cwd, { recursive: true });
 
-const driver = new RpcAgentDriver({ command: agentCmd, cwd: cfg.cwd });
+// --agent sdk hosts the omni in-process (pi SDK); default stays the rpc child.
+const driver =
+	args.agent === "sdk" ? new SdkAgentDriver({ cwd: cfg.cwd }) : new RpcAgentDriver({ command: agentCmd, cwd: cfg.cwd });
 const stt = Stt.create({ disabled: args["no-stt"] === true });
 const sttStatus = stt.status;
 
@@ -85,6 +88,7 @@ const gateway = await createGateway({
 	webDist: existsSync(webDist) ? webDist : undefined,
 	pair,
 	tts,
+	streamingFeedback: cfg.streamingFeedback,
 });
 
 await gateway.listen(cfg.port, cfg.host);

@@ -93,6 +93,8 @@ function omniStatus(state: AgentState, toolLabel: string | null, connected: bool
 			return "typing…";
 		case "compacting":
 			return "compacting…";
+		case "waiting":
+			return "needs you…";
 		case "starting":
 			return "waking up…";
 		default:

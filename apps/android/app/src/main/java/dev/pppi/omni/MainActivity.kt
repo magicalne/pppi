@@ -768,6 +768,7 @@ fun ChatScreen(
 				agentState == "thinking" -> "thinking…"
 				agentState == "compacting" -> "compacting…"
 				agentState == "streaming" -> "typing…"
+				agentState == "waiting" -> "needs you…"
 				agentState == "starting" -> "waking up…"
 				else -> ""
 			}

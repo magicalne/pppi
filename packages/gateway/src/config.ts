@@ -12,6 +12,8 @@ export type ServerConfig = {
 	port: number;
 	host: string;
 	cwd: string;
+	/** Streaming feedback: dispatch utterance prefixes while the user still talks. */
+	streamingFeedback: boolean;
 };
 
 export function pppiDir(): string {
@@ -19,11 +21,11 @@ export function pppiDir(): string {
 }
 
 export function loadOrCreateConfig(
-	opts: { port?: number; host?: string; token?: string; cwd?: string } = {},
+	opts: { port?: number; host?: string; token?: string; cwd?: string; streamingFeedback?: boolean } = {},
 ): ServerConfig {
 	const dir = pppiDir();
 	const path = join(dir, "config.json");
-	let stored: { token?: string; port?: number; host?: string } = {};
+	let stored: { token?: string; port?: number; host?: string; streamingFeedback?: boolean } = {};
 	if (existsSync(path)) {
 		try {
 			stored = JSON.parse(readFileSync(path, "utf8"));
@@ -36,6 +38,7 @@ export function loadOrCreateConfig(
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(path, `${JSON.stringify(stored, null, "\t")}\n`, { mode: 0o600 });
 	}
+	const envFeedback = ["1", "true"].includes(String(process.env.PPPI_STREAMING_FEEDBACK ?? "").toLowerCase());
 	return {
 		configPath: path,
 		token: opts.token ?? stored.token!,
@@ -46,6 +49,7 @@ export function loadOrCreateConfig(
 		// user pins a host.
 		host: opts.host ?? stored.host ?? "0.0.0.0",
 		cwd: opts.cwd ?? join(dir, "omni-home"),
+		streamingFeedback: opts.streamingFeedback ?? stored.streamingFeedback ?? envFeedback,
 	};
 }
 
