@@ -1,19 +1,22 @@
 // Local text-to-speech for interactive mode. Same posture as stt.ts: models
-// live on this Mac, nothing leaves the machine. Providers are pluggable —
-// pick with PPPI_TTS_PROVIDER=kokoro|macos-say|auto (default auto: kokoro
-// when its model is cached, else the always-available macOS `say`).
+// live on this machine, nothing leaves it. Providers are pluggable —
+// pick with PPPI_TTS_PROVIDER=kokoro|piper|espeak-ng|macos-say|auto
+// (default auto: piper when a vits model is present, else kokoro when its
+// model is cached, else the always-available platform voice — `say` on
+// macOS, espeak-ng elsewhere).
 //
-// Kokoro model resolution order (mirrors stt.ts):
-//   1. $PPPI_TTS_MODEL (dir containing a kokoro .onnx + voices.bin, or the .onnx itself)
-//   2. onnx-community/Kokoro-82M-v1.0-ONNX in the HuggingFace cache
+// Model resolution searches $PPPI_TTS_MODEL first, then ~/.pppi/models/tts/
+// (where `bun run setup:voice` puts things), then the HuggingFace cache:
+//   piper:  a sherpa-onnx vits dir (.onnx + tokens.txt + espeak-ng-data)
+//   kokoro: onnx-community/Kokoro-82M-v1.0-ONNX layout (onnx/model*.onnx + voices/)
 //
 // synthesize() takes PROSE ONLY — strip code/markdown with speakProse()
 // before calling; a coding agent's raw answer is garbage out loud.
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { constants, accessSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import type { VoiceTtsStatus } from "@pppi/protocol";
 import type { VoiceTts } from "./voice.ts";
 import { decodeWav } from "./wav.ts";
@@ -21,25 +24,48 @@ import { decodeWav } from "./wav.ts";
 export type TtsChunk = { pcm: Buffer; rate: number };
 
 export interface TtsProvider extends VoiceTts {
-	readonly id: "kokoro" | "piper" | "macos-say";
+	readonly id: "kokoro" | "piper" | "espeak-ng" | "macos-say";
 	/** Eager-load any engine so the first reply speaks instantly. Resolves false on failure. */
 	warm(): Promise<boolean>;
 }
 
+/** Where setup-voice.mjs / manual downloads land. */
+export function ttsModelRoot(): string {
+	return join(homedir(), ".pppi", "models", "tts");
+}
+
+/** First executable `name` on PATH (null when absent) — no subprocess, safe in constructors. */
+export function findExecutable(name: string): string | null {
+	for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+		if (!dir) continue;
+		const candidate = join(dir, name);
+		try {
+			accessSync(candidate, constants.X_OK);
+			return candidate;
+		} catch {
+			// keep scanning
+		}
+	}
+	return null;
+}
+
 // ---------------------------------------------------------------- provider resolution
 
-export function resolveTtsProvider(): TtsProvider {
+export function resolveTtsProvider(opts: { piperDirs?: string[]; kokoroDirs?: string[] } = {}): TtsProvider {
 	const explicit = (process.env.PPPI_TTS_PROVIDER ?? "auto").toLowerCase();
 	if (explicit === "macos-say") return new MacosSayProvider();
-	if (explicit === "piper") return new SherpaPiperProvider();
-	const kokoro = new KokoroProvider();
+	if (explicit === "espeak-ng") return new EspeakNgProvider();
+	if (explicit === "piper") return new SherpaPiperProvider(opts.piperDirs);
+	const kokoro = new KokoroProvider(opts.kokoroDirs);
 	if (explicit === "kokoro") return kokoro;
 	// auto: PPPI_TTS_MODEL pointing at a sherpa vits dir selects piper (the
 	// same env var would otherwise confuse kokoro's resolver, and anyone who
 	// downloaded a piper model clearly wants it)
-	const piper = new SherpaPiperProvider();
+	const piper = new SherpaPiperProvider(opts.piperDirs);
 	if (piper.status.ready) return piper;
-	return kokoro.status.ready ? kokoro : new MacosSayProvider();
+	if (kokoro.status.ready) return kokoro;
+	// always-works fallback per platform: say on macOS, espeak-ng elsewhere
+	return process.platform === "darwin" ? new MacosSayProvider() : new EspeakNgProvider();
 }
 
 // ---------------------------------------------------------------- piper (sherpa-onnx)
@@ -52,40 +78,65 @@ export function resolveTtsProvider(): TtsProvider {
  * addon and a model dir:
  *   PPPI_TTS_PROVIDER=piper PPPI_TTS_MODEL=/path/to/vits-piper-en_US-amy-medium
  * (tarball: vits-piper-en_US-amy-medium.tar.bz2 from k2-fsa/sherpa-onnx
- *  releases, tts-models tag — contains the .onnx, tokens.txt, espeak-ng-data)
+ *  releases, tts-models tag — contains the .onnx, tokens.txt, espeak-ng-data;
+ *  `bun run setup:voice` downloads it to ~/.pppi/models/tts/)
  */
-export function resolvePiperModel(): { dir: string; onnx: string } | { reason: string } {
-	const explicit = process.env.PPPI_TTS_MODEL;
-	if (!explicit) {
-		return { reason: "piper needs PPPI_TTS_MODEL pointing at a sherpa-onnx vits model dir (see tts.ts)" };
+export function resolvePiperModel(searchDirs?: string[]): { dir: string; onnx: string } | { reason: string } {
+	const dirs = searchDirs ?? piperSearchDirs();
+	for (const explicit of dirs) {
+		if (!existsSync(explicit)) continue;
+		const onnx = readdirSync(explicit).find((f) => f.endsWith(".onnx"));
+		if (!onnx) continue;
+		let complete = true;
+		for (const need of ["tokens.txt", "espeak-ng-data"]) {
+			if (!existsSync(join(explicit, need))) complete = false;
+		}
+		if (complete) return { dir: explicit, onnx: join(explicit, onnx) };
 	}
-	if (!existsSync(explicit)) return { reason: `PPPI_TTS_MODEL dir missing: ${explicit}` };
-	const onnx = readdirSync(explicit).find((f) => f.endsWith(".onnx"));
-	if (!onnx) return { reason: `PPPI_TTS_MODEL dir has no .onnx: ${explicit}` };
-	for (const need of ["tokens.txt", "espeak-ng-data"]) {
-		if (!existsSync(join(explicit, need))) return { reason: `piper model dir lacks ${need}: ${explicit}` };
+	if (searchDirs === undefined || dirs.length === 0) {
+		return {
+			reason: "piper needs a sherpa-onnx vits model dir — run `bun run setup:voice` or set PPPI_TTS_MODEL (see tts.ts)",
+		};
 	}
-	return { dir: explicit, onnx: join(explicit, onnx) };
+	return { reason: `no complete piper model dir in ${dirs.join(", ")}` };
+}
+
+/** Piper candidate dirs: $PPPI_TTS_MODEL, then vits/piper dirs in ~/.pppi/models/tts (setup-voice layout). */
+function piperSearchDirs(): string[] {
+	const dirs: string[] = [];
+	if (process.env.PPPI_TTS_MODEL) dirs.push(process.env.PPPI_TTS_MODEL);
+	try {
+		const root = ttsModelRoot();
+		if (existsSync(root)) {
+			for (const entry of readdirSync(root, { withFileTypes: true })) {
+				if (entry.isDirectory() && /vits|piper/i.test(entry.name)) dirs.push(join(root, entry.name));
+			}
+		}
+	} catch {
+		// unreadable dir — fall through
+	}
+	return dirs;
 }
 
 export class SherpaPiperProvider implements TtsProvider {
 	readonly id = "piper" as const;
 	private loading: Promise<PiperEngine | null> | null = null;
 	readonly status: VoiceTtsStatus;
+	private readonly model: { dir: string; onnx: string } | { reason: string };
 
-	constructor() {
-		const model = resolvePiperModel();
+	constructor(searchDirs?: string[]) {
+		this.model = resolvePiperModel(searchDirs);
 		this.status =
-			"reason" in model
-				? ({ ready: false, reason: model.reason } as VoiceTtsStatus)
-				: ({ ready: true, provider: this.id, voice: model.onnx.split("/").pop() ?? "piper" } as VoiceTtsStatus);
+			"reason" in this.model
+				? ({ ready: false, reason: this.model.reason } as VoiceTtsStatus)
+				: ({ ready: true, provider: this.id, voice: this.model.onnx.split("/").pop() ?? "piper" } as VoiceTtsStatus);
 	}
 
 	synthesize(text: string): AsyncIterable<TtsChunk> {
 		const provider = this;
 		return (async function* () {
 			if (!provider.status.ready) throw new Error(provider.status.reason);
-			provider.loading ??= loadPiperEngine();
+			provider.loading ??= loadPiperEngine(provider.model);
 			const engine = await provider.loading;
 			if (!engine) throw new Error("sherpa-onnx piper engine failed to load");
 			// same text-level streaming as kokoro: short first phrase, larger rest
@@ -98,15 +149,14 @@ export class SherpaPiperProvider implements TtsProvider {
 
 	async warm(): Promise<boolean> {
 		if (!this.status.ready) return false;
-		this.loading ??= loadPiperEngine();
+		this.loading ??= loadPiperEngine(this.model);
 		return (await this.loading) !== null;
 	}
 }
 
 type PiperEngine = { generate(text: string): Promise<{ samples: Float32Array; rate: number }> };
 
-async function loadPiperEngine(): Promise<PiperEngine | null> {
-	const model = resolvePiperModel();
+async function loadPiperEngine(model: { dir: string; onnx: string } | { reason: string }): Promise<PiperEngine | null> {
 	if ("reason" in model) return null;
 	let addon: { OfflineTts: new (cfg: Record<string, unknown>) => any };
 	try {
@@ -119,7 +169,9 @@ async function loadPiperEngine(): Promise<PiperEngine | null> {
 		return null;
 	}
 	const tts = new addon.OfflineTts({
-		model: { vits: { model: model.onnx, tokens: join(model.dir, "tokens.txt"), dataDir: join(model.dir, "espeak-ng-data") } },
+		model: {
+			vits: { model: model.onnx, tokens: join(model.dir, "tokens.txt"), dataDir: join(model.dir, "espeak-ng-data") },
+		},
 		numThreads: 2,
 		debug: false,
 		provider: "cpu",
@@ -137,12 +189,10 @@ async function loadPiperEngine(): Promise<PiperEngine | null> {
 const KOKORO_REPO_DIR = "models--onnx-community--Kokoro-82M-v1.0-ONNX";
 const DEFAULT_KOKORO_VOICE = "af_heart";
 
-export function resolveKokoroModel(): { dir: string } | { reason: string } {
-	const explicit = process.env.PPPI_TTS_MODEL;
-	if (explicit) {
+export function resolveKokoroModel(searchDirs?: string[]): { dir: string } | { reason: string } {
+	for (const explicit of searchDirs ?? kokoroSearchDirs()) {
 		const onnxPath = existsSync(explicit) ? findOnnx(explicit) : "";
 		if (onnxPath) return { dir: explicit };
-		if (explicit) return { reason: `PPPI_TTS_MODEL dir has no onnx/model*.onnx: ${explicit}` };
 	}
 	// HF cache snapshots (as laid out by `huggingface-cli download` or git lfs)
 	const hfCache = join(homedir(), ".cache", "huggingface", "hub", KOKORO_REPO_DIR, "snapshots");
@@ -157,6 +207,23 @@ export function resolveKokoroModel(): { dir: string } | { reason: string } {
 	return {
 		reason: `no kokoro model cached — download ${KOKORO_REPO_DIR} (config.json, onnx/model_quantized.onnx, voices/<voice>.bin) and set PPPI_TTS_MODEL, or run: bunx --bun huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX --include "onnx/model_quantized.onnx" "voices/af_heart.bin" "config.json" "tokenizer*"`,
 	};
+}
+
+/** Kokoro candidate dirs: $PPPI_TTS_MODEL, then kokoro dirs in ~/.pppi/models/tts (setup-voice layout). */
+function kokoroSearchDirs(): string[] {
+	const dirs: string[] = [];
+	if (process.env.PPPI_TTS_MODEL) dirs.push(process.env.PPPI_TTS_MODEL);
+	try {
+		const root = ttsModelRoot();
+		if (existsSync(root)) {
+			for (const entry of readdirSync(root, { withFileTypes: true })) {
+				if (entry.isDirectory() && /kokoro/i.test(entry.name)) dirs.push(join(root, entry.name));
+			}
+		}
+	} catch {
+		// unreadable dir — fall through
+	}
+	return dirs;
 }
 
 /** Any onnx/model*.onnx under `dir/onnx/` (the HF repo layout). */
@@ -177,21 +244,21 @@ export class KokoroProvider implements TtsProvider {
 	readonly id = "kokoro" as const;
 	private loading: Promise<KokoroEngine | null> | null = null;
 	readonly status: VoiceTtsStatus;
+	private readonly model: { dir: string } | { reason: string };
 
-	constructor() {
-		this.status = (() => {
-			const model = resolveKokoroModel();
-			return "reason" in model
-				? ({ ready: false, reason: model.reason } as VoiceTtsStatus)
-				: ({ ready: true, provider: this.id, voice: DEFAULT_KOKORO_VOICE } as VoiceTtsStatus);
-		})();
+	constructor(searchDirs?: string[]) {
+		this.model = resolveKokoroModel(searchDirs);
+		this.status = (() =>
+			"reason" in this.model
+				? ({ ready: false, reason: this.model.reason } as VoiceTtsStatus)
+				: ({ ready: true, provider: this.id, voice: DEFAULT_KOKORO_VOICE } as VoiceTtsStatus))();
 	}
 
 	synthesize(text: string): AsyncIterable<TtsChunk> {
 		const provider = this;
 		return (async function* () {
 			if (!provider.status.ready) throw new Error(provider.status.reason);
-			provider.loading ??= loadKokoroEngine();
+			provider.loading ??= loadKokoroEngine(provider.model);
 			const engine = await provider.loading;
 			if (!engine) throw new Error("kokoro engine failed to load");
 			// kokoro-js has no native streaming, so stream at the TEXT level:
@@ -215,7 +282,7 @@ export class KokoroProvider implements TtsProvider {
 
 	async warm(): Promise<boolean> {
 		if (!this.status.ready) return false;
-		this.loading ??= loadKokoroEngine();
+		this.loading ??= loadKokoroEngine(this.model);
 		return (await this.loading) !== null;
 	}
 }
@@ -224,8 +291,7 @@ type KokoroEngine = {
 	generate(text: string, voice: string): Promise<{ audio: Float32Array; rate: number }>;
 };
 
-async function loadKokoroEngine(): Promise<KokoroEngine | null> {
-	const model = resolveKokoroModel();
+async function loadKokoroEngine(model: { dir: string } | { reason: string }): Promise<KokoroEngine | null> {
 	if ("reason" in model) return null;
 	// kokoro-js wraps transformers.js + onnxruntime; loaded lazily so the
 	// gateway boots fine (macos-say fallback) without the dependency used.
@@ -316,19 +382,19 @@ export function floatPcmChunks(samples: Float32Array, rate: number, chunkMs = 50
 
 // ---------------------------------------------------------------- macos say
 
-/** The always-works fallback: macOS `say` → WAV → PCM chunks. */
+/** The always-works fallback on macOS: `say` → WAV → PCM chunks. */
 export class MacosSayProvider implements TtsProvider {
 	readonly id = "macos-say" as const;
 	readonly status: VoiceTtsStatus;
+	private readonly unavailableReason: string | null;
 	private voice: string;
 
 	constructor(voice?: string) {
 		this.voice = voice ?? process.env.PPPI_SAY_VOICE ?? pickSayVoice();
-		this.status = {
-			ready: true,
-			provider: this.id,
-			voice: this.voice,
-		};
+		this.unavailableReason = process.platform === "darwin" ? null : "macos `say` is only available on macOS";
+		this.status = this.unavailableReason
+			? ({ ready: false, reason: this.unavailableReason } as VoiceTtsStatus)
+			: ({ ready: true, provider: this.id, voice: this.voice } as VoiceTtsStatus);
 	}
 
 	async warm(): Promise<boolean> {
@@ -336,6 +402,7 @@ export class MacosSayProvider implements TtsProvider {
 	}
 
 	async *synthesize(text: string): AsyncIterable<TtsChunk> {
+		if (this.unavailableReason) throw new Error(this.unavailableReason);
 		const dir = mkdtempSync(join(tmpdir(), "pppi-say-"));
 		const wavPath = join(dir, "out.wav");
 		try {
@@ -365,4 +432,53 @@ function pickSayVoice(): string {
 		// non-darwin or say missing — say will error at synth time
 	}
 	return "Samantha";
+}
+
+// ---------------------------------------------------------------- espeak-ng
+
+/**
+ * The always-works fallback off macOS: the espeak-ng CLI → WAV → PCM chunks.
+ * Robotic, but zero downloads and it speaks code-safe prose forever. Install
+ * with `apt install espeak-ng` (or brew install espeak on macOS). Voice via
+ * PPPI_ESPEAK_VOICE (e.g. "en-us", "en-gb", "en+f3"); pace via PPPI_ESPEAK_WPM.
+ */
+export class EspeakNgProvider implements TtsProvider {
+	readonly id = "espeak-ng" as const;
+	readonly status: VoiceTtsStatus;
+	private readonly voice: string;
+	private readonly wpm: number;
+	private readonly bin: string | null;
+	private readonly unavailableReason: string | null;
+
+	constructor(voice?: string) {
+		this.voice = voice ?? process.env.PPPI_ESPEAK_VOICE ?? "en-us";
+		this.wpm = Number(process.env.PPPI_ESPEAK_WPM ?? 150);
+		this.bin = findExecutable("espeak-ng");
+		this.unavailableReason = this.bin
+			? null
+			: "espeak-ng not found — install it (apt install espeak-ng / brew install espeak)";
+		this.status = this.unavailableReason
+			? ({ ready: false, reason: this.unavailableReason } as VoiceTtsStatus)
+			: ({ ready: true, provider: this.id, voice: this.voice } as VoiceTtsStatus);
+	}
+
+	async warm(): Promise<boolean> {
+		return this.status.ready;
+	}
+
+	async *synthesize(text: string): AsyncIterable<TtsChunk> {
+		if (this.unavailableReason) throw new Error(this.unavailableReason);
+		// --stdout streams a 22.05 kHz mono WAV without touching the disk
+		const wavBuf = await new Promise<Buffer>((resolve, reject) => {
+			const chunks: Buffer[] = [];
+			const proc = spawn(this.bin!, ["-v", this.voice, "-s", String(this.wpm), "--stdout", text]);
+			proc.stdout.on("data", (c: Buffer) => chunks.push(c));
+			proc.on("exit", (code) =>
+				code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error(`espeak-ng exited ${code}`)),
+			);
+			proc.on("error", reject);
+		});
+		const wav = decodeWav(wavBuf);
+		yield* floatPcmChunks(wav.samples, wav.sampleRate);
+	}
 }

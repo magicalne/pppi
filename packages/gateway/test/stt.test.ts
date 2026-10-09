@@ -1,32 +1,25 @@
 // Real speech-to-text against the recommended local model (parakeet via
-// transcribe.cpp). Generates speech with the macOS `say` CLI, so it only runs
-// on darwin with a model available; it skips everywhere else.
+// transcribe.cpp). Speech is synthesized with whatever generator the machine
+// has (piper > macOS `say`; see test/speech.ts) — quality assertions need a
+// neural voice, so espeak-ng-only machines skip. Runs on macOS and Linux.
 
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Stt, resolveSttModel } from "../src/stt.ts";
 import { decodeWav, toMono16k } from "../src/wav.ts";
+import { speak, speechGenerator, transcriptQualityGenerator } from "./speech.ts";
 
-const supported = process.platform === "darwin";
 const modelStatus = resolveSttModel();
+const gen = speechGenerator();
+const supported = modelStatus.ready && transcriptQualityGenerator(gen);
 
-describe.skipIf(!supported || !modelStatus.ready)("stt (real model)", () => {
+describe.skipIf(!supported)("stt (real model)", () => {
 	const phrase = "omni agent bring the build back to green";
-	let wavPath: string;
 
-	it("transcribes say-generated speech", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "pppi-stt-"));
-		wavPath = join(dir, "input.wav");
-		execFileSync("say", ["-o", wavPath, "--data-format=LEI16@16000", phrase]);
-
+	it(`transcribes ${gen}-generated speech`, async () => {
 		const stt = Stt.create();
-		const wav = decodeWav(readFileSync(wavPath));
+		const wav = decodeWav(await speak(phrase));
 		const text = await stt.transcribe(wav);
 		await stt.dispose();
-		rmSync(dir, { recursive: true, force: true });
 
 		console.log(`transcript: "${text}"`);
 		const normalized = text.toLowerCase().replace(/[^a-z ]/g, "");
@@ -35,13 +28,9 @@ describe.skipIf(!supported || !modelStatus.ready)("stt (real model)", () => {
 		}
 	}, 120_000);
 
-	it("streams partials for say-generated speech and finalizes the same phrase", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "pppi-stt-stream-"));
-		const wavPath = join(dir, "input.wav");
-		execFileSync("say", ["-o", wavPath, "--data-format=LEI16@16000", phrase]);
-
+	it(`streams partials for ${gen}-generated speech and finalizes the same phrase`, async () => {
 		const stt = Stt.create();
-		const pcm = toMono16k(decodeWav(readFileSync(wavPath)));
+		const pcm = toMono16k(decodeWav(await speak(phrase)));
 		const partials: Array<{ committed: string; tentative: string }> = [];
 		let sawLiveText = false;
 
@@ -58,7 +47,6 @@ describe.skipIf(!supported || !modelStatus.ready)("stt (real model)", () => {
 		const finalText = await utt.finalize();
 		utt.dispose();
 		await stt.dispose();
-		rmSync(dir, { recursive: true, force: true });
 
 		console.log(`stream partials: ${partials.length}, final: "${finalText.trim()}"`);
 		const normalized = finalText.toLowerCase().replace(/[^a-z ]/g, "");

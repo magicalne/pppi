@@ -20,11 +20,13 @@ if (!modelPath) {
 }
 
 const session = await ort.InferenceSession.create(modelPath);
-let state = new ort.Tensor("float32", new Float32Array(2 * 128), [2, 1, 128]);
+let state: ort.Tensor = new ort.Tensor("float32", new Float32Array(2 * 128), [2, 1, 128]);
 const sr = new ort.Tensor("int64", BigInt64Array.from([16000n]), []);
 
 const out = process.stdout;
-const send = (msg: Record<string, unknown>): void => out.write(`${JSON.stringify(msg)}\n`);
+const send = (msg: Record<string, unknown>): void => {
+	out.write(`${JSON.stringify(msg)}\n`);
+};
 
 send({ type: "ready" });
 
@@ -47,7 +49,7 @@ rl.on("line", (line) => {
 			.run({ input, state, sr })
 			.then((res) => {
 				state = res.stateN as ort.Tensor;
-				send({ id: msg.id, prob: res.output.data[0] ?? 0 });
+				send({ id: msg.id, prob: res.output?.data[0] ?? 0 });
 			})
 			.catch(() => send({ id: msg.id, prob: 0 }));
 	}

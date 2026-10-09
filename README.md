@@ -46,28 +46,38 @@ ever hold.
 
 ## Voice is a first citizen
 
-Speech is transcribed **locally on the Mac** with the same stack and the same
-recommended models as [pi-transcribe](https://github.com/earendil-works/pi-transcribe)
+Speech is transcribed **locally on the gateway host (macOS or Linux)** with the
+same stack and the same recommended models as
+[pi-transcribe](https://github.com/earendil-works/pi-transcribe)
 (`transcribe.cpp` + `parakeet-unified-en-0.6b`, rank 1 in its catalog). Your
 voice never leaves the machine, and there is no cloud STT bill. Text input
 exists as a fallback, but the big round button is the point.
+
+One command fetches every local model the voice stack wants (Linux and macOS):
+
+```bash
+bun run setup:voice            # STT (parakeet GGUF) + TTS (piper) into ~/.pppi/models/
+sudo apt install espeak-ng     # Linux: the always-works fallback voice (brew install espeak on macOS)
+```
 
 ### Interactive mode (hands-free)
 
 Tap the mic once and just talk. The gateway runs silero VAD (in its own
 process) for turn-taking, streams your speech through parakeet's
 **buffered streaming mode** so live captions appear while you speak, and
-answers **out loud** through local TTS — kokoro-82M (q8 ONNX) when its model
-is cached, else macOS `say`. Talk over the agent and it stops instantly
-(barge-in with echo-aware thresholds); say "stop" and the same thing happens
-without becoming a chat turn. Fenced code is never spoken — the voice says
-"code is on the screen" and the full answer stays in the bubble.
+answers **out loud** through local TTS. Talk over the agent and it stops
+instantly (barge-in with echo-aware thresholds); say "stop" and the same thing
+happens without becoming a chat turn. Fenced code is never spoken — the voice
+says "code is on the screen" and the full answer stays in the bubble.
 
-- TTS provider is pluggable: `PPPI_TTS_PROVIDER=kokoro|macos-say|auto`,
-  model dir via `PPPI_TTS_MODEL` (layout: `config.json`, `onnx/
-  model_quantized.onnx`, `voices/af_heart.bin`). Download:
-  `huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX --include
-  "onnx/model_quantized.onnx" "voices/af_heart.bin" "config.json" "tokenizer*"`
+- TTS provider is pluggable: `PPPI_TTS_PROVIDER=kokoro|piper|espeak-ng|macos-say|auto`.
+  `auto` picks the first ready of: **piper** (a sherpa-onnx vits model — the
+  solid CPU default; ~0.18 realtime factor even on an old Xeon), **kokoro**
+  (82M q8 ONNX, the best voice; slower on CPU), then the always-available
+  platform voice — macOS `say`, espeak-ng elsewhere (`--tts=kokoro` for
+  `setup:voice`, or lay out any model dir and point `PPPI_TTS_MODEL` at it).
+  Both resolvers search `PPPI_TTS_MODEL` → `~/.pppi/models/tts/` → the
+  HuggingFace cache, so `setup:voice` needs zero env vars.
 - Timing knobs live in `packages/gateway/src/vad.ts` (`DEFAULT_TIMINGS`).
 - Magic words never become turns: `stop` (also `cancel`, `quiet`) cuts
   playback and aborts the agent; `repeat` (also `say that again`) re-speaks
@@ -245,8 +255,9 @@ once with `bun run install:ext` (copies it to `~/.pi/agent/extensions/pppi/`):
 
 ```bash
 bun run typecheck       # strict TS across TS packages
-bun run test            # 19+ tests incl. real STT (skips without a model/mic)
+bun run test            # 98 tests incl. real STT/barge-in (skip without models/speech gen)
 bun run build:web
+bun run setup:voice     # download the local voice models (~/.pppi/models)
 
 # android (JDK 17 + Android SDK required)
 cd apps/android
@@ -264,8 +275,11 @@ apps/android/e2e/run.sh
 # the gateway's parakeet transcript.
 ```
 
-The STT test speaks with the macOS `say` CLI and transcribes it back with the
-parakeet model — the full voice path, minus your mouth.
+The STT tests synthesize speech locally (piper model, macOS `say`, or
+espeak-ng — best available) and transcribe it back with the parakeet model —
+the full voice path, minus your mouth. The barge-in E2Es drive real VAD + STT
++ TTS end to end, including through the spawned audio-service child, on macOS
+and Linux; they skip when the models or a speech generator are missing.
 
 ## Status
 

@@ -5,7 +5,8 @@
 // Model resolution order:
 //   1. $PPPI_STT_MODEL (explicit gguf path)
 //   2. pi-transcribe's configured model (~/.pi/agent/pi-transcribe.json)
-//   3. pi-transcribe's recommended model in the HuggingFace cache
+//   3. ~/.pppi/models/stt/*.gguf (where `bun run setup:voice` downloads it)
+//   4. pi-transcribe's recommended model in the HuggingFace cache
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -34,6 +35,18 @@ export function resolveSttModel(): SttStatus {
 		// fall through
 	}
 
+	// setup-voice layout: any .gguf under ~/.pppi/models/stt/
+	try {
+		const modelDir = join(homedir(), ".pppi", "models", "stt");
+		if (existsSync(modelDir)) {
+			for (const f of readdirSync(modelDir)) {
+				if (f.endsWith(".gguf")) return { ready: true, modelPath: join(modelDir, f), modelId: f };
+			}
+		}
+	} catch {
+		// fall through
+	}
+
 	const hfCache = join(homedir(), ".cache", "huggingface", "hub", RECOMMENDED_REPO_DIR, "snapshots");
 	try {
 		for (const snap of readdirSync(hfCache)) {
@@ -46,7 +59,7 @@ export function resolveSttModel(): SttStatus {
 
 	return {
 		ready: false,
-		reason: `no local STT model found. Run /transcribe once in pi (pi-transcribe) to download the recommended model (${RECOMMENDED_FILE}), or set PPPI_STT_MODEL=/path/to/model.gguf`,
+		reason: `no local STT model found. Run \`bun run setup:voice\` (downloads ${RECOMMENDED_FILE} to ~/.pppi/models/stt), or /transcribe once in pi (pi-transcribe), or set PPPI_STT_MODEL=/path/to/model.gguf`,
 	};
 }
 

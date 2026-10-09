@@ -10,19 +10,20 @@
 // is playing (the server knows playback state, which is why VAD lives here
 // and not on the client).
 
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
+import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 export const VAD_WINDOW_SAMPLES = 512; // 32 ms @ 16 kHz
 
 export class SileroVad {
-	private proc: ChildProcessWithoutNullStreams;
+	private proc: ChildProcessByStdio<Writable, Readable, null>;
 	private nextId = 1;
 	private pending = new Map<number, { resolve: (p: number) => void; reject: (e: Error) => void }>();
 
-	private constructor(proc: ChildProcessWithoutNullStreams) {
+	private constructor(proc: ChildProcessByStdio<Writable, Readable, null>) {
 		this.proc = proc;
 		const rl = createInterface({ input: proc.stdout, terminal: false });
 		rl.on("line", (line) => {
@@ -51,7 +52,7 @@ export class SileroVad {
 		const entry = join(dirname(fileURLToPath(import.meta.url)), "vadProcess.ts");
 		const proc = spawn(process.execPath, [entry, path], {
 			stdio: ["pipe", "pipe", "inherit"],
-		}) as ChildProcessWithoutNullStreams;
+		});
 		const vad = new SileroVad(proc);
 		// one probe round-trip so callers fail fast if the model didn't load
 		await new Promise<void>((resolve, reject) => {
