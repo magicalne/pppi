@@ -9,6 +9,10 @@ class FakePppiConnection : PppiConnection {
 	lateinit var onConnection: (Boolean) -> Unit
 	val chats = mutableListOf<String>()
 	val uploads = mutableListOf<ByteArray>()
+	val modelSets = mutableListOf<Pair<String, String>>()
+	val thinkingLevels = mutableListOf<String>()
+	val historyLoads = mutableListOf<Pair<Long, Int>>()
+	var listModelsCount = 0
 	var closed = false
 	var connectCount = 0
 	val disconnectNever = AtomicBoolean(false)
@@ -27,6 +31,22 @@ class FakePppiConnection : PppiConnection {
 	}
 
 	override fun abort() = Unit
+
+	override fun setModel(provider: String, modelId: String) {
+		modelSets.add(provider to modelId)
+	}
+
+	override fun setThinkingLevel(level: String) {
+		thinkingLevels.add(level)
+	}
+
+	override fun listModels() {
+		listModelsCount++
+	}
+
+	override fun loadHistory(before: Long, limit: Int) {
+		historyLoads.add(before to limit)
+	}
 
 	override fun uploadVoice(wav: ByteArray, onDone: (Boolean, String) -> Unit) {
 		uploads.add(wav)

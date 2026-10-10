@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
 	EspeakNgProvider,
 	MacosSayProvider,
+	SherpaPiperProvider,
 	findExecutable,
 	resolvePiperModel,
 	resolveTtsProvider,
@@ -150,4 +152,104 @@ describe.skipIf(!espeakBin)("espeak-ng synthesis (real binary)", () => {
 		expect((provider.status as { voice?: string }).voice).toBe("en-gb");
 		for await (const _chunk of provider.synthesize("ok")) break; // one chunk proves synth works
 	}, 30_000);
+});
+
+// --------------------------------------------------- engine health + abort seam
+
+describe("tts engine health honesty", () => {
+	let garbageDir: string;
+
+	beforeAll(() => {
+		// a complete-looking vits dir whose model is garbage: resolution
+		// succeeds, the native engine load throws
+		garbageDir = mkdtempSync(join(tmpdir(), "pppi-tts-garbage-"));
+		mkdirSync(join(garbageDir, "espeak-ng-data"), { recursive: true });
+		writeFileSync(join(garbageDir, "model.onnx"), "garbage");
+		writeFileSync(join(garbageDir, "tokens.txt"), "garbage");
+	});
+
+	afterAll(() => {
+		rmSync(garbageDir, { recursive: true, force: true });
+	});
+
+	it("piper: a resolved-but-unloadable model flips status and does not cache the failure", async () => {
+		const provider = new SherpaPiperProvider([garbageDir]);
+		expect(provider.status.ready).toBe(true); // resolution is fine…
+
+		await expect(provider.warm()).rejects.toThrow();
+		expect(provider.status.ready).toBe(false); // …but health reports the LOAD
+		expect(provider.status).toMatchObject({ reason: expect.stringContaining("failed") });
+
+		// the failed load is not sticky — a later attempt retries (and reports
+		// the fresh failure again rather than a cached verdict)
+		await expect(provider.warm()).rejects.toThrow();
+		expect(provider.status.ready).toBe(false);
+	}, 30_000);
+
+	it("synthesis of an unresolved provider still throws the resolution reason", async () => {
+		const provider = new SherpaPiperProvider(["/definitely/not/here"]);
+		expect(provider.status.ready).toBe(false);
+		await expect(async () => {
+			for await (const _chunk of provider.synthesize("hello")) break;
+		}).rejects.toThrow(/piper needs|no complete/);
+	});
+});
+
+describe.skipIf(!espeakBin)("espeak-ng abort (real binary)", () => {
+	it("kills the espeak-ng child when the signal fires — no orphan, prompt AbortError", async () => {
+		const provider = new EspeakNgProvider();
+		// minutes of audio if left alone: the whole point is that abort does not wait
+		const longText = "this sentence keeps going and going. ".repeat(1500);
+		const ac = new AbortController();
+		const iter = provider.synthesize(longText, ac.signal)[Symbol.asyncIterator]();
+		const started = Date.now();
+
+		const first = iter.next(); // spawns espeak-ng
+		await new Promise((r) => setTimeout(r, 100)); // let it get going
+		ac.abort();
+
+		await expect(first).rejects.toMatchObject({ name: "AbortError" });
+		expect(Date.now() - started).toBeLessThan(5_000); // minutes of synthesis, cut in seconds
+
+		// no orphaned espeak-ng process keeps synthesizing in the background
+		await new Promise((r) => setTimeout(r, 300));
+		let orphan = false;
+		try {
+			execFileSync("pgrep", ["-f", "espeak-ng"]);
+			orphan = true;
+		} catch {
+			// pgrep exits 1 when nothing matches — that is the good case
+		}
+		expect(orphan).toBe(false);
+	}, 30_000);
+});
+
+describe("invalid PPPI_TTS_PROVIDER", () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it("warns and falls back to auto instead of silently meaning auto", () => {
+		const home = mkdtempSync(join(tmpdir(), "pppi-tts-invalid-"));
+		try {
+			vi.stubEnv("HOME", home); // isolate from the real ~/.pppi and HF cache
+			vi.stubEnv("PPPI_TTS_MODEL", "");
+			vi.stubEnv("PPPI_TTS_PROVIDER", "kokoro-typo"); // not a known provider
+			const err = vi.spyOn(console, "error").mockImplementation(() => {});
+			try {
+				const provider = resolveTtsProvider({ piperDirs: [], kokoroDirs: [] });
+				// auto semantics: platform fallback, NOT the typo silently kept as auto
+				expect(["macos-say", "espeak-ng"]).toContain(provider.id);
+				expect(err).toHaveBeenCalledTimes(1);
+				expect(err.mock.calls[0]?.[0]).toContain("kokoro-typo");
+				// warn once: a second resolution stays quiet
+				resolveTtsProvider({ piperDirs: [], kokoroDirs: [] });
+				expect(err).toHaveBeenCalledTimes(1);
+			} finally {
+				err.mockRestore();
+			}
+		} finally {
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
 });

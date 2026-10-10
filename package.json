@@ -17,7 +17,7 @@
 		"test": "vitest run",
 		"setup:voice": "node scripts/setup-voice.mjs",
 		"test:omni": "vitest run packages/omni",
-		"test:server": "vitest run apps/server",
+		"test:server": "vitest run packages/gateway/test/server.test.ts",
 		"install:ext": "bun run packages/pi-ext/install.mjs"
 	},
 	"dependencies": {

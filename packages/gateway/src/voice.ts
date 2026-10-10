@@ -37,18 +37,37 @@ export interface VoiceStt {
 
 export type VoiceTtsStatus = { ready: true; provider: string; voice: string } | { ready: false; reason: string };
 
-/** TTS port: one prose chunk → async stream of PCM16 buffers at their native rate. */
+/** TTS port: one prose chunk → async stream of PCM16 buffers at their native rate.
+ *  `signal` (when given) must cancel generation promptly: barge-in cannot wait
+ *  for a synthesis that runs minutes — providers kill/check it and throw AbortError. */
 export interface VoiceTts {
 	readonly status: VoiceTtsStatus;
-	synthesize(text: string): AsyncIterable<{ pcm: Buffer; rate: number }>;
+	synthesize(text: string, signal?: AbortSignal): AsyncIterable<{ pcm: Buffer; rate: number }>;
+}
+
+/** The error name for "synthesis cancelled by barge-in/new turn" — a clean stop, not a failure. */
+export const ABORT_ERROR_NAME = "AbortError";
+
+export function abortError(reason = "aborted"): Error {
+	const err = new Error(reason);
+	err.name = ABORT_ERROR_NAME;
+	return err;
+}
+
+export function isAbortError(err: unknown): boolean {
+	const e = err as { name?: string; code?: string } | null;
+	return e?.name === ABORT_ERROR_NAME || e?.code === "ABORT_ERR";
 }
 
 /** Adapter: the shared Stt (streaming when the model supports it, batch otherwise) as the VoiceStt port. */
 export function voiceStt(stt: Stt): VoiceStt {
 	return {
-		status: stt.status.ready
-			? { ready: true, modelId: stt.status.modelId }
-			: { ready: false, reason: stt.status.reason },
+		// live: a model that fails to LOAD after boot must flip the status the
+		// ready line and voice_hello_ok report — not keep claiming resolution
+		get status(): VoiceSttStatus {
+			const s = stt.status;
+			return s.ready ? { ready: true, modelId: s.modelId } : { ready: false, reason: s.reason };
+		},
 		openUtterance: () => stt.openUtterance(),
 		transcribeBuffer: (pcm) => stt.transcribe({ sampleRate: 16000, channels: 1, samples: pcm }),
 	};
@@ -113,6 +132,8 @@ type Capture = {
 	fed: number;
 	stream: UtteranceStream | null;
 	opening: Promise<void>;
+	/** dropped (blip/close) — the opening continuation must dispose, never feed */
+	discarded: boolean;
 	/** endpointed, inside the grace window — may still merge or dispatch */
 	pending: boolean;
 	/** streaming feedback: prefix already dispatched for this utterance */
@@ -226,11 +247,32 @@ export class VoiceSession {
 		clearTimeout(this.helloTimer);
 		clearTimeout(this.idleTimer);
 		clearInterval(this.telemetryTimer);
-		this.capture?.stream?.dispose();
+		if (this.capture) this.discardCapture(this.capture);
 		this.capture = null;
 		this.speaker?.abort();
 		if (this.authed) this.deps.onClosed();
 		this.deps.onGone?.(reason);
+	}
+
+	/**
+	 * Release a capture's utterance stream — including one whose openUtterance
+	 * is still pending: the stream that materializes later must be disposed
+	 * too, or it holds the shared STT model slot forever (every later
+	 * utterance deadlocks behind it).
+	 */
+	private discardCapture(cap: Capture): void {
+		cap.discarded = true;
+		const stream = cap.stream;
+		cap.stream = null; // pending feed rejections see the mismatch and stay quiet
+		stream?.dispose();
+		void cap.opening.then(
+			() => {
+				const late = cap.stream;
+				cap.stream = null;
+				late?.dispose();
+			},
+			() => {},
+		);
 	}
 
 	private async onMessage(data: Buffer, isBinary: boolean): Promise<void> {
@@ -412,6 +454,7 @@ export class VoiceSession {
 			fed: 0,
 			stream: null,
 			opening: Promise.resolve(),
+			discarded: false,
 			pending: false,
 			sentPrefix: null,
 			prefixCancelled: false,
@@ -422,10 +465,17 @@ export class VoiceSession {
 		this.capture = cap;
 		cap.opening = (async () => {
 			try {
-				cap.stream = await this.deps.stt.openUtterance();
+				const stream = await this.deps.stt.openUtterance();
+				if (cap.discarded) {
+					// dropped while opening (blip/close) — release the model slot, feed nothing
+					stream?.dispose();
+					return;
+				}
+				cap.stream = stream;
 				this.pumpStream(cap); // pre-roll that buffered while the stream opened
 			} catch (err) {
-				this.send({ type: "voice_error", message: `stt: ${String((err as Error).message ?? err)}` });
+				if (!cap.discarded)
+					this.send({ type: "voice_error", message: `stt: ${String((err as Error).message ?? err)}` });
 			}
 		})();
 		this.send({ type: "vad", speaking: true });
@@ -436,7 +486,7 @@ export class VoiceSession {
 		if (!this.capture) return;
 		if (totalMs === 0) {
 			// blip — discard, back to idle
-			this.capture.stream?.dispose();
+			this.discardCapture(this.capture);
 			this.capture = null;
 			this.deps.vad.reset?.(); // a cough shouldn't poison the next turn
 			return;
@@ -601,6 +651,11 @@ export class VoiceSession {
 		this.speaker?.assistantFinal(id, text);
 	}
 
+	/** Speak a finished text as its own turn (repeat magic word, delegated peer reply). */
+	speakWhole(text: string, id?: string): void {
+		this.speaker?.speakWhole(text, id);
+	}
+
 	/** Directly feed VAD probabilities (tests; bypasses the model). */
 	feedProbability(prob: number, advanceMs = 32): void {
 		this.audioMs += advanceMs;
@@ -637,12 +692,23 @@ export class Speaker {
 	private draining = false;
 	private aborted = false;
 	private everStarted = false;
-	private interruptedSent = false;
 	private lastStartedId: string | null = null;
+	/** monotonic count of interrupted ends ever emitted — drain snapshots it per item */
+	private interruptedEnds = 0;
+	/**
+	 * Turn generation. abort() and beginTurn() bump it; drain() snapshots it at
+	 * dequeue and before every chunk. A drain from a turn the user cut off must
+	 * drop its stale audio SILENTLY — checking the mutable `aborted` flag
+	 * missed the abort-before-first-audio + new-turn race, and the orphan drain
+	 * then emitted clean tts_start/audio/tts_end for text nobody asked to hear.
+	 */
+	private epoch = 0;
 	/** per assistant message: how much of its final text has been enqueued */
 	private chunker = { id: "", pending: "", emitted: "" };
 	/** syntheses currently producing audio (streaming feedback reads this) */
 	private liveSynths = 0;
+	/** abort controller of the synthesis currently running in drain() */
+	private currentSynth: AbortController | null = null;
 
 	/** True while a synthesis is producing audio for the client. */
 	get playing(): boolean {
@@ -660,8 +726,11 @@ export class Speaker {
 	beginTurn(): void {
 		this.aborted = false;
 		this.everStarted = false;
-		this.interruptedSent = false;
 		this.lastStartedId = null;
+		this.epoch++; // anything still draining from the previous turn is stale
+		this.queue.length = 0; // …including sentences still queued: a drain would
+		// dequeue them under the NEW epoch and speak them before this turn's reply
+		this.currentSynth?.abort(); // …and not worth finishing either
 	}
 
 	assistantDelta(id: string, delta: string): void {
@@ -669,8 +738,13 @@ export class Speaker {
 		this.chunker.pending += delta;
 		// an unclosed code fence isn't prose yet — hold until it closes
 		if ((this.chunker.pending.match(/```/g)?.length ?? 0) % 2 === 1) return;
-		const { sentences, rest } = takeSentences(this.chunker.pending);
+		const before = this.chunker.pending;
+		const { sentences, rest } = takeSentences(before);
 		this.chunker.pending = rest;
+		// track how much of the RAW buffer was consumed — sentences come back
+		// trimmed, so concatenating them loses the whitespace between them and
+		// assistantFinal's prefix guard would fail once ≥2 sentences shipped
+		this.chunker.emitted += before.slice(0, before.length - rest.length);
 		for (const s of sentences) this.enqueue(s);
 	}
 
@@ -681,19 +755,18 @@ export class Speaker {
 		if (tail) this.enqueue(tail);
 	}
 
-	/** Magic-word replay: speak a finished text as its own turn (repeat). */
-	speakWhole(text: string): void {
+	/** Speak a finished text as its own turn (repeat magic word, delegated peer reply). */
+	speakWhole(text: string, id?: string): void {
 		this.beginTurn();
 		const prose = speakProse(text);
 		if (!prose) return;
-		this.queue.push({ id: randomUUID(), text: prose });
+		this.queue.push({ id: id ?? randomUUID(), text: prose });
 		void this.drain();
 	}
 
 	private enqueue(text: string): void {
 		const prose = speakProse(text);
 		if (!prose) return;
-		this.chunker.emitted += text;
 		this.queue.push({ id: randomUUID(), text: prose });
 		void this.drain();
 	}
@@ -702,13 +775,22 @@ export class Speaker {
 		if (this.draining) return;
 		this.draining = true;
 		try {
-			while (this.queue.length > 0 && !this.aborted) {
+			while (this.queue.length > 0) {
 				const item = this.queue.shift()!;
+				const turn = this.epoch; // snapshot: stale items drop silently
+				const seenInterrupts = this.interruptedEnds; // …and never double-close a stream
+				const ac = new AbortController();
+				this.currentSynth = ac;
 				let started = false;
+				let cut = false; // aborted or went stale mid-synthesis
 				this.liveSynths++;
 				try {
-					for await (const chunk of this.tts.synthesize(item.text)) {
-						if (this.aborted) break;
+					for await (const chunk of this.tts.synthesize(item.text, ac.signal)) {
+						if (this.epoch !== turn) {
+							cut = true;
+							ac.abort(); // stop generating audio nobody will hear
+							break;
+						}
 						if (!started) {
 							this.lastStartedId = item.id;
 							this.sendEvent({ type: "tts_start", id: item.id, rate: chunk.rate });
@@ -719,12 +801,32 @@ export class Speaker {
 						}
 						this.sendBinary(chunk.pcm);
 					}
+				} catch (err) {
+					if (!isAbortError(err)) {
+						// one failed synthesis must not nuke the queue — report
+						// this item, close its stream if it opened one, keep speaking
+						if (this.epoch === turn) {
+							this.sendEvent({ type: "voice_error", message: `tts: ${String((err as Error).message ?? err)}` });
+							if (started) this.sendEvent({ type: "tts_end", id: item.id });
+							// a failure on the LAST item otherwise strands the client
+							// in its prior speaking/thinking state — hand the mic back
+							if (this.queue.length === 0) this.sendEvent({ type: "voice_state", state: "listening" });
+						}
+						continue;
+					}
+					cut = true; // provider honoured the abort seam — a clean stop
 				} finally {
 					this.liveSynths--;
+					if (this.currentSynth === ac) this.currentSynth = null;
 				}
-				if (started && this.aborted) {
-					this.emitInterruptedEnd();
-				} else if (started) {
+				if (this.epoch !== turn || cut) {
+					// stale/cut: if this item already opened a stream on the client,
+					// close it as interrupted — unless abort() (or an older drain)
+					// already emitted one since this item began
+					if (started && this.interruptedEnds === seenInterrupts) this.emitInterruptedEnd(item.id);
+					continue;
+				}
+				if (started) {
 					this.sendEvent({ type: "tts_end", id: item.id });
 					if (this.queue.length === 0) this.sendEvent({ type: "voice_state", state: "listening" });
 				}
@@ -733,26 +835,31 @@ export class Speaker {
 			this.sendEvent({ type: "voice_error", message: `tts: ${String((err as Error).message ?? err)}` });
 			this.sendEvent({ type: "voice_state", state: "listening" });
 		} finally {
-			this.queue.length = 0;
 			this.draining = false;
 		}
 	}
 
 	/**
-	 * Barge-in: drop the queue, stop the in-flight synthesis between chunks,
+	 * Barge-in: drop the queue, abort the in-flight synthesis (providers kill
+	 * the engine via the abort seam — between chunks alone was never enough),
 	 * and tell the client its playback was cut — whether the cut lands
 	 * mid-synthesis or between sentences (one interrupted tts_end, ever).
 	 */
 	abort(): void {
 		if (this.aborted) return;
 		this.aborted = true;
+		this.epoch++;
 		this.queue.length = 0;
-		if (this.everStarted && !this.interruptedSent) this.emitInterruptedEnd();
+		this.currentSynth?.abort();
+		// cut the client's playback loose immediately when audio already went
+		// out this turn (a drain may still be mid-synthesis — it will see the
+		// interrupt count and stay quiet instead of double-ending)
+		if (this.everStarted) this.emitInterruptedEnd();
 	}
 
-	private emitInterruptedEnd(): void {
-		this.interruptedSent = true;
-		this.sendEvent({ type: "tts_end", id: this.lastStartedId ?? "", interrupted: true });
+	private emitInterruptedEnd(id?: string): void {
+		this.interruptedEnds++;
+		this.sendEvent({ type: "tts_end", id: id ?? this.lastStartedId ?? "", interrupted: true });
 		this.sendEvent({ type: "voice_state", state: "listening" });
 		this.onPlayback?.(false);
 	}
@@ -781,10 +888,16 @@ export function speakProse(text: string): string {
 	let t = text.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_m, code: string) =>
 		String(code).trim() ? " Code is on the screen. " : " ",
 	);
+	// a trailing unclosed fence is code too (the reply was cut off mid-block)
+	t = t.replace(/```[^\n]*\n?([\s\S]*)$/, (_m, code: string) =>
+		String(code).trim() ? " Code is on the screen. " : " ",
+	);
 	t = t.replace(/`([^`\n]+)`/g, "$1");
 	t = t.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1");
 	t = t.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
-	t = t.replace(/https?:\/\/\S+/g, " a link ");
+	// bare parens never belong to the URL: "(see https://x.dev/a)" must keep its ")".
+	// Parenthesised URL characters only match when a "(" opens inside the URL.
+	t = t.replace(/https?:\/\/[^\s()]+(?:\([^\s()]*\)[^\s()]*)*/g, " a link ");
 	t = t.replace(/^#{1,6}\s+/gm, "");
 	t = t.replace(/^\s*[-*+]\s+/gm, "");
 	t = t.replace(/^\s*>\s?/gm, "");

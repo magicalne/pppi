@@ -1,9 +1,93 @@
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RpcAgentDriver, toolLabel } from "../src/agent.ts";
 
 const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "mock-agent.mjs");
+
+/**
+ * A minimal `pi --mode rpc` child for framing tests: answers the handshake
+ * commands, then writes `extraLine` to stdout — split at byte `splitAt` into
+ * two writes `gapMs` apart, so the driver's pipe reads land mid-line and
+ * (given a multibyte `extraLine`) mid-codepoint. The split is emitted on the
+ * LAST handshake command (`set_auto_compaction`): nothing else the driver
+ * sends may interleave stdout into the gap and merge with the halves.
+ */
+function framingChild(extraLine: string, splitAt: number, gapMs: number): string[] {
+	const script = `
+		const answers = {
+			get_state: { model: { provider: "mock", id: "mock-1", name: "Mock 1", reasoning: false, contextWindow: 10000 }, thinkingLevel: "off", isStreaming: false, sessionName: "omni", sessionId: "framing" },
+			get_available_thinking_levels: { levels: ["off"] },
+			get_session_stats: { contextUsage: { tokens: 1, contextWindow: 10000, percent: 0.01 } },
+			set_auto_compaction: {},
+		};
+		let buf = "";
+		let sent = false;
+		process.stdin.on("data", (chunk) => {
+			buf += chunk;
+			for (;;) {
+				const nl = buf.indexOf("\\n");
+				if (nl === -1) break;
+				const line = buf.slice(0, nl);
+				buf = buf.slice(nl + 1);
+				if (!line.trim()) continue;
+				const cmd = JSON.parse(line);
+				const data = answers[cmd.type] ?? {};
+				process.stdout.write(JSON.stringify({ id: cmd.id, type: "response", command: cmd.type, success: true, data }) + "\\n");
+				if (cmd.type === "set_auto_compaction" && !sent) {
+					sent = true;
+					const bytes = Buffer.from(${JSON.stringify(extraLine)}, "utf8");
+					const at = Math.max(1, Math.min(${splitAt}, bytes.length));
+					process.stdout.write(bytes.subarray(0, at));
+					setTimeout(() => process.stdout.write(bytes.subarray(at)), ${gapMs});
+				}
+			}
+		});
+		process.stdin.on("end", () => process.exit(0));
+	`;
+	return [process.execPath, "-e", script];
+}
+
+/**
+ * A child whose FIRST get_state writes half a JSON response line (no newline)
+ * and exits — the restarted instance sees the marker file and answers the
+ * handshake normally. Exercises the dead-child line fragment the driver's
+ * buffer must not carry across a restart.
+ */
+function halfLineChild(): { command: string[]; marker: string } {
+	const marker = join(tmpdir(), `pppi-halfline-${process.pid}-${Date.now()}`);
+	const script = `
+		const fs = require("node:fs");
+		const answers = {
+			get_state: { model: { provider: "mock", id: "mock-1", name: "Mock 1", reasoning: false, contextWindow: 10000 }, thinkingLevel: "off", isStreaming: false, sessionName: "omni", sessionId: "halfline" },
+			get_available_thinking_levels: { levels: ["off"] },
+			get_session_stats: { contextUsage: { tokens: 1, contextWindow: 10000, percent: 0.01 } },
+			set_auto_compaction: {},
+		};
+		let buf = "";
+		process.stdin.on("data", (chunk) => {
+			buf += chunk;
+			for (;;) {
+				const nl = buf.indexOf("\\n");
+				if (nl === -1) break;
+				const line = buf.slice(0, nl);
+				buf = buf.slice(nl + 1);
+				if (!line.trim()) continue;
+				const cmd = JSON.parse(line);
+				if (cmd.type === "get_state" && !fs.existsSync(${JSON.stringify(marker)})) {
+					fs.writeFileSync(${JSON.stringify(marker)}, "1");
+					process.stdout.write('{"id":"' + cmd.id + '","type":"respo'); // half a line
+					process.exit(3); // die with the fragment in the pipe
+				}
+				const data = answers[cmd.type] ?? {};
+				process.stdout.write(JSON.stringify({ id: cmd.id, type: "response", command: cmd.type, success: true, data }) + "\\n");
+			}
+		});
+	`;
+	return { command: [process.execPath, "-e", script], marker };
+}
 
 describe("rpc agent driver", () => {
 	let driver: RpcAgentDriver;
@@ -17,6 +101,9 @@ describe("rpc agent driver", () => {
 		driver.dispose();
 		process.env.MOCK_DIALOG = undefined;
 		process.env.PPPI_DIALOG_HOLD_MS = undefined;
+		process.env.MOCK_DIE_ON = undefined;
+		process.env.MOCK_STALL_ON = undefined;
+		process.env.PPPI_RESTART_BASE_MS = undefined;
 	});
 
 	it("reports agent info once started", async () => {
@@ -204,5 +291,106 @@ describe("rpc agent driver", () => {
 		expect(states).toContain("thinking");
 		expect(states).toContain("streaming");
 		expect(states.at(-1)).toBe("idle");
+	});
+
+	it("reassembles rpc lines whose utf-8 bytes split mid-codepoint across pipe reads", async () => {
+		const line = `${JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "X好Y" } })}\n`;
+		const bytes = Buffer.from(line, "utf8");
+		const x = bytes.indexOf("X");
+		const cut = x + 2; // after the lead byte of 好 (a 3-byte code point)
+		expect(x).toBeGreaterThan(-1);
+		expect(bytes[cut]! & 0xc0).toBe(0x80); // the second read starts mid-codepoint
+
+		driver = new RpcAgentDriver({ command: framingChild(line, cut, 40), cwd: "/tmp" });
+		const deltas: string[] = [];
+		driver.on("assistant-delta", (_id, d) => deltas.push(d));
+		driver.start();
+		await new Promise<void>((r, j) => {
+			const timer = setTimeout(() => j(new Error("never ready")), 10_000);
+			driver.once("ready", () => {
+				clearTimeout(timer);
+				r();
+			});
+		});
+		await new Promise<void>((r, j) => {
+			const timer = setTimeout(() => j(new Error("split line never reassembled into a delta")), 10_000);
+			driver.once("assistant-delta", () => {
+				clearTimeout(timer);
+				r();
+			});
+		});
+		expect(deltas.join("")).toBe("X好Y");
+	});
+
+	it("logs and drops an unparseable rpc line, then keeps parsing", async () => {
+		const noise = "*** stdout noise: definitely not a json line\n";
+		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			driver = new RpcAgentDriver({ command: framingChild(noise, noise.length, 0), cwd: "/tmp" });
+			driver.start();
+			await new Promise<void>((r, j) => {
+				const timer = setTimeout(() => j(new Error("never ready")), 10_000);
+				driver.once("ready", () => {
+					clearTimeout(timer);
+					r();
+				});
+			});
+			// ready fires before the child has processed the trigger command
+			await vi.waitFor(() =>
+				expect(warn).toHaveBeenCalledWith(expect.stringContaining("dropping unparseable rpc line")),
+			);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("rejects in-flight requests when the agent dies instead of hanging to the timeout", async () => {
+		process.env.MOCK_DIE_ON = "prompt"; // the mock SIGKILLs itself mid-prompt
+		driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
+		driver.on("error", () => {}); // exit/restart noise
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		const started = Date.now();
+		await expect(driver.prompt("hang this")).rejects.toThrow(/agent exited/);
+		expect(Date.now() - started).toBeLessThan(5_000); // rejected on death, not at the 30s timeout
+	});
+
+	it("rejects in-flight requests on dispose", async () => {
+		process.env.MOCK_STALL_ON = "prompt"; // the mock reads the prompt and never answers
+		driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
+		driver.on("error", () => {});
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		const rejection = expect(driver.prompt("hang this")).rejects.toThrow(/agent exited/);
+		driver.dispose();
+		await rejection;
+	});
+
+	it("retries the spawn with backoff when the binary is missing", async () => {
+		process.env.PPPI_RESTART_BASE_MS = "30"; // fast backoff for the test
+		driver = new RpcAgentDriver({ command: ["/nonexistent/pi-binary-xyz"], cwd: "/tmp" });
+		const errors: string[] = [];
+		driver.on("error", (m) => errors.push(m));
+		driver.start();
+		await new Promise((r) => setTimeout(r, 600));
+		// ENOENT never emits exit — pre-fix this stayed at zero relaunches
+		expect(errors.filter((m) => /failed to spawn/.test(m)).length).toBeGreaterThanOrEqual(3);
+		expect(driver.state).toBe("starting");
+	});
+
+	it("discards a half-written line from a dead child so the restarted child's handshake lands", async () => {
+		process.env.PPPI_RESTART_BASE_MS = "30";
+		const { command, marker } = halfLineChild();
+		try {
+			driver = new RpcAgentDriver({ command, cwd: "/tmp" });
+			driver.on("error", () => {}); // exit/restart noise
+			driver.start();
+			// pre-fix: the fragment prefixed the new child's first response
+			// line, get_state never parsed, and the handshake timed out
+			await new Promise<void>((r) => driver.once("ready", r));
+			expect(driver.state).toBe("idle");
+		} finally {
+			rmSync(marker, { force: true });
+		}
 	});
 });

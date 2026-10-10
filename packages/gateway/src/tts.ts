@@ -19,7 +19,7 @@ import { constants, accessSync, existsSync, mkdtempSync, readFileSync, readdirSy
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { VoiceTtsStatus } from "@pppi/protocol";
-import type { VoiceTts } from "./voice.ts";
+import { type VoiceTts, abortError } from "./voice.ts";
 import { decodeWav } from "./wav.ts";
 
 export type TtsChunk = { pcm: Buffer; rate: number };
@@ -28,6 +28,11 @@ export interface TtsProvider extends VoiceTts {
 	readonly id: "kokoro" | "piper" | "espeak-ng" | "macos-say";
 	/** Eager-load any engine so the first reply speaks instantly. Resolves false on failure. */
 	warm(): Promise<boolean>;
+}
+
+/** Providers check this between segments/chunks so an aborted synthesis stops promptly. */
+function throwIfAborted(signal?: AbortSignal): void {
+	if (signal?.aborted) throw abortError("tts synthesis aborted");
 }
 
 /** Where setup-voice.mjs / manual downloads land. */
@@ -52,8 +57,20 @@ export function findExecutable(name: string): string | null {
 
 // ---------------------------------------------------------------- provider resolution
 
+const KNOWN_TTS_PROVIDERS = new Set(["auto", "kokoro", "piper", "espeak-ng", "macos-say"]);
+const warnedTtsProviders = new Set<string>();
+
 export function resolveTtsProvider(opts: { piperDirs?: string[]; kokoroDirs?: string[] } = {}): TtsProvider {
-	const explicit = (process.env.PPPI_TTS_PROVIDER ?? "auto").toLowerCase();
+	const raw = (process.env.PPPI_TTS_PROVIDER ?? "auto").trim().toLowerCase();
+	let explicit = raw;
+	if (raw !== "auto" && raw !== "" && !KNOWN_TTS_PROVIDERS.has(raw)) {
+		// an invalid value silently meaning "auto" hides the typo forever — say it once
+		if (!warnedTtsProviders.has(raw)) {
+			warnedTtsProviders.add(raw);
+			console.error(`[tts] unknown PPPI_TTS_PROVIDER "${process.env.PPPI_TTS_PROVIDER}" — falling back to auto`);
+		}
+		explicit = "auto";
+	}
 	if (explicit === "macos-say") return new MacosSayProvider();
 	if (explicit === "espeak-ng") return new EspeakNgProvider();
 	if (explicit === "piper") return new SherpaPiperProvider(opts.piperDirs);
@@ -134,36 +151,71 @@ function piperSearchDirs(): string[] {
 export class SherpaPiperProvider implements TtsProvider {
 	readonly id = "piper" as const;
 	private loading: Promise<PiperEngine | null> | null = null;
-	readonly status: VoiceTtsStatus;
+	/** model resolution (boot-time truth) — a load failure flips `status`, never this */
+	private readonly resolvedStatus: VoiceTtsStatus;
+	private currentStatus: VoiceTtsStatus;
 	private readonly model: { dir: string; onnx: string } | { reason: string };
 
 	constructor(searchDirs?: string[]) {
 		this.model = resolvePiperModel(searchDirs);
-		this.status =
+		this.resolvedStatus =
 			"reason" in this.model
 				? ({ ready: false, reason: this.model.reason } as VoiceTtsStatus)
 				: ({ ready: true, provider: this.id, voice: this.model.onnx.split("/").pop() ?? "piper" } as VoiceTtsStatus);
+		this.currentStatus = this.resolvedStatus;
 	}
 
-	synthesize(text: string): AsyncIterable<TtsChunk> {
+	/** Live health: resolution at boot; flips to the load failure (and back on a successful retry). */
+	get status(): VoiceTtsStatus {
+		return this.currentStatus;
+	}
+
+	synthesize(text: string, signal?: AbortSignal): AsyncIterable<TtsChunk> {
 		const provider = this;
 		return (async function* () {
-			if (!provider.status.ready) throw new Error(provider.status.reason);
-			provider.loading ??= loadPiperEngine(provider.model);
-			const engine = await provider.loading;
+			if (!provider.resolvedStatus.ready) throw new Error(provider.resolvedStatus.reason);
+			const engine = await provider.ensureEngine();
 			if (!engine) throw new Error("sherpa-onnx piper engine failed to load");
 			// same text-level streaming as kokoro: short first phrase, larger rest
 			for (const seg of streamSegments(text)) {
+				throwIfAborted(signal);
 				const { samples, rate } = await engine.generate(seg);
-				yield* floatPcmChunks(samples, rate);
+				yield* floatPcmChunks(samples, rate, 50, signal);
 			}
 		})();
 	}
 
 	async warm(): Promise<boolean> {
-		if (!this.status.ready) return false;
-		this.loading ??= loadPiperEngine(this.model);
-		return (await this.loading) !== null;
+		if (!this.resolvedStatus.ready) return false;
+		return (await this.ensureEngine()) !== null;
+	}
+
+	/**
+	 * Load (or reuse) the engine. A FAILED load clears the latch — a sticky
+	 * cached failure would keep status lying and never let a retry recover —
+	 * and flips status to the failure so warm/boot report the truth.
+	 */
+	private ensureEngine(): Promise<PiperEngine | null> {
+		this.loading ??= (async () => {
+			try {
+				const engine = await loadPiperEngine(this.model);
+				if (!engine) {
+					this.currentStatus = { ready: false, reason: "sherpa-onnx addon unavailable" };
+					this.loading = null; // retry later — the addon may appear after an install
+				} else {
+					this.currentStatus = this.resolvedStatus; // healthy (again)
+				}
+				return engine;
+			} catch (err) {
+				this.currentStatus = {
+					ready: false,
+					reason: `engine failed to load: ${String((err as Error)?.message ?? err)}`,
+				};
+				this.loading = null; // next attempt retries the load
+				throw err;
+			}
+		})();
+		return this.loading;
 	}
 }
 
@@ -256,23 +308,29 @@ function findOnnx(dir: string): string {
 export class KokoroProvider implements TtsProvider {
 	readonly id = "kokoro" as const;
 	private loading: Promise<KokoroEngine | null> | null = null;
-	readonly status: VoiceTtsStatus;
+	private readonly resolvedStatus: VoiceTtsStatus;
+	private currentStatus: VoiceTtsStatus;
 	private readonly model: { dir: string } | { reason: string };
 
 	constructor(searchDirs?: string[]) {
 		this.model = resolveKokoroModel(searchDirs);
-		this.status = (() =>
+		this.resolvedStatus = (() =>
 			"reason" in this.model
 				? ({ ready: false, reason: this.model.reason } as VoiceTtsStatus)
 				: ({ ready: true, provider: this.id, voice: DEFAULT_KOKORO_VOICE } as VoiceTtsStatus))();
+		this.currentStatus = this.resolvedStatus;
 	}
 
-	synthesize(text: string): AsyncIterable<TtsChunk> {
+	/** Live health: resolution at boot; flips to the load failure (and back on a successful retry). */
+	get status(): VoiceTtsStatus {
+		return this.currentStatus;
+	}
+
+	synthesize(text: string, signal?: AbortSignal): AsyncIterable<TtsChunk> {
 		const provider = this;
 		return (async function* () {
-			if (!provider.status.ready) throw new Error(provider.status.reason);
-			provider.loading ??= loadKokoroEngine(provider.model);
-			const engine = await provider.loading;
+			if (!provider.resolvedStatus.ready) throw new Error(provider.resolvedStatus.reason);
+			const engine = await provider.ensureEngine();
 			if (!engine) throw new Error("kokoro engine failed to load");
 			// kokoro-js has no native streaming, so stream at the TEXT level:
 			// generate a short first phrase for fast first-audio, then larger
@@ -280,13 +338,15 @@ export class KokoroProvider implements TtsProvider {
 			// sentence generation (old behavior) with PPPI_TTS_STREAM=0.
 			if (provider.streaming) {
 				for (const seg of streamSegments(text)) {
+					throwIfAborted(signal);
 					const { audio, rate } = await engine.generate(seg, DEFAULT_KOKORO_VOICE);
-					yield* floatPcmChunks(audio, rate);
+					yield* floatPcmChunks(audio, rate, 50, signal);
 				}
 				return;
 			}
+			throwIfAborted(signal);
 			const { audio, rate } = await engine.generate(text, DEFAULT_KOKORO_VOICE);
-			yield* floatPcmChunks(audio, rate);
+			yield* floatPcmChunks(audio, rate, 50, signal);
 		})();
 	}
 
@@ -294,9 +354,32 @@ export class KokoroProvider implements TtsProvider {
 	private readonly streaming = (process.env.PPPI_TTS_STREAM ?? "1") !== "0";
 
 	async warm(): Promise<boolean> {
-		if (!this.status.ready) return false;
-		this.loading ??= loadKokoroEngine(this.model);
-		return (await this.loading) !== null;
+		if (!this.resolvedStatus.ready) return false;
+		return (await this.ensureEngine()) !== null;
+	}
+
+	/** Load (or reuse) the engine; a failed load clears the latch and flips status (see SherpaPiperProvider). */
+	private ensureEngine(): Promise<KokoroEngine | null> {
+		this.loading ??= (async () => {
+			try {
+				const engine = await loadKokoroEngine(this.model);
+				if (!engine) {
+					this.currentStatus = { ready: false, reason: "kokoro-js dependency unavailable" };
+					this.loading = null;
+				} else {
+					this.currentStatus = this.resolvedStatus;
+				}
+				return engine;
+			} catch (err) {
+				this.currentStatus = {
+					ready: false,
+					reason: `engine failed to load: ${String((err as Error)?.message ?? err)}`,
+				};
+				this.loading = null; // next attempt retries the load
+				throw err;
+			}
+		})();
+		return this.loading;
 	}
 }
 
@@ -378,10 +461,16 @@ function wordCount(s: string): number {
 }
 
 /** Float32 (-1..1) → s16le Buffer chunks of ~50 ms. */
-export function floatPcmChunks(samples: Float32Array, rate: number, chunkMs = 50): AsyncIterable<TtsChunk> {
+export function floatPcmChunks(
+	samples: Float32Array,
+	rate: number,
+	chunkMs = 50,
+	signal?: AbortSignal,
+): AsyncIterable<TtsChunk> {
 	const perChunk = Math.max(1, Math.floor((rate * chunkMs) / 1000));
 	return (async function* () {
 		for (let off = 0; off < samples.length; off += perChunk) {
+			throwIfAborted(signal);
 			const n = Math.min(perChunk, samples.length - off);
 			const buf = Buffer.alloc(n * 2);
 			for (let i = 0; i < n; i++) {
@@ -414,19 +503,30 @@ export class MacosSayProvider implements TtsProvider {
 		return this.status.ready;
 	}
 
-	async *synthesize(text: string): AsyncIterable<TtsChunk> {
+	async *synthesize(text: string, signal?: AbortSignal): AsyncIterable<TtsChunk> {
 		if (this.unavailableReason) throw new Error(this.unavailableReason);
 		const dir = mkdtempSync(join(tmpdir(), "pppi-say-"));
 		const wavPath = join(dir, "out.wav");
 		try {
 			await new Promise<void>((resolve, reject) => {
 				const proc = spawn("say", ["-v", this.voice, "--data-format=LEI16@22050", "-o", wavPath, text]);
-				proc.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`say exited ${code}`))));
-				proc.on("error", reject);
+				const onAbort = () => proc.kill("SIGKILL");
+				signal?.addEventListener("abort", onAbort, { once: true });
+				proc.on("exit", (code) => {
+					signal?.removeEventListener("abort", onAbort);
+					if (signal?.aborted) reject(abortError("say aborted"));
+					else if (code === 0) resolve();
+					else reject(new Error(`say exited ${code}`));
+				});
+				proc.on("error", (err) => {
+					signal?.removeEventListener("abort", onAbort);
+					reject(signal?.aborted ? abortError("say aborted") : err);
+				});
 			});
+			throwIfAborted(signal);
 			const wav = decodeWav(readFileSync(wavPath));
 			// wav.samples is interleaved float; `say` gives mono 16-bit at 22.05 kHz
-			yield* floatPcmChunks(wav.samples, wav.sampleRate);
+			yield* floatPcmChunks(wav.samples, wav.sampleRate, 50, signal);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -479,21 +579,33 @@ export class EspeakNgProvider implements TtsProvider {
 		return this.status.ready;
 	}
 
-	async *synthesize(text: string): AsyncIterable<TtsChunk> {
+	async *synthesize(text: string, signal?: AbortSignal): AsyncIterable<TtsChunk> {
 		if (this.unavailableReason) throw new Error(this.unavailableReason);
-		// --stdout streams a 22.05 kHz mono WAV without touching the disk
+		// --stdout streams a 22.05 kHz mono WAV without touching the disk.
+		// The whole WAV is buffered before the first chunk (espeak writes a
+		// RIFF header with a size it only knows at the end), so an aborted
+		// synthesis MUST kill the child — waiting it out blocked the next turn.
 		const wavBuf = await new Promise<Buffer>((resolve, reject) => {
 			const chunks: Buffer[] = [];
 			const proc = spawn(this.bin!, ["-v", this.voice, "-s", String(this.wpm), "--stdout", text]);
+			const onAbort = () => proc.kill("SIGKILL");
+			signal?.addEventListener("abort", onAbort, { once: true });
 			proc.stdout.on("data", (c: Buffer) => chunks.push(c));
 			// `close`, not `exit`: exit can fire before stdout has flushed its
 			// final bytes, which would truncate the WAV
-			proc.on("close", (code) =>
-				code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error(`espeak-ng exited ${code}`)),
-			);
-			proc.on("error", reject);
+			proc.on("close", (code) => {
+				signal?.removeEventListener("abort", onAbort);
+				if (signal?.aborted) reject(abortError("espeak-ng aborted"));
+				else if (code === 0) resolve(Buffer.concat(chunks));
+				else reject(new Error(`espeak-ng exited ${code}`));
+			});
+			proc.on("error", (err) => {
+				signal?.removeEventListener("abort", onAbort);
+				reject(signal?.aborted ? abortError("espeak-ng aborted") : err);
+			});
 		});
+		throwIfAborted(signal);
 		const wav = decodeWav(wavBuf);
-		yield* floatPcmChunks(wav.samples, wav.sampleRate);
+		yield* floatPcmChunks(wav.samples, wav.sampleRate, 50, signal);
 	}
 }

@@ -112,6 +112,8 @@ export default function App() {
 	const [agentState, setAgentState] = useState<AgentState>("starting");
 	const [toolLabel, setToolLabel] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
+	/** another screen is in an interactive voice session (gateway broadcasts voice_active) */
+	const [voiceElsewhere, setVoiceElsewhere] = useState(false);
 	const [target, setTarget] = useState<Target>(OMNI);
 	const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
 	const [modelList, setModelList] = useState<ModelInfo[]>([]);
@@ -333,6 +335,9 @@ export default function App() {
 				showNotice(evt.message);
 				loadingOlderRef.current = false; // a failed history page must not wedge the guard
 				break;
+			case "voice_active":
+				setVoiceElsewhere(evt.active);
+				break;
 		}
 	}
 
@@ -535,7 +540,7 @@ export default function App() {
 				{visible.length === 0 && (
 					<div className="empty">
 						<p className="hi">Hey, it's {targetName}.</p>
-						<p className="hint">Tell me what to build, ask about a repo, or hold the mic and just talk.</p>
+						<p className="hint">Tell me what to build, ask about a repo, or tap the mic and just talk.</p>
 					</div>
 				)}
 				{visible.map((m) => {
@@ -593,6 +598,9 @@ export default function App() {
 
 			{notice && <div className="toast">{notice}</div>}
 			{voice.state.notice && <div className="toast">{voice.state.notice}</div>}
+			{voiceElsewhere && !voice.on && !voice.state.boot && (
+				<div className="toast info">voice active on another screen</div>
+			)}
 
 			<div className="composer-wrap">
 				{voice.on && <VoiceWave inLevel={voice.levels.mic} outLevel={voice.levels.out} phase={voice.state.phase} />}
@@ -712,6 +720,12 @@ function ConnectionsDrawer(props: {
 		e.currentTarget.reset();
 	};
 
+	// two gateways can share a machine name (same hostname, different hosts/ports) —
+	// suffix those rows with the connection's host:port so they're told apart
+	const dupNames = new Set(
+		props.connections.filter((c) => props.connections.some((o) => o !== c && o.name === c.name)).map((c) => c.name),
+	);
+
 	return (
 		<div className="conn-drawer" onClick={(e) => e.stopPropagation()}>
 			<h3>Machines</h3>
@@ -721,7 +735,7 @@ function ConnectionsDrawer(props: {
 				<div key={c.id} className={`crow ${c.id === props.activeId ? "active" : ""}`}>
 					<button type="button" className="crow-main" onClick={() => props.onSwitch(c.id)}>
 						<span className="cdot" style={{ background: c.color ?? "var(--dim)" }} />
-						<span className="cname">{c.name}</span>
+						<span className="cname">{dupNames.has(c.name) ? `${c.name} · ${hostOf(c.url)}` : c.name}</span>
 						{c.id === props.activeId && <span className="ctag">{props.connected ? "online" : "offline"}</span>}
 					</button>
 					<button type="button" className="crow-x" aria-label={`Remove ${c.name}`} onClick={() => props.onRemove(c.id)}>
@@ -817,8 +831,8 @@ function Pairing({ onDone, notice }: { onDone: (p: Pairing) => void; notice: str
    └──────┘        └──────┘        └──────┘`}</pre>
 			<h1 style={{ fontSize: 22 }}>Pair with your omni agent</h1>
 			<p style={{ color: "var(--dim)" }}>
-				Paste the pair link from <code style={{ fontFamily: "var(--font-mono)" }}>/pppi_pair</code> — or run the pppi server
-				on your Mac and enter its URL + token. Secrets never leave the machine.
+				Paste the pair link from <code style={{ fontFamily: "var(--font-mono)" }}>/pppi_pair</code> — or run the pppi
+				server on your Mac and enter its URL + token. Secrets never leave the machine.
 			</p>
 			<form
 				style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 22 }}

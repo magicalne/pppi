@@ -21,7 +21,7 @@ import { spawn } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { Writable } from "node:stream";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 const argv = process.argv.slice(2);
@@ -62,7 +62,7 @@ if (ttsSet.has("kokoro")) {
 		["tokenizer.json", 1024],
 		["tokenizer_config.json", 16],
 		["onnx/model_quantized.onnx", 80 * 1024 * 1024],
-		["voices/af_heart.bin", 200 * 1024],
+		["voices/af_Heart.bin", 200 * 1024],
 	]) {
 		jobs.push({
 			url: `${base}/${rel}`,
@@ -117,38 +117,76 @@ async function download(job) {
 		console.log(`  ✓ ${job.note} (already present)`);
 		return;
 	}
+	// the HF CDN routinely drops large downloads mid-stream; the .part file
+	// resumes, so retry in-process before surfacing the failure
+	let err;
+	for (let attempt = 1; attempt <= 8; attempt++) {
+		try {
+			await attemptDownload(job);
+			return;
+		} catch (e) {
+			err = e;
+			if (/^HTTP 4/.test(e.message)) break; // permanent — retrying can't help
+			if (attempt < 8) await new Promise((r) => setTimeout(r, 1000 * attempt));
+		}
+	}
+	throw err;
+}
+
+async function attemptDownload(job) {
 	const partial = `${job.dest}.part`;
 	const startAt = existsSync(partial) ? statSync(partial).size : 0;
-	const res = await fetch(job.url, startAt > 0 ? { headers: { range: `bytes=${startAt}-` } } : {});
-	if (!res.ok && res.status !== 206) throw new Error(`HTTP ${res.status}`);
-	const resumed = res.status === 206;
-	if (startAt > 0 && !resumed) throw new Error("server ignored the resume range; delete the .part and retry");
-	const total = (resumed ? startAt : 0) + Number(res.headers.get("content-length") ?? 0);
-	let seen = resumed ? startAt : 0;
-	const timer = setInterval(() => {
-		const of = total ? ` / ${(total / 1e6).toFixed(0)} MB` : "";
-		process.stdout.write(`\r  ↓ ${job.note}: ${(seen / 1e6).toFixed(1)} MB${of}   `);
-	}, 1000);
+	// stall watchdog: the CDN sometimes leaves a connection open but sends
+	// nothing — abort it so the retry loop can resume from the .part
+	const abort = new AbortController();
+	let lastByteAt = Date.now();
+	const watchdog = setInterval(() => {
+		if (Date.now() - lastByteAt > 90_000) abort.abort(new Error("download stalled (no bytes for 90s)"));
+	}, 5000);
+	// the watchdog must die on EVERY exit path: a fetch rejection, HTTP error,
+	// or ignored range returns before the pipeline's finally — one live
+	// interval per retry would keep the process running forever
 	try {
-		if (!res.body) throw new Error("empty response body");
-		// pipeline (not manual write/drain waits): a disk-full or permission
-		// error on the file stream must reject this job, never stall it or
-		// escape as an unhandled `error` event
-		const counter = new Writable({
-			write(chunk, _enc, cb) {
-				seen += chunk.byteLength;
-				cb();
-			},
+		const res = await fetch(job.url, {
+			...(startAt > 0 ? { headers: { range: `bytes=${startAt}-` } } : {}),
+			signal: abort.signal,
 		});
-		await pipeline(res.body, counter, createWriteStream(partial, { flags: resumed ? "a" : "w" }));
+		if (!res.ok && res.status !== 206) throw new Error(`HTTP ${res.status}`);
+		const resumed = res.status === 206;
+		if (startAt > 0 && !resumed) throw new Error("server ignored the resume range; delete the .part and retry");
+		const total = (resumed ? startAt : 0) + Number(res.headers.get("content-length") ?? 0);
+		let seen = resumed ? startAt : 0;
+		lastByteAt = Date.now();
+		const timer = setInterval(() => {
+			const of = total ? ` / ${(total / 1e6).toFixed(0)} MB` : "";
+			process.stdout.write(`\r  ↓ ${job.note}: ${(seen / 1e6).toFixed(1)} MB${of}   `);
+		}, 1000);
+		try {
+			if (!res.body) throw new Error("empty response body");
+			// pipeline (not manual write/drain waits): a disk-full or permission
+			// error on the file stream must reject this job, never stall it or
+			// escape as an unhandled `error` event. the counter is a Transform —
+			// pipeline only accepts a Writable as the LAST stream, and a plain
+			// Writable in the middle throws at call time.
+			const counter = new Transform({
+				transform(chunk, _enc, cb) {
+					seen += chunk.byteLength;
+					lastByteAt = Date.now();
+					cb(null, chunk);
+				},
+			});
+			await pipeline(res.body, counter, createWriteStream(partial, { flags: "a" }), { signal: abort.signal });
+		} finally {
+			clearInterval(timer);
+		}
+		const size = statSync(partial).size;
+		if (size < job.minBytes) {
+			unlinkSync(partial);
+			throw new Error(`download too small (${size} bytes) — deleted, retry`);
+		}
+		renameSync(partial, job.dest);
+		process.stdout.write(`\r  ✓ ${job.note} (${(size / 1e6).toFixed(1)} MB)            \n`);
 	} finally {
-		clearInterval(timer);
+		clearInterval(watchdog);
 	}
-	const size = statSync(partial).size;
-	if (size < job.minBytes) {
-		unlinkSync(partial);
-		throw new Error(`download too small (${size} bytes) — deleted, retry`);
-	}
-	renameSync(partial, job.dest);
-	process.stdout.write(`\r  ✓ ${job.note} (${(size / 1e6).toFixed(1)} MB)            \n`);
 }

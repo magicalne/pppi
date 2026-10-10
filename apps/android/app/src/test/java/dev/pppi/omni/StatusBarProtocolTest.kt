@@ -104,6 +104,31 @@ class StatusBarProtocolTest {
 		assertEquals(0f, brainAlpha("unknown"))
 	}
 
+	@Test fun `parses voice_active events`() {
+		val on = protocolJson.decodeFromString(
+			ServerEvent.serializer(),
+			"""{"type":"voice_active","active":true}""",
+		) as ServerEvent.VoiceActive
+		assertTrue(on.active)
+		val off = protocolJson.decodeFromString(
+			ServerEvent.serializer(),
+			"""{"type":"voice_active","active":false}""",
+		) as ServerEvent.VoiceActive
+		assertFalse(off.active)
+	}
+
+	@Test fun `abort keeps the optional target`() {
+		// no target → omitted on the wire, mirroring TS `target?: Target`
+		assertEquals(
+			"""{"type":"abort"}""",
+			protocolJson.encodeToString(ClientMessage.serializer(), ClientMessage.Abort()),
+		)
+		assertEquals(
+			"""{"type":"abort","target":"sess-1"}""",
+			protocolJson.encodeToString(ClientMessage.serializer(), ClientMessage.Abort(target = "sess-1")),
+		)
+	}
+
 	@Test fun `token and context formatting matches the web bar`() {
 		assertEquals("—", formatTokens(null))
 		assertEquals("512", formatTokens(512))
@@ -112,6 +137,9 @@ class StatusBarProtocolTest {
 		assertEquals("1m", formatTokens(1_000_000))
 		assertEquals("1.2m", formatTokens(1_200_000))
 		assertEquals("22.5k/1m (2%)", formatContext(22506, 1_000_000, 2.2506))
+		// the web bar Math.round()s the percent — 84.5 must become 85, not 84
+		assertEquals("22.5k/1m (84%)", formatContext(22506, 1_000_000, 84.4))
+		assertEquals("22.5k/1m (85%)", formatContext(22506, 1_000_000, 84.5))
 		assertEquals("—/1m (—%)", formatContext(null, 1_000_000, null))
 		assertEquals("—", formatContext(100, 0, 5.0))
 	}

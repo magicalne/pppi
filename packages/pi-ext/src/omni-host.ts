@@ -45,6 +45,24 @@ type GatewayModule = {
 type BootConfig = { token: string; port: number; host: string; cwd: string; streamingFeedback?: boolean };
 type Notify = (message: string, level?: "info" | "error") => void;
 
+/**
+ * Test seams for the boot/stop plumbing — the same pattern as the gateway's
+ * `enabledModelsProvider`: hosts pass nothing (real imports/probes/fs run);
+ * tests inject fakes instead of spawning pi, the audio child, or a socket.
+ */
+export type HostDeps = {
+	/** Gateway module factory (default: import @pppi/gateway). */
+	loadGatewayModule?: () => Promise<GatewayModule>;
+	/** Probe for an already-running gateway (default: /api/health fetch). */
+	gatewayUp?: (port: number) => Promise<boolean>;
+	/** Voice child command (default: bun / node --experimental-strip-types discovery). */
+	audioCommand?: () => string[] | null;
+	/** The marked omni session (default: $PPPI_DIR/omni.json). */
+	readOmniMark?: () => { sessionId?: string } | null;
+	/** File-existence check (default: fs existsSync). */
+	exists?: (path: string) => boolean;
+};
+
 let running: { stop: () => Promise<void> } | null = null;
 
 async function gatewayUp(port: number): Promise<boolean> {
@@ -129,10 +147,10 @@ export async function stopOmniHost(): Promise<void> {
 	}
 }
 
-async function prepareBoot(notify: Notify): Promise<{ gw: GatewayModule; cfg: BootConfig } | null> {
+async function prepareBoot(notify: Notify, deps: HostDeps): Promise<{ gw: GatewayModule; cfg: BootConfig } | null> {
 	let gw: GatewayModule;
 	try {
-		gw = await loadGatewayModule();
+		gw = await (deps.loadGatewayModule ?? loadGatewayModule)();
 	} catch {
 		notify(
 			`@pppi/gateway is not installed for this extension (${join(extDir(), "node_modules")}).\nRun: bun run install:ext`,
@@ -141,7 +159,7 @@ async function prepareBoot(notify: Notify): Promise<{ gw: GatewayModule; cfg: Bo
 		return null;
 	}
 	const cfg = gw.loadOrCreateConfig();
-	if (await gatewayUp(cfg.port)) {
+	if (await (deps.gatewayUp ?? gatewayUp)(cfg.port)) {
 		const pair = loadPair();
 		notify(`A pppi gateway is already running:\n${pair ? pairUrl(pair) : `http://localhost:${cfg.port}`}`);
 		return null;
@@ -158,13 +176,15 @@ async function bootGateway(
 	start: (() => void) | null,
 	label: string,
 	stopExtra?: () => void | Promise<void>,
+	deps: HostDeps = {},
 ): Promise<void> {
 	const webDist = join(extDir(), "web");
-	const audio = audioCommand();
+	const exists = deps.exists ?? existsSync;
+	const audio = (deps.audioCommand ?? audioCommand)();
 	const gateway = await gw.createGateway({
 		token: cfg.token,
 		agent: agent as never,
-		webDist: existsSync(webDist) ? webDist : undefined,
+		webDist: exists(webDist) ? webDist : undefined,
 		audioService: audio ? { command: audio } : undefined,
 		streamingFeedback: cfg.streamingFeedback === true,
 	});
@@ -172,6 +192,9 @@ async function bootGateway(
 		await gateway.listen(cfg.port, cfg.host);
 	} catch (err) {
 		notify(`Could not bind port ${cfg.port}: ${(err as Error).message}`, "error");
+		// createGateway already spawned the audio child and started the mailbox
+		// poll — close so a failed bind leaks neither.
+		await gateway.close();
 		return;
 	}
 	start?.();
@@ -197,7 +220,7 @@ async function bootGateway(
 		`pppi gateway is up (while this session lives) — ${label}`,
 		pair ? `\n${pairUrl(pair)}` : "",
 		`\n${versionStamp()}`,
-		`\nvoice: ${audio ? "audio service child" : "unavailable (bun not found)"}`,
+		`\nvoice: ${audio ? "audio service child" : "unavailable (no bun/node runner found)"}`,
 		"\nvoice logs: ~/.pppi/logs/audio.log",
 		"stop: /pppi_gateway stop — or end this session.",
 	];
@@ -205,20 +228,20 @@ async function bootGateway(
 }
 
 /** `/pppi_gateway`: launcher form — the omni conversation is an RPC child. */
-export async function startOmniHost(notify: Notify): Promise<void> {
+export async function startOmniHost(notify: Notify, deps: HostDeps = {}): Promise<void> {
 	if (running) {
 		notify("The pppi gateway is already running from this session — it stops when the session ends.");
 		return;
 	}
-	const prepared = await prepareBoot(notify);
+	const prepared = await prepareBoot(notify, deps);
 	if (!prepared) return;
 	const { gw, cfg } = prepared;
 
-	const omniSession = readOmniMark()?.sessionId ?? "pppi-omni";
+	const omniSession = (deps.readOmniMark ?? readOmniMark)()?.sessionId ?? "pppi-omni";
 	// respawn pi through the same binary that hosts us (PATH may not have `pi`)
 	const piEntry = process.argv[1] ?? "pi";
 	const omniEntry = join(extDir(), "node_modules", "@pppi", "omni", "src", "extension.ts");
-	if (!existsSync(omniEntry)) {
+	if (!(deps.exists ?? existsSync)(omniEntry)) {
 		notify(`The omni tools copy is missing (${omniEntry}).\nRun: bun run install:ext`, "error");
 		return;
 	}
@@ -228,16 +251,32 @@ export async function startOmniHost(notify: Notify): Promise<void> {
 	});
 
 	mkdirSync(cfg.cwd, { recursive: true });
-	await bootGateway(notify, gw, cfg, driver, () => driver.start(), `omni session: ${omniSession}`);
+	await bootGateway(
+		notify,
+		gw,
+		cfg,
+		driver,
+		() => driver.start(),
+		`omni session: ${omniSession}`,
+		// gateway.close() alone never stops the rpc child — pi exits only on the
+		// stdin EOF dispose() sends — so stop/session_shutdown must dispose too
+		() => driver.dispose(),
+		deps,
+	);
 }
 
 /** `/pppi_gateway here`: THIS session is the omni — clients mirror what the TUI shows. */
-export async function startOmniHere(pi: unknown, ctx: ExtensionCommandContext, notify: Notify): Promise<void> {
+export async function startOmniHere(
+	pi: unknown,
+	ctx: ExtensionCommandContext,
+	notify: Notify,
+	deps: HostDeps = {},
+): Promise<void> {
 	if (running) {
 		notify("The pppi gateway is already running from this session — it stops when the session ends.");
 		return;
 	}
-	const prepared = await prepareBoot(notify);
+	const prepared = await prepareBoot(notify, deps);
 	if (!prepared) return;
 	const { gw, cfg } = prepared;
 
@@ -253,16 +292,17 @@ export async function startOmniHere(pi: unknown, ctx: ExtensionCommandContext, n
 
 	const driver = new ExtensionAgentDriver(pi, ctx.cwd);
 	driver.setCtx(ctx as never);
-	driver.attach();
 	driver.refreshStatus();
-
+	// attach only once the gateway actually listens — a failed bind must not
+	// leave this session's bus subscribed (stop/shutdown disposes below)
 	await bootGateway(
 		notify,
 		gw,
 		cfg,
 		driver,
-		null,
+		() => driver.attach(),
 		`this session as omni (${driver.info.sessionId?.slice(0, 8) ?? ""}…)`,
 		() => driver.dispose(),
+		deps,
 	);
 }

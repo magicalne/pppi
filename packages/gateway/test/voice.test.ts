@@ -320,6 +320,86 @@ describe("interactive voice websocket", () => {
 		voice.close();
 	});
 
+	it("disposes an utterance stream that opens after a blip discarded its capture", async () => {
+		// regression: a blip landing while openUtterance was still pending
+		// dropped the capture without disposing the stream that materialized
+		// later — it held the shared STT model slot forever, deadlocking every
+		// later utterance behind it
+		const made: Array<{ disposed: boolean }> = [];
+		const stt: VoiceStt = {
+			status: { ready: true, modelId: "slow-open" },
+			openUtterance: () =>
+				new Promise((resolve) => {
+					// slow enough that the blip's discard happens while opening
+					setTimeout(() => {
+						const rec = { disposed: false };
+						made.push(rec);
+						resolve({
+							feed: async () => ({ committed: "", tentative: "" }),
+							finalize: async () => "the real question",
+							dispose: () => {
+								rec.disposed = true;
+							},
+						});
+					}, 150);
+				}),
+			transcribeBuffer: () => Promise.resolve("the real question"),
+		};
+		const v = await boot(stt);
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+		const finals = collectFinals(voice);
+
+		// the blip: opens an utterance (slowly), gets discarded before it opens
+		say(voice, v, "speech", 2);
+		await sayPaced(voice, v, "silence", 25);
+		await new Promise((r) => setTimeout(r, 300)); // let the orphan stream materialize
+		expect(made.length).toBeGreaterThanOrEqual(1);
+		expect(made[0]!.disposed).toBe(true); // the orphan was disposed, not leaked
+		expect(finals.length).toBe(0); // …and the blip still dispatched nothing
+
+		// the next (real) utterance works: its stream is served and disposed too
+		say(voice, v, "speech", 8);
+		await sayPaced(voice, v, "silence", 40);
+		await until(() => finals.length === 1);
+		expect(finals[0]).toBe("the real question");
+		await new Promise((r) => setTimeout(r, 300));
+		expect(made.every((m) => m.disposed)).toBe(true);
+		voice.close();
+	});
+
+	it("disposes a still-opening stream when the client closes mid-utterance", async () => {
+		const made: Array<{ disposed: boolean }> = [];
+		const stt: VoiceStt = {
+			status: { ready: true, modelId: "slow-open" },
+			openUtterance: () =>
+				new Promise((resolve) => {
+					setTimeout(() => {
+						const rec = { disposed: false };
+						made.push(rec);
+						resolve({
+							feed: async () => ({ committed: "", tentative: "" }),
+							finalize: async () => "anything",
+							dispose: () => {
+								rec.disposed = true;
+							},
+						});
+					}, 150);
+				}),
+			transcribeBuffer: () => Promise.resolve("anything"),
+		};
+		const v = await boot(stt);
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+
+		say(voice, v, "speech", 8); // real utterance starts; openUtterance pending
+		voice.close(); // client hangs up before the stream opens
+		await new Promise((r) => voice.on("close", r));
+		await new Promise((r) => setTimeout(r, 300)); // the stream materializes after the close
+		expect(made.length).toBeGreaterThanOrEqual(1);
+		expect(made.every((m) => m.disposed)).toBe(true);
+	});
+
 	it("merges speech that resumes inside the grace window into one turn", async () => {
 		const v = await boot(fakeStt("one single thought"));
 		const voice = await voiceConnect(token);
@@ -954,14 +1034,18 @@ describe("interactive voice websocket", () => {
 		await sayPaced(voice, v, "speech", 8);
 		await sayPaced(voice, v, "silence", 30);
 		const start = await nextEvent(voice, "tts_start");
+		// arm the waiter BEFORE the barge-in audio: the interrupted end fires the
+		// instant the detector cuts in — a listener armed after the stream lands
+		// would miss it (one interrupted tts_end, ever)
+		const end = nextEvent(voice, "tts_end");
 
 		// user talks over the agent: bargeInMs (250ms) of sustained speech must
 		// cut the synthesis off — ~1s of speech is ample
 		await sayPaced(voice, v, "speech", 10);
 
-		const end = await nextEvent(voice, "tts_end");
-		expect(end.id).toBe(start.id);
-		expect(end.interrupted).toBe(true);
+		const cut = await end;
+		expect(cut.id).toBe(start.id);
+		expect(cut.interrupted).toBe(true);
 		expect(aborted).toBeGreaterThanOrEqual(1);
 		await new Promise((r) => setTimeout(r, 200));
 		voice.close();
@@ -981,13 +1065,15 @@ describe("interactive voice websocket", () => {
 		await sayPaced(voice, v, "speech", 8);
 		await sayPaced(voice, v, "silence", 30);
 		await nextEvent(voice, "tts_start");
+		// arm the waiter BEFORE the speech (see the barge-in test above)
+		const end = nextEvent(voice, "tts_end");
 
 		// exactly ~0.8s of speech: enough for 250ms sustain, impossible to
 		// satisfy if barge-in ever drifts back to needing whole seconds
 		await sayPaced(voice, v, "speech", 8);
 
-		const end = await nextEvent(voice, "tts_end");
-		expect(end.interrupted).toBe(true);
+		const cut = await end;
+		expect(cut.interrupted).toBe(true);
 		expect(aborted).toBeGreaterThanOrEqual(1);
 		voice.close();
 	});
