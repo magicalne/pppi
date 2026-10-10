@@ -40,8 +40,11 @@ sessions. Read README.md for the full picture.
   strip a trailing `\r`. Never use `readline` for it.
 - Android: Kotlin + Compose, single Activity, kotlinx-serialization with
   `type` discriminator mirroring packages/protocol.
-- Tests run with `bun run test` (vitest). The real-STT test uses macOS `say`
-  and skips when the model or platform is missing.
+- Tests run with `bun run test` (vitest). Real-model voice tests synthesize
+  speech via `packages/gateway/test/speech.ts` (piper → macOS `say` →
+  espeak-ng, best available) and skip when the model or a generator is
+  missing — they run on macOS and Linux. `bun run setup:voice` downloads the
+  STT/TTS models into `~/.pppi/models/`.
 
 ## Key files
 
@@ -75,11 +78,16 @@ sessions. Read README.md for the full picture.
   profile merge (keep the JSON shape in sync with
   packages/pi-ext/src/store.ts).
 - `packages/gateway/src/stt.ts` — model resolution: `PPPI_STT_MODEL` →
-  `~/.pi/agent/pi-transcribe.json` → HF-cache parakeet. `openUtterance()`
-  exposes parakeet's buffered streaming for live partials.
+  `~/.pi/agent/pi-transcribe.json` → `~/.pppi/models/stt/*.gguf`
+  (setup-voice layout) → HF-cache parakeet. `openUtterance()` exposes
+  parakeet's buffered streaming for live partials. transcribe-cpp ships
+  Linux prebuilds — same code path on both platforms.
 - `packages/gateway/src/tts.ts` — TTS providers behind `TtsProvider`
-  (kokoro first via `kokoro-js`, `macos-say` fallback;
-  `PPPI_TTS_PROVIDER=kokoro|macos-say|auto`).
+  (`PPPI_TTS_PROVIDER=kokoro|piper|espeak-ng|macos-say|auto`; auto = piper
+  → kokoro → platform fallback `say` on darwin, `espeak-ng` elsewhere;
+  resolvers search `PPPI_TTS_MODEL` → `~/.pppi/models/tts/`, kokoro also
+  the HF cache — `bun run setup:voice` populates that dir, no env vars
+  needed).
 - `packages/gateway/src/vad.ts` + `vadProcess.ts` — silero VAD in a host
   process (worker threads deadlock against kokoro's runtime) + the
   turn-taking state machine (`UtteranceDetector`, timings in

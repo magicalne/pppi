@@ -136,7 +136,7 @@ export class VoiceSession {
 	// audio path state
 	private audioMs = 0; // audio-time clock (immune to processing/wall-clock jitter)
 	private idleTimer: NodeJS.Timeout | undefined;
-	private windowBuf = new Float32Array(0); // samples awaiting a full VAD window
+	private windowBuf: Float32Array = new Float32Array(0); // samples awaiting a full VAD window
 	private vadBusy = Promise.resolve(); // serialize VAD window processing
 	private preRoll: Float32Array[] = [];
 	private preRollSamples = 0;
