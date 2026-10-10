@@ -21,10 +21,14 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 AVD="${E2E_AVD:-pppi-test}"
 PORT="${E2E_PORT:-8791}"
-ADB="${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools/adb"
-EMU="${ANDROID_HOME:-$HOME/Library/Android/sdk}/emulator/emulator"
+# caller env wins; the macOS-typical SDK and ~/android-sdk stay as fallbacks
+SDK="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+[ -d "$SDK" ] || SDK="$HOME/android-sdk"
+ANDROID_HOME="$SDK"
+ADB="$ANDROID_HOME/platform-tools/adb"
+EMU="$ANDROID_HOME/emulator/emulator"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home}"
-export JAVA_HOME ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+export JAVA_HOME ANDROID_HOME
 
  cleanup() {
   if [ "${KEEP:-0}" != "1" ]; then
@@ -34,34 +38,13 @@ export JAVA_HOME ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 }
 trap cleanup EXIT
 
-# 1. emulator ------------------------------------------------------------
-if ! "$ADB" devices | grep -q "emulator.*device"; then
-  echo "== booting emulator $AVD =="
-  nohup "$EMU" -avd "$AVD" -no-window -no-audio -gpu swiftshader_indirect \
-    -no-snapshot -no-boot-anim > /tmp/pppi-e2e-emulator.log 2>&1 &
-  EMU_PID=$!
-  for i in $(seq 1 40); do
-    [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
-    sleep 5
-  done
-fi
-"$ADB" wait-for-device
-[ "$("$ADB" shell getprop sys.boot_completed | tr -d '\r')" = "1" ] || { echo "emulator did not boot"; exit 1; }
-
-# 2. build ---------------------------------------------------------------
-if [ "${SKIP_BUILD:-0}" != "1" ]; then
-  echo "== building APK =="
-  (cd "$REPO/apps/android" && ./gradlew :app:assembleDebug -q)
-fi
-APK="$REPO/apps/android/app/build/outputs/apk/debug/app-debug.apk"
-[ -f "$APK" ] || { echo "APK missing: $APK"; exit 1; }
-
-# 3. throwaway mock gateway ----------------------------------------------
+# 1. throwaway mock gateway ----------------------------------------------
+# (first, so the gateway + mock agent boot cleanly even without a device)
 echo "== starting mock gateway on :$PORT =="
 GW_DIR="$(mktemp -d /tmp/pppi-e2e-gw.XXXXXX)"
 MOCK_REPLY="mock omni: standing by" PPPI_DIR="$GW_DIR" nohup bun run "$REPO/apps/server/src/cli.ts" \
   --host 127.0.0.1 --port "$PORT" \
-  --agent-cmd "bun $REPO/apps/server/src/mock-agent.mjs" > /tmp/pppi-e2e-gw.log 2>&1 &
+  --agent-cmd "bun $REPO/packages/gateway/test/mock-agent.mjs" > /tmp/pppi-e2e-gw.log 2>&1 &
 GW_PID=$!
 for i in $(seq 1 20); do
   curl -sf "http://127.0.0.1:$PORT/api/health" > /dev/null && break
@@ -80,6 +63,34 @@ if [ -f "$WAV" ]; then
     && echo "== server-side STT: verbatim transcript ✓" \
     || { echo "server-side STT failed: $TRANSCRIPT"; exit 1; }
 fi
+
+# 2. emulator ------------------------------------------------------------
+if ! "$ADB" devices | grep -q "emulator.*device"; then
+  [ -x "$EMU" ] || { echo "emulator binary not found: $EMU (install it or start one)"; exit 1; }
+  echo "== booting emulator $AVD =="
+  nohup "$EMU" -avd "$AVD" -no-window -no-audio -gpu swiftshader_indirect \
+    -no-snapshot -no-boot-anim > /tmp/pppi-e2e-emulator.log 2>&1 &
+  EMU_PID=$!
+  for i in $(seq 1 40); do
+    [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
+    sleep 5
+  done
+fi
+# fail fast when no emulator ever shows up — `adb wait-for-device` hangs forever
+for i in $(seq 1 12); do
+  "$ADB" devices | grep -q "emulator.*device" && break
+  sleep 5
+done
+"$ADB" devices | grep -q "emulator.*device" || { echo "no emulator device"; exit 1; }
+[ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] || { echo "emulator did not boot"; exit 1; }
+
+# 3. build ---------------------------------------------------------------
+if [ "${SKIP_BUILD:-0}" != "1" ]; then
+  echo "== building APK =="
+  (cd "$REPO/apps/android" && ./gradlew :app:assembleDebug -q)
+fi
+APK="$REPO/apps/android/app/build/outputs/apk/debug/app-debug.apk"
+[ -f "$APK" ] || { echo "APK missing: $APK"; exit 1; }
 
 # 4. drive the app -------------------------------------------------------
 echo "== running E2E driver =="
@@ -100,7 +111,7 @@ fi
 # 5. restart gateway (same PPPI_DIR -> same token) for the reconnect phase
 MOCK_REPLY="mock omni: standing by" PPPI_DIR="$GW_DIR" nohup bun run "$REPO/apps/server/src/cli.ts" \
   --host 127.0.0.1 --port "$PORT" \
-  --agent-cmd "bun $REPO/apps/server/src/mock-agent.mjs" > /dev/null 2>&1 &
+  --agent-cmd "bun $REPO/packages/gateway/test/mock-agent.mjs" > /dev/null 2>&1 &
 GW_PID=$!
 sleep 3
 

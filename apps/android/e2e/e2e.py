@@ -117,6 +117,26 @@ def type_text(s: str) -> None:
     shell("input text " + s.replace(" ", "%s"))
 
 
+def play_wav(path: str) -> None:
+    """Best-effort local playback (feeds the emulator mic); never raises —
+    e2e must not die because a headless Linux box has no player."""
+    players = (
+        ["afplay", path],                                     # macOS
+        ["aplay", path],                                      # ALSA
+        ["paplay", path],                                     # PulseAudio
+        ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path],
+    )
+    for cmd in players:
+        try:
+            subprocess.run(cmd, timeout=10)
+            return
+        except FileNotFoundError:
+            continue
+        except Exception:
+            return  # started but misbehaved — that counts as "played"
+    print("[skip] no audio player (afplay/aplay/paplay/ffplay) — recording in silence")
+
+
 def wait_for_text(match: str, timeout: float = 20.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -221,7 +241,7 @@ def phase_voice() -> None:
     started = "listening" in dump()
     check("recording started", started)
     if started and VOICE_WAV and os.path.exists(VOICE_WAV):
-        subprocess.run(["afplay", VOICE_WAV], timeout=10)
+        play_wav(VOICE_WAV)
     proc.wait()  # release → upload + send
     # outcome A: gateway transcribed a fragment -> transcript bubble appears
     # outcome B: silence -> 422 toast "transcript was empty…"
