@@ -67,7 +67,18 @@ const fakeStt: VoiceStt | null = fake
 	: null;
 
 const realStt = fake || process.env.PPPI_AUDIO_NO_STT === "1" ? null : Stt.create({});
-const sttPort: VoiceStt = fakeStt ?? voiceStt(realStt!);
+// PPPI_AUDIO_NO_STT boots the service WITHOUT native STT: sessions still
+// connect (honest not-ready status), they just never transcribe. A null
+// realStt here used to be `voiceStt(null!)` — a boot crash instead.
+const sttPort: VoiceStt =
+	fakeStt ??
+	(realStt
+		? voiceStt(realStt)
+		: {
+				status: { ready: false, reason: process.env.PPPI_AUDIO_NO_STT === "1" ? "stt disabled" : "no stt" },
+				openUtterance: () => Promise.resolve(null),
+				transcribeBuffer: () => Promise.resolve(""),
+			});
 const tts = fake ? null : resolveTtsProvider();
 
 // Warm the heavy models NOW, not on the first utterance/reply — eager load
@@ -156,6 +167,10 @@ server.on("upgrade", (req, socket, head) => {
 					session.assistantFinal(m.id, m.text);
 				} else if (m.type === "__assistant_delta__" && m.id && m.delta) {
 					session.assistantDelta(m.id, m.delta);
+				} else if (m.type === "__assistant_whole__" && m.id && m.text) {
+					// a delegated peer reply that never streamed deltas — speak it whole
+					lastReplyText = m.text;
+					session.speakWhole(m.text, m.id);
 				}
 			} catch {
 				// not ours

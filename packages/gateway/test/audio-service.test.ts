@@ -2,7 +2,7 @@
 // tests spawn the real child (bun, fake mode) and drive a turn through the
 // proxy: mic audio → child VAD/STT → __submit__ → agent → spoken reply back.
 
-import { execFileSync } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -156,4 +156,90 @@ describe.skipIf(!bunBin)("audio service child", () => {
 		chat.close();
 		voice.close();
 	});
+});
+
+// PPPI_AUDIO_NO_STT=1 boots the service WITHOUT native STT — sessions still
+// connect and hear the honest not-ready status. Regression: the wiring used to
+// be `voiceStt(null!)`, a TypeError at module scope that killed the child
+// before it could print anything.
+describe.skipIf(!bunBin)("audio service without native STT", () => {
+	it("boots with PPPI_AUDIO_NO_STT=1, reports stt honestly, and serves sessions", async () => {
+		const child: ChildProcess = spawn(bunBin!, [audioEntry], {
+			env: { ...process.env, PPPI_AUDIO_TOKEN: "no-stt-token", PPPI_AUDIO_NO_STT: "1", PPPI_AUDIO_FAKE: "" },
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		const bootFrames: Array<{ component: string; stage: string; reason?: string }> = [];
+		const info = await new Promise<any>((resolve, reject) => {
+			const timer = setTimeout(
+				() => reject(new Error(`no ready line in 45s; boot: ${JSON.stringify(bootFrames)}`)),
+				45_000,
+			);
+			let buf = "";
+			child.stdout!.on("data", (chunk: Buffer) => {
+				buf += chunk.toString("utf8");
+				let nl = buf.indexOf("\n");
+				while (nl !== -1) {
+					const line = buf.slice(0, nl).replace(/\r$/, "");
+					buf = buf.slice(nl + 1);
+					nl = buf.indexOf("\n");
+					try {
+						const parsed = JSON.parse(line);
+						if (parsed.ev === "boot") {
+							bootFrames.push(parsed);
+							continue;
+						}
+						if (typeof parsed.port === "number") {
+							clearTimeout(timer);
+							resolve(parsed);
+							return;
+						}
+					} catch {
+						// not JSON — ignore
+					}
+				}
+			});
+			child.on("exit", (code) => {
+				clearTimeout(timer);
+				reject(new Error(`audio-service child exited early (code ${code}) — boot crash?`));
+			});
+		});
+
+		try {
+			// the ready line tells the truth: stt is disabled, not ready
+			expect(info.stt).toEqual({ ready: false, reason: "stt disabled" });
+			// the boot story names the mode (the branch existed but was dead code before)
+			expect(bootFrames).toContainEqual({ ev: "boot", component: "stt", stage: "failed", reason: "STT disabled" });
+
+			// a voice session still connects and hears the honest status
+			const hello = await new Promise<any>((resolve, reject) => {
+				const ws = new WebSocket(`ws://127.0.0.1:${info.port}/voice`);
+				const timer = setTimeout(() => reject(new Error("no voice_hello_ok in 10s")), 10_000);
+				ws.on("message", (raw: Buffer, isBinary: boolean) => {
+					if (isBinary) return;
+					try {
+						const evt = JSON.parse(raw.toString());
+						if (evt.type === "voice_hello_ok") {
+							clearTimeout(timer);
+							ws.close();
+							resolve(evt);
+						}
+					} catch {
+						// not ours
+					}
+				});
+				ws.on("open", () => ws.send(JSON.stringify({ type: "hello", token: "no-stt-token" })));
+				ws.on("error", reject);
+			});
+			expect(hello.stt).toEqual({ ready: false, reason: "stt disabled" });
+		} finally {
+			child.kill("SIGTERM");
+			await new Promise<void>((r) => {
+				child.on("exit", () => r());
+				setTimeout(() => {
+					child.kill("SIGKILL");
+					r();
+				}, 3_000);
+			});
+		}
+	}, 60_000);
 });

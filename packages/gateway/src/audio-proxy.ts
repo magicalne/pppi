@@ -322,6 +322,11 @@ export class AudioService {
 		this.toChild({ type: "__assistant_final__", id, text });
 	}
 
+	/** A whole reply with no streamed deltas (delegated peer answer): the child speaks it as its own turn. */
+	speakWhole(id: string, text: string): void {
+		this.toChild({ type: "__assistant_whole__", id, text });
+	}
+
 	private toChild(frame: object): void {
 		const line = JSON.stringify(frame);
 		for (const up of this.ups) {
