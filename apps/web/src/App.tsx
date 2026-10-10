@@ -112,6 +112,8 @@ export default function App() {
 	const [agentState, setAgentState] = useState<AgentState>("starting");
 	const [toolLabel, setToolLabel] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
+	/** another screen is in an interactive voice session (gateway broadcasts voice_active) */
+	const [voiceElsewhere, setVoiceElsewhere] = useState(false);
 	const [target, setTarget] = useState<Target>(OMNI);
 	const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
 	const [modelList, setModelList] = useState<ModelInfo[]>([]);
@@ -332,6 +334,9 @@ export default function App() {
 			case "error":
 				showNotice(evt.message);
 				loadingOlderRef.current = false; // a failed history page must not wedge the guard
+				break;
+			case "voice_active":
+				setVoiceElsewhere(evt.active);
 				break;
 		}
 	}
@@ -593,6 +598,9 @@ export default function App() {
 
 			{notice && <div className="toast">{notice}</div>}
 			{voice.state.notice && <div className="toast">{voice.state.notice}</div>}
+			{voiceElsewhere && !voice.on && !voice.state.boot && (
+				<div className="toast info">voice active on another screen</div>
+			)}
 
 			<div className="composer-wrap">
 				{voice.on && <VoiceWave inLevel={voice.levels.mic} outLevel={voice.levels.out} phase={voice.state.phase} />}
