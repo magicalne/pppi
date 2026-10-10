@@ -2,6 +2,7 @@
 
 :root,
 :root[data-theme="dusk"] {
+	color-scheme: dark;
 	--bg: #171412;
 	--surface: #201c19;
 	--text: #f2eae0;
@@ -16,6 +17,7 @@
 }
 
 :root[data-theme="dawn"] {
+	color-scheme: light;
 	--bg: #faf6f0;
 	--surface: #ffffff;
 	--text: #2a2620;
@@ -30,6 +32,7 @@
 }
 
 :root[data-theme="slate"] {
+	color-scheme: dark;
 	--bg: #0e1116;
 	--surface: #151a21;
 	--text: #e6edf3;
@@ -44,6 +47,7 @@
 }
 
 :root[data-theme="paper"] {
+	color-scheme: light;
 	--bg: #ffffff;
 	--surface: #f6f6f4;
 	--text: #141414;
@@ -58,6 +62,7 @@
 }
 
 :root[data-theme="matcha"] {
+	color-scheme: light;
 	--bg: #f3f7f0;
 	--surface: #ffffff;
 	--text: #22301f;
@@ -72,7 +77,6 @@
 }
 
 :root {
-	color-scheme: dark;
 	--radius-bubble: 20px;
 	--radius-pill: 26px;
 	--radius-sheet: 24px;
