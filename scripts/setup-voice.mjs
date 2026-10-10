@@ -120,14 +120,14 @@ async function download(job) {
 	// the HF CDN routinely drops large downloads mid-stream; the .part file
 	// resumes, so retry in-process before surfacing the failure
 	let err;
-	for (let attempt = 1; attempt <= 5; attempt++) {
+	for (let attempt = 1; attempt <= 8; attempt++) {
 		try {
 			await attemptDownload(job);
 			return;
 		} catch (e) {
 			err = e;
 			if (/^HTTP 4/.test(e.message)) break; // permanent — retrying can't help
-			if (attempt < 5) await new Promise((r) => setTimeout(r, 1000 * attempt));
+			if (attempt < 8) await new Promise((r) => setTimeout(r, 1000 * attempt));
 		}
 	}
 	throw err;
@@ -136,12 +136,23 @@ async function download(job) {
 async function attemptDownload(job) {
 	const partial = `${job.dest}.part`;
 	const startAt = existsSync(partial) ? statSync(partial).size : 0;
-	const res = await fetch(job.url, startAt > 0 ? { headers: { range: `bytes=${startAt}-` } } : {});
+	// stall watchdog: the CDN sometimes leaves a connection open but sends
+	// nothing — abort it so the retry loop can resume from the .part
+	const abort = new AbortController();
+	let lastByteAt = Date.now();
+	const watchdog = setInterval(() => {
+		if (Date.now() - lastByteAt > 90_000) abort.abort(new Error("download stalled (no bytes for 90s)"));
+	}, 5000);
+	const res = await fetch(job.url, {
+		...(startAt > 0 ? { headers: { range: `bytes=${startAt}-` } } : {}),
+		signal: abort.signal,
+	});
 	if (!res.ok && res.status !== 206) throw new Error(`HTTP ${res.status}`);
 	const resumed = res.status === 206;
 	if (startAt > 0 && !resumed) throw new Error("server ignored the resume range; delete the .part and retry");
 	const total = (resumed ? startAt : 0) + Number(res.headers.get("content-length") ?? 0);
 	let seen = resumed ? startAt : 0;
+	lastByteAt = Date.now();
 	const timer = setInterval(() => {
 		const of = total ? ` / ${(total / 1e6).toFixed(0)} MB` : "";
 		process.stdout.write(`\r  ↓ ${job.note}: ${(seen / 1e6).toFixed(1)} MB${of}   `);
@@ -156,12 +167,14 @@ async function attemptDownload(job) {
 		const counter = new Transform({
 			transform(chunk, _enc, cb) {
 				seen += chunk.byteLength;
+				lastByteAt = Date.now();
 				cb(null, chunk);
 			},
 		});
-		await pipeline(res.body, counter, createWriteStream(partial, { flags: "a" }));
+		await pipeline(res.body, counter, createWriteStream(partial, { flags: "a" }), { signal: abort.signal });
 	} finally {
 		clearInterval(timer);
+		clearInterval(watchdog);
 	}
 	const size = statSync(partial).size;
 	if (size < job.minBytes) {
