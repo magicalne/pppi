@@ -202,6 +202,13 @@ class VoiceAudioEngine(
 	}
 
 	private fun openRecorder(stage: CaptureStage, onError: (String) -> Unit, fatal: Boolean = false) {
+		// explicit guard: the caller checked at startMic, but a mid-session
+		// revocation must not construct AudioRecord (also satisfies lint)
+		if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+			if (fatal) keepRunning.set(false)
+			onError("microphone permission missing")
+			return
+		}
 		closeRecorder()
 		val minBuf = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
 		val rec = AudioRecord(
@@ -265,6 +272,7 @@ class VoiceAudioEngine(
 	}
 
 	/** API 31+: select the BT headset as the communication device (sets up SCO itself). */
+	@androidx.annotation.RequiresApi(31)
 	private fun establishScoModern(): Boolean {
 		val sco = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
 			.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
@@ -409,6 +417,7 @@ class VoiceAudioEngine(
 		if (scoRequested) {
 			scoRequested = false
 			try {
+				if (Build.VERSION.SDK_INT >= 31) audioManager.clearCommunicationDevice()
 				audioManager.stopBluetoothSco()
 				audioManager.isBluetoothScoOn = false
 			} catch (_: Exception) {

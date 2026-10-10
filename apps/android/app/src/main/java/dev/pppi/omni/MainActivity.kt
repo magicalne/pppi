@@ -9,6 +9,7 @@ import android.media.AudioManager
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -116,6 +117,7 @@ data class PppiTheme(
 	val userBubbleInk: Color,
 	val line: Color,
 	val danger: Color,
+	val userBubbleLine: Color,
 )
 
 val PppiThemes = listOf(
@@ -124,35 +126,35 @@ val PppiThemes = listOf(
 		bg = Color(0xFF171412), surface = Color(0xFF201C19), text = Color(0xFFF2EAE0),
 		dim = Color(0xFF9A8F83), accent = Color(0xFFE8965A), accentInk = Color(0xFF1A130C),
 		userBubble = Color(0xFF2E2823), userBubbleInk = Color(0xFFF2EAE0),
-		line = Color(0xFF2B2622), danger = Color(0xFFE5484D),
+		line = Color(0xFF2B2622), danger = Color(0xFFE5484D), userBubbleLine = Color(0xFF3A332C),
 	),
 	PppiTheme(
 		"dawn", "Dawn", "morning paper",
 		bg = Color(0xFFFAF6F0), surface = Color(0xFFFFFFFF), text = Color(0xFF2A2620),
 		dim = Color(0xFF8A8177), accent = Color(0xFFD96C47), accentInk = Color(0xFFFFFFFF),
 		userBubble = Color(0xFFF5E7D8), userBubbleInk = Color(0xFF4A3F33),
-		line = Color(0xFFEAE2D8), danger = Color(0xFFC62A2F),
+		line = Color(0xFFEAE2D8), danger = Color(0xFFC62A2F), userBubbleLine = Color(0xFFECDCC8),
 	),
 	PppiTheme(
 		"slate", "Slate", "cool focus",
 		bg = Color(0xFF0E1116), surface = Color(0xFF151A21), text = Color(0xFFE6EDF3),
 		dim = Color(0xFF8B949E), accent = Color(0xFF7AA2FF), accentInk = Color(0xFF0B1020),
 		userBubble = Color(0xFF1C2740), userBubbleInk = Color(0xFFE6EDF3),
-		line = Color(0xFF212833), danger = Color(0xFFF2555A),
+		line = Color(0xFF212833), danger = Color(0xFFF2555A), userBubbleLine = Color(0xFF27354F),
 	),
 	PppiTheme(
 		"paper", "Paper", "pen & ink",
 		bg = Color(0xFFFFFFFF), surface = Color(0xFFF6F6F4), text = Color(0xFF141414),
 		dim = Color(0xFF6B6B6B), accent = Color(0xFF141414), accentInk = Color(0xFFFFFFFF),
 		userBubble = Color(0xFFEFEFEC), userBubbleInk = Color(0xFF141414),
-		line = Color(0xFFE6E6E2), danger = Color(0xFFC62A2F),
+		line = Color(0xFFE6E6E2), danger = Color(0xFFC62A2F), userBubbleLine = Color(0xFFE0E0DA),
 	),
 	PppiTheme(
 		"matcha", "Matcha", "greenhouse",
 		bg = Color(0xFFF3F7F0), surface = Color(0xFFFFFFFF), text = Color(0xFF22301F),
 		dim = Color(0xFF7A8873), accent = Color(0xFF5B8C51), accentInk = Color(0xFFFFFFFF),
 		userBubble = Color(0xFFE3EDDC), userBubbleInk = Color(0xFF2A3A26),
-		line = Color(0xFFDFE8D8), danger = Color(0xFFC62A2F),
+		line = Color(0xFFDFE8D8), danger = Color(0xFFC62A2F), userBubbleLine = Color(0xFFD2E0C8),
 	),
 )
 
@@ -708,6 +710,8 @@ fun ChatScreen(
 					is ServerEvent.AgentNotify -> notice = evt.message
 					is ServerEvent.ErrorEvt -> notice = evt.message
 					is ServerEvent.AgentInfoEvt -> {}
+					// parsed for protocol parity; the pill owns voice-mode truth locally
+					is ServerEvent.VoiceActive -> {}
 					is ServerEvent.StatusEvt -> agentStatus = evt.status
 					is ServerEvent.ModelListEvt -> modelList = evt.models
 					is ServerEvent.SessionNew -> {
@@ -830,6 +834,14 @@ fun ChatScreen(
 				if (!ok) notice = msg
 			}
 		}
+	}
+
+	/** Drop an in-flight hold-to-talk recording without sending anything. */
+	fun cancelRecording() {
+		if (!recording) return
+		keepRecording.set(false)
+		recording = false
+		level = 0
 	}
 
 	/** Single cleanup path for voice mode: safe from any thread, idempotent. */
@@ -1113,6 +1125,7 @@ fun ChatScreen(
 								.widthIn(max = 300.dp)
 								.clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 6.dp))
 								.background(theme.userBubble)
+								.border(1.dp, theme.userBubbleLine, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 6.dp))
 								.padding(horizontal = 14.dp, vertical = 10.dp),
 						)
 					}
@@ -1297,7 +1310,10 @@ fun ChatScreen(
 								Modifier
 							},
 						)
-						.pointerInput(voiceOn, voiceBoot, recording, micGranted) {
+						// NOTE: `recording` is deliberately NOT a key — flipping it on
+						// press would restart this coroutine mid-gesture and lose the
+						// release event, killing hold-to-talk
+						.pointerInput(voiceOn, voiceBoot, micGranted) {
 							detectTapGestures(
 								onPress = {
 									when {
@@ -1311,12 +1327,28 @@ fun ChatScreen(
 											stopVoice()
 										}
 										recording -> {
+											// safety net: an orphaned recording finishes on the next press
 											tryAwaitRelease()
 											stopRecordingAndSend()
 										}
 										micGranted -> {
-											startVoice()
-											tryAwaitRelease()
+											// voice first (AGENTS.md): press-and-hold = hold-to-talk —
+											// recording starts on press so the waveform and the
+											// "release to send" hint are live; release uploads it. A
+											// quick tap (shorter than the system long-press timeout)
+											// discards the blip and toggles interactive voice mode.
+											startRecording()
+											val downAt = SystemClock.elapsedRealtime()
+											val released = tryAwaitRelease()
+											val held = SystemClock.elapsedRealtime() - downAt
+											when {
+												!released -> cancelRecording() // gesture stolen — never send
+												held >= viewConfiguration.longPressTimeoutMillis -> stopRecordingAndSend()
+												else -> {
+													cancelRecording()
+													startVoice()
+												}
+											}
 										}
 										else -> permissionLauncher.launch(
 											buildList {
@@ -1354,6 +1386,7 @@ fun ChatScreen(
 				client.listModels()
 				modelsOpen = true
 			},
+			onNotice = { notice = it },
 		)
 	}
 

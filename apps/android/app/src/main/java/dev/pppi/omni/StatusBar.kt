@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -125,6 +126,7 @@ fun StatusBarRow(
 	targetLabel: String,
 	onSetThinking: (String) -> Unit,
 	onOpenModels: () -> Unit,
+	onNotice: (String) -> Unit = {},
 ) {
 	val stops = status?.thinkingLevels ?: emptyList()
 	val level = status?.thinkingLevel ?: "off"
@@ -207,7 +209,14 @@ fun StatusBarRow(
 							}
 						}
 					} else {
-						Modifier
+						// parity with the web bar: a tap on a disabled brain says why
+						Modifier.pointerInput(active, model != null) {
+							detectTapGestures {
+								if (active) {
+									onNotice(if (model != null) "this model doesn't do thinking" else "no model yet")
+								}
+							}
+						}
 					},
 				)
 				.semantics {
