@@ -1,6 +1,7 @@
 package dev.pppi.omni
 
 import java.util.Locale
+import kotlin.math.roundToInt
 
 // Status-bar thinking helpers — mirrors apps/web/src/status/StatusBar.tsx.
 
@@ -40,7 +41,7 @@ fun formatTokens(n: Long?): String {
 fun formatContext(tokens: Long?, contextWindow: Long, percent: Double?): String {
 	if (contextWindow <= 0L) return "—"
 	val used = if (tokens == null) "—" else formatTokens(tokens)
-	val pct = if (percent == null) "—" else percent.toInt().toString()
+	val pct = if (percent == null) "—" else percent.roundToInt().toString()
 	return "$used/${formatTokens(contextWindow)} ($pct%)"
 }
 
