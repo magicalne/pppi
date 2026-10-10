@@ -99,6 +99,14 @@ let clock = Date.now() - 10_000;
 const nextTs = () => ++clock;
 
 function handle(cmd) {
+	// test knobs for the driver's death/teardown paths:
+	//   MOCK_DIE_ON=<type>   — SIGKILL self on that command, never answering it
+	//   MOCK_STALL_ON=<type> — read the command and never answer it
+	if (process.env.MOCK_DIE_ON === cmd.type) {
+		process.kill(process.pid, "SIGKILL");
+		return;
+	}
+	if (process.env.MOCK_STALL_ON === cmd.type) return;
 	switch (cmd.type) {
 		case "get_state":
 			write({ id: cmd.id, type: "response", command: "get_state", success: true, data: state });

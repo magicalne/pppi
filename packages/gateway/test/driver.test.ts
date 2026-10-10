@@ -60,6 +60,8 @@ describe("rpc agent driver", () => {
 		driver.dispose();
 		process.env.MOCK_DIALOG = undefined;
 		process.env.PPPI_DIALOG_HOLD_MS = undefined;
+		process.env.MOCK_DIE_ON = undefined;
+		process.env.MOCK_STALL_ON = undefined;
 	});
 
 	it("reports agent info once started", async () => {
@@ -298,5 +300,27 @@ describe("rpc agent driver", () => {
 		} finally {
 			warn.mockRestore();
 		}
+	});
+
+	it("rejects in-flight requests when the agent dies instead of hanging to the timeout", async () => {
+		process.env.MOCK_DIE_ON = "prompt"; // the mock SIGKILLs itself mid-prompt
+		driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
+		driver.on("error", () => {}); // exit/restart noise
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		const started = Date.now();
+		await expect(driver.prompt("hang this")).rejects.toThrow(/agent exited/);
+		expect(Date.now() - started).toBeLessThan(5_000); // rejected on death, not at the 30s timeout
+	});
+
+	it("rejects in-flight requests on dispose", async () => {
+		process.env.MOCK_STALL_ON = "prompt"; // the mock reads the prompt and never answers
+		driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
+		driver.on("error", () => {});
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		const rejection = expect(driver.prompt("hang this")).rejects.toThrow(/agent exited/);
+		driver.dispose();
+		await rejection;
 	});
 });

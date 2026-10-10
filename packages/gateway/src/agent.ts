@@ -148,7 +148,10 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 	// U+FFFD replacement chars (corrupted deltas / unparseable lines)
 	private decoder = new StringDecoder("utf8");
 	private nextId = 1;
-	private pending = new Map<string, { resolve: (r: RpcResponse) => void; timer: NodeJS.Timeout }>();
+	private pending = new Map<
+		string,
+		{ command: string; resolve: (r: RpcResponse) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
+	>();
 	private disposed = false;
 	private isStreaming = false;
 	private assistantId: string | null = null;
@@ -212,6 +215,9 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 			this.proc = null;
 			this.isStreaming = false;
 			this.decoder.end();
+			// the answers died with the child — pending callers must not hang to
+			// their full timeout (30s prompt, 300s compact) waiting for them
+			this.failPending();
 			if (this.disposed) return;
 			this.emit("error", `omni agent exited (code ${code}); restarting`);
 			this.setState("starting");
@@ -267,9 +273,18 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 				this.pending.delete(id);
 				reject(new Error(`${type} timed out after ${timeoutMs}ms`));
 			}, timeoutMs);
-			this.pending.set(id, { resolve, timer });
+			this.pending.set(id, { command: type, resolve, reject, timer });
 			this.write({ id, type, ...extra });
 		});
+	}
+
+	/** Fail every in-flight request: the child that owed the answers is gone. */
+	private failPending(): void {
+		for (const [, p] of this.pending) {
+			clearTimeout(p.timer);
+			p.reject(new Error(`agent exited before ${p.command} was answered`));
+		}
+		this.pending.clear();
 	}
 
 	private onData(chunk: Buffer): void {
@@ -533,9 +548,8 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 
 	dispose(): void {
 		this.disposed = true;
+		this.failPending();
 		this.proc?.kill("SIGTERM");
-		for (const [, p] of this.pending) clearTimeout(p.timer);
-		this.pending.clear();
 	}
 }
 
