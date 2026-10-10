@@ -817,8 +817,8 @@ function Pairing({ onDone, notice }: { onDone: (p: Pairing) => void; notice: str
    └──────┘        └──────┘        └──────┘`}</pre>
 			<h1 style={{ fontSize: 22 }}>Pair with your omni agent</h1>
 			<p style={{ color: "var(--dim)" }}>
-				Paste the pair link from <code style={{ fontFamily: "var(--font-mono)" }}>/pppi_pair</code> — or run the pppi server
-				on your Mac and enter its URL + token. Secrets never leave the machine.
+				Paste the pair link from <code style={{ fontFamily: "var(--font-mono)" }}>/pppi_pair</code> — or run the pppi
+				server on your Mac and enter its URL + token. Secrets never leave the machine.
 			</p>
 			<form
 				style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 22 }}
