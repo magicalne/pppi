@@ -62,6 +62,7 @@ describe("rpc agent driver", () => {
 		process.env.PPPI_DIALOG_HOLD_MS = undefined;
 		process.env.MOCK_DIE_ON = undefined;
 		process.env.MOCK_STALL_ON = undefined;
+		process.env.PPPI_RESTART_BASE_MS = undefined;
 	});
 
 	it("reports agent info once started", async () => {
@@ -322,5 +323,17 @@ describe("rpc agent driver", () => {
 		const rejection = expect(driver.prompt("hang this")).rejects.toThrow(/agent exited/);
 		driver.dispose();
 		await rejection;
+	});
+
+	it("retries the spawn with backoff when the binary is missing", async () => {
+		process.env.PPPI_RESTART_BASE_MS = "30"; // fast backoff for the test
+		driver = new RpcAgentDriver({ command: ["/nonexistent/pi-binary-xyz"], cwd: "/tmp" });
+		const errors: string[] = [];
+		driver.on("error", (m) => errors.push(m));
+		driver.start();
+		await new Promise((r) => setTimeout(r, 600));
+		// ENOENT never emits exit — pre-fix this stayed at zero relaunches
+		expect(errors.filter((m) => /failed to spawn/.test(m)).length).toBeGreaterThanOrEqual(3);
+		expect(driver.state).toBe("starting");
 	});
 });

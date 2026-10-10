@@ -22,6 +22,11 @@ function dialogHoldMs(): number {
 	return Number(process.env.PPPI_DIALOG_HOLD_MS ?? 2_000);
 }
 
+/** Base restart backoff (ms); doubles up to 10s. Env-overridable for tests. */
+function restartBaseMs(): number {
+	return Number(process.env.PPPI_RESTART_BASE_MS ?? 1_000);
+}
+
 export type AgentSnapshot = {
 	model: ModelInfo | null;
 	/** pi canonical level of the current model: "off"…"max" */
@@ -156,7 +161,8 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 	private isStreaming = false;
 	private assistantId: string | null = null;
 	private assistantText = "";
-	private restartDelay = 1_000;
+	private restartDelay = restartBaseMs();
+	private restartTimer: NodeJS.Timeout | null = null;
 	private _state: AgentState = "starting";
 	private snapshot: AgentSnapshot = { model: null, thinkingLevel: "off", thinkingLevels: [] };
 	private context: ContextInfo | null = null;
@@ -191,6 +197,10 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 
 	start(): void {
 		if (this.disposed) return;
+		if (this.restartTimer) {
+			clearTimeout(this.restartTimer);
+			this.restartTimer = null;
+		}
 		this._state = "starting";
 		this.decoder = new StringDecoder("utf8");
 		const [cmd, ...args] = this.command;
@@ -198,10 +208,13 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 		const proc = spawn(cmd, args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], env: process.env });
 		this.proc = proc;
 
-		// spawn failures (bad cwd, missing binary) surface here, not via exit
+		// spawn failures (bad cwd, missing binary) surface here, not via exit —
+		// node never emits `exit` for a child that never spawned, so both paths
+		// must funnel into the same backoff/restart loop
 		proc.on("error", (err) => {
-			this.emit("error", `failed to spawn omni agent: ${err.message}`);
-			this.setState("starting");
+			if (this.proc !== proc) return;
+			this.proc = null;
+			this.scheduleRestart(`failed to spawn omni agent: ${err.message}`);
 		});
 		// teardown races can EPIPE the stdin stream itself — swallow, dispose() handles the rest
 		proc.stdin?.on("error", () => {});
@@ -212,19 +225,12 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 			if (line) this.emit("error", `agent stderr: ${line.slice(0, 500)}`);
 		});
 		proc.on("exit", (code) => {
+			if (this.proc !== proc) return;
 			this.proc = null;
 			this.isStreaming = false;
 			this.decoder.end();
-			// the answers died with the child — pending callers must not hang to
-			// their full timeout (30s prompt, 300s compact) waiting for them
-			this.failPending();
 			if (this.disposed) return;
-			this.emit("error", `omni agent exited (code ${code}); restarting`);
-			this.setState("starting");
-			setTimeout(() => {
-				this.restartDelay = Math.min(this.restartDelay * 2, 10_000);
-				this.start();
-			}, this.restartDelay);
+			this.scheduleRestart(`omni agent exited (code ${code})`);
 		});
 
 		this.request("get_state", 30_000)
@@ -246,10 +252,30 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 				// auto-compaction is pi's default, but a local setting could have
 				// it off — the context bar staying honest depends on it
 				void this.request("set_auto_compaction", 10_000, { enabled: true }).catch(() => {});
-				this.restartDelay = 1_000;
+				this.restartDelay = restartBaseMs();
 				this.emit("ready");
 			})
 			.catch((err) => this.emit("error", `get_state failed: ${err.message}`));
+	}
+
+	/**
+	 * Single funnel for "the child is gone, try again": fails in-flight
+	 * requests (their answers died with the child), reports, and relaunches
+	 * after the current backoff. `error` and `exit` can both fire for one
+	 * death — the pending restart timer makes the second call a no-op.
+	 */
+	private scheduleRestart(why: string): void {
+		if (this.disposed) return;
+		if (this.restartTimer) return;
+		this.failPending();
+		this.emit("error", `${why}; restarting`);
+		this.setState("starting");
+		const delay = this.restartDelay;
+		this.restartDelay = Math.min(this.restartDelay * 2, 10_000);
+		this.restartTimer = setTimeout(() => {
+			this.restartTimer = null;
+			this.start();
+		}, delay);
 	}
 
 	private setState(s: AgentState, toolName?: string): void {
@@ -300,7 +326,6 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 			try {
 				msg = JSON.parse(line);
 			} catch {
-				// protocol desync or foreign output on stdout — diagnose, don't crash
 				console.error(`[agent] dropping unparseable rpc line: ${line.slice(0, 200)}`);
 				continue;
 			}
@@ -548,6 +573,10 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 
 	dispose(): void {
 		this.disposed = true;
+		if (this.restartTimer) {
+			clearTimeout(this.restartTimer);
+			this.restartTimer = null;
+		}
 		this.failPending();
 		this.proc?.kill("SIGTERM");
 	}
