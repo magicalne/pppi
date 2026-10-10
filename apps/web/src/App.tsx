@@ -535,7 +535,7 @@ export default function App() {
 				{visible.length === 0 && (
 					<div className="empty">
 						<p className="hi">Hey, it's {targetName}.</p>
-						<p className="hint">Tell me what to build, ask about a repo, or hold the mic and just talk.</p>
+						<p className="hint">Tell me what to build, ask about a repo, or tap the mic and just talk.</p>
 					</div>
 				)}
 				{visible.map((m) => {
