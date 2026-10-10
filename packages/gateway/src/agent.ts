@@ -285,6 +285,8 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 			try {
 				msg = JSON.parse(line);
 			} catch {
+				// protocol desync or foreign output on stdout — diagnose, don't crash
+				console.error(`[agent] dropping unparseable rpc line: ${line.slice(0, 200)}`);
 				continue;
 			}
 			if (msg.type === "response") this.onResponse(msg as RpcResponse);

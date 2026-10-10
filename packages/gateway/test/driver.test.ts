@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RpcAgentDriver, toolLabel } from "../src/agent.ts";
 
 const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "mock-agent.mjs");
@@ -276,5 +276,27 @@ describe("rpc agent driver", () => {
 			});
 		});
 		expect(deltas.join("")).toBe("X好Y");
+	});
+
+	it("logs and drops an unparseable rpc line, then keeps parsing", async () => {
+		const noise = "*** stdout noise: definitely not a json line\n";
+		const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			driver = new RpcAgentDriver({ command: framingChild(noise, noise.length, 0), cwd: "/tmp" });
+			driver.start();
+			await new Promise<void>((r, j) => {
+				const timer = setTimeout(() => j(new Error("never ready")), 10_000);
+				driver.once("ready", () => {
+					clearTimeout(timer);
+					r();
+				});
+			});
+			// ready fires before the child has processed the trigger command
+			await vi.waitFor(() =>
+				expect(warn).toHaveBeenCalledWith(expect.stringContaining("dropping unparseable rpc line")),
+			);
+		} finally {
+			warn.mockRestore();
+		}
 	});
 });
