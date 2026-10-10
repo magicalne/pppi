@@ -67,7 +67,18 @@ const fakeStt: VoiceStt | null = fake
 	: null;
 
 const realStt = fake || process.env.PPPI_AUDIO_NO_STT === "1" ? null : Stt.create({});
-const sttPort: VoiceStt = fakeStt ?? voiceStt(realStt!);
+// PPPI_AUDIO_NO_STT boots the service WITHOUT native STT: sessions still
+// connect (honest not-ready status), they just never transcribe. A null
+// realStt here used to be `voiceStt(null!)` — a boot crash instead.
+const sttPort: VoiceStt =
+	fakeStt ??
+	(realStt
+		? voiceStt(realStt)
+		: {
+				status: { ready: false, reason: process.env.PPPI_AUDIO_NO_STT === "1" ? "stt disabled" : "no stt" },
+				openUtterance: () => Promise.resolve(null),
+				transcribeBuffer: () => Promise.resolve(""),
+			});
 const tts = fake ? null : resolveTtsProvider();
 
 // Warm the heavy models NOW, not on the first utterance/reply — eager load
