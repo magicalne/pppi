@@ -1,7 +1,33 @@
 /* pppi design tokens — PRD §8/§9. Five themes, one token set. */
 
+/* Self-hosted fonts (LAN-first: the client makes no external requests).
+ * Latin subset, the only weights the app uses (audit: 400 + 600 UI, 400 mono).
+ * Inter's latin file is variable — the same file serves 400 and 600. */
+@font-face {
+	font-family: "Inter";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("/fonts/inter-latin.woff2") format("woff2");
+}
+@font-face {
+	font-family: "Inter";
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url("/fonts/inter-latin.woff2") format("woff2");
+}
+@font-face {
+	font-family: "JetBrains Mono";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("/fonts/jetbrains-mono-latin-400.woff2") format("woff2");
+}
+
 :root,
 :root[data-theme="dusk"] {
+	color-scheme: dark;
 	--bg: #171412;
 	--surface: #201c19;
 	--text: #f2eae0;
@@ -16,6 +42,7 @@
 }
 
 :root[data-theme="dawn"] {
+	color-scheme: light;
 	--bg: #faf6f0;
 	--surface: #ffffff;
 	--text: #2a2620;
@@ -30,6 +57,7 @@
 }
 
 :root[data-theme="slate"] {
+	color-scheme: dark;
 	--bg: #0e1116;
 	--surface: #151a21;
 	--text: #e6edf3;
@@ -44,6 +72,7 @@
 }
 
 :root[data-theme="paper"] {
+	color-scheme: light;
 	--bg: #ffffff;
 	--surface: #f6f6f4;
 	--text: #141414;
@@ -58,6 +87,7 @@
 }
 
 :root[data-theme="matcha"] {
+	color-scheme: light;
 	--bg: #f3f7f0;
 	--surface: #ffffff;
 	--text: #22301f;
@@ -72,7 +102,6 @@
 }
 
 :root {
-	color-scheme: dark;
 	--radius-bubble: 20px;
 	--radius-pill: 26px;
 	--radius-sheet: 24px;

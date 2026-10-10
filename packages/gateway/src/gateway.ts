@@ -671,7 +671,16 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 					);
 				}
 			} else if (msg.type === "abort") {
-				void agent.abort();
+				// Only the omni's own turn can be cut from here: peer sessions are
+				// reached through one-shot `pigeon send` calls with no abort channel,
+				// so a targeted abort must not fall through to killing the omni.
+				if (!msg.target || msg.target === agent.info.sessionId) void agent.abort();
+				else
+					send(ws, {
+						type: "error",
+						message: "can't stop a peer session from here — stop it on its machine",
+						target: msg.target,
+					});
 			} else if (msg.type === "set_model") {
 				agent
 					.setModel(String(msg.provider ?? ""), String(msg.modelId ?? ""))
