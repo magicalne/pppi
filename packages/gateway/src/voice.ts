@@ -46,9 +46,12 @@ export interface VoiceTts {
 /** Adapter: the shared Stt (streaming when the model supports it, batch otherwise) as the VoiceStt port. */
 export function voiceStt(stt: Stt): VoiceStt {
 	return {
-		status: stt.status.ready
-			? { ready: true, modelId: stt.status.modelId }
-			: { ready: false, reason: stt.status.reason },
+		// live: a model that fails to LOAD after boot must flip the status the
+		// ready line and voice_hello_ok report — not keep claiming resolution
+		get status(): VoiceSttStatus {
+			const s = stt.status;
+			return s.ready ? { ready: true, modelId: s.modelId } : { ready: false, reason: s.reason };
+		},
 		openUtterance: () => stt.openUtterance(),
 		transcribeBuffer: (pcm) => stt.transcribe({ sampleRate: 16000, channels: 1, samples: pcm }),
 	};
