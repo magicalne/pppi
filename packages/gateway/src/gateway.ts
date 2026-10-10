@@ -722,7 +722,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 	// child mode (extension host): /voice sockets pipe to the audio service
 	if (audio) {
 		onVoiceSocket = (raw: WebSocket) => void audio.proxyVoice(raw);
-	} else {
+	} else if (opts.stt || opts.voiceStt) {
 		// in-process mode (cli host): the whole voice stack lives here
 		const sttPort = opts.voiceStt ?? voiceStt(opts.stt!);
 		// bundled silero model; a missing file leaves voice sessions connected but inert
@@ -768,6 +768,10 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			sessions.set(session, raw);
 		};
 	}
+	// else: no voice anywhere (no audio child — e.g. no bun on PATH — and no
+	// in-process stt): degrade instead of crashing. /voice upgrades stay on the
+	// default handler that closes the socket; /api/voice answers 503
+	// "no stt configured"; health's boot stage reports "unavailable".
 
 	// ---------------------------------------------------------------- lifecycle
 
