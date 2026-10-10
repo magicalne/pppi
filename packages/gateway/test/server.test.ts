@@ -79,6 +79,42 @@ describe("gateway server", () => {
 		expect(body.stt.ready).toBe(false);
 	});
 
+	it("sends a voice_active snapshot after hello so reconnecting clients start truthful", async () => {
+		// without it, a client switching machines keeps the previous
+		// connection's voice_active state forever when the new gateway
+		// never transitions (no voice session anywhere). the three hello
+		// events arrive in one tick — collect from a listener attached
+		// before the handshake, or the race eats the snapshot.
+		const ws = new WebSocket(address);
+		const seen: any[] = [];
+		ws.on("message", (raw) => seen.push(JSON.parse(raw.toString())));
+		await new Promise<void>((resolve, reject) => {
+			ws.on("open", () => {
+				ws.send(JSON.stringify({ type: "hello", token, client: "test" }));
+				resolve();
+			});
+			ws.on("error", reject);
+		});
+		await new Promise<void>((resolve, reject) => {
+			const poll = setInterval(() => {
+				if (seen.some((e) => e.type === "voice_active")) {
+					clearInterval(poll);
+					resolve();
+				}
+			}, 20);
+			setTimeout(() => {
+				clearInterval(poll);
+				reject(new Error(`no voice_active snapshot; saw ${seen.map((e) => e.type).join(",")}`));
+			}, 10_000);
+		});
+		const helloIdx = seen.findIndex((e) => e.type === "hello_ok");
+		const snapIdx = seen.findIndex((e) => e.type === "voice_active");
+		expect(helloIdx).toBeGreaterThanOrEqual(0);
+		expect(snapIdx).toBeGreaterThan(helloIdx); // after the handshake, like status
+		expect(seen[snapIdx]).toMatchObject({ active: false });
+		ws.close();
+	});
+
 	it("boots without voice when neither audio service nor stt is configured", async () => {
 		// the extension host with no bun/node runner passes no audioService and no
 		// stt — the gateway must degrade to no-voice instead of crashing

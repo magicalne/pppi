@@ -3,7 +3,7 @@
 // stt.test.ts; these pin the state machine: status honesty after a failed
 // load, the retry latch, batch tail-silence padding, and resolution hygiene.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -97,6 +97,16 @@ describe("stt model resolution", () => {
 		vi.stubEnv("PPPI_STT_MODEL", home); // a directory that EXISTS
 		expect(resolveSttModel().ready).toBe(false);
 		vi.stubEnv("PPPI_STT_MODEL", join(home, "nope.gguf"));
+		expect(resolveSttModel().ready).toBe(false);
+	});
+
+	it("rejects an unreadable file as PPPI_STT_MODEL (a chmod-000 gguf is not a model)", () => {
+		freshFixture();
+		const unreadable = join(home, "locked.gguf");
+		writeFileSync(unreadable, "x");
+		chmodSync(unreadable, 0o000);
+		vi.stubEnv("PPPI_STT_MODEL", unreadable);
+		// pre-fix: statSync().isFile() passed and resolution claimed ready
 		expect(resolveSttModel().ready).toBe(false);
 	});
 

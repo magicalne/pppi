@@ -8,7 +8,7 @@
 //   3. ~/.pppi/models/stt/*.gguf (where `bun run setup:voice` downloads it)
 //   4. pi-transcribe's recommended model in the HuggingFace cache
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { constants, accessSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type DecodedWav, toMono16k } from "./wav.ts";
@@ -16,10 +16,12 @@ import { type DecodedWav, toMono16k } from "./wav.ts";
 const RECOMMENDED_REPO_DIR = "models--handy-computer--parakeet-unified-en-0.6b-gguf";
 const RECOMMENDED_FILE = "parakeet-unified-en-0.6b-Q8_0.gguf";
 
-/** A regular file exists at `p` — directories (or unreadable paths) named like models must not resolve. */
+/** A readable regular file exists at `p` — directories (or unreadable files) named like models must not resolve. */
 function isFile(p: string): boolean {
 	try {
-		return statSync(p).isFile();
+		if (!statSync(p).isFile()) return false;
+		accessSync(p, constants.R_OK); // a chmod-000 gguf is not a model we can load
+		return true;
 	} catch {
 		return false;
 	}

@@ -192,6 +192,52 @@ describe("Speaker sentence chunking", () => {
 		expect(rec.starts()[0]?.id).toBe("peer-reply-1"); // the wire id survives
 		expect(rec.ends()[0]).toMatchObject({ id: "peer-reply-1" });
 	});
+
+	it("a new turn drops the previous turn's still-queued sentences", async () => {
+		const { provider, received } = delayedTts(30);
+		const rec = recorder();
+		const speaker = new Speaker(provider, rec.sendBinary, rec.sendEvent);
+		const listenings = () =>
+			rec.events.filter((e) => e.type === "voice_state" && (e as any).state === "listening").length;
+
+		speaker.beginTurn();
+		speaker.assistantDelta("a", "One. Two. Three."); // three sentences queued
+		await until(() => rec.starts().length === 1); // "One." is speaking
+		speaker.beginTurn(); // user cuts in — "Two."/"Three." are stale queue
+		speaker.assistantDelta("b", "Fresh.");
+		await until(() => rec.starts().length === 2 && listenings() >= 2);
+
+		// pre-fix: drain dequeued "Two." under the NEW epoch and spoke it
+		expect(received).toEqual(["One.", "Fresh."]);
+	});
+
+	it("a synthesis failure on the last item hands the mic back (listening)", async () => {
+		let calls = 0;
+		const received: string[] = [];
+		const provider: VoiceTts = {
+			status: { ready: true, provider: "fake", voice: "v" },
+			synthesize(text: string) {
+				const idx = calls++;
+				received.push(text);
+				return (async function* () {
+					if (idx === 1) throw new Error("boom"); // last item fails before any audio
+					for (let i = 0; i < 2; i++) yield { pcm: Buffer.from([idx]), rate: 16_000 };
+				})();
+			},
+		};
+		const rec = recorder();
+		const speaker = new Speaker(provider, rec.sendBinary, rec.sendEvent);
+
+		speaker.beginTurn();
+		speaker.assistantDelta("t", "First one. Second one."); // two sentences
+		await until(() => rec.errors().length === 1);
+
+		const states = rec.events.filter((e) => e.type === "voice_state");
+		// the first item ended with its successor still queued (no listening);
+		// without the failure-path emit the client stays stranded in speaking
+		expect(states.at(-1)).toMatchObject({ state: "listening" });
+		expect(received).toEqual(["First one.", "Second one."]);
+	});
 });
 
 describe("speakProse", () => {

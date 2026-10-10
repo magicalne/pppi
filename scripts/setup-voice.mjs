@@ -62,7 +62,7 @@ if (ttsSet.has("kokoro")) {
 		["tokenizer.json", 1024],
 		["tokenizer_config.json", 16],
 		["onnx/model_quantized.onnx", 80 * 1024 * 1024],
-		["voices/af_heart.bin", 200 * 1024],
+		["voices/af_Heart.bin", 200 * 1024],
 	]) {
 		jobs.push({
 			url: `${base}/${rel}`,
@@ -143,44 +143,50 @@ async function attemptDownload(job) {
 	const watchdog = setInterval(() => {
 		if (Date.now() - lastByteAt > 90_000) abort.abort(new Error("download stalled (no bytes for 90s)"));
 	}, 5000);
-	const res = await fetch(job.url, {
-		...(startAt > 0 ? { headers: { range: `bytes=${startAt}-` } } : {}),
-		signal: abort.signal,
-	});
-	if (!res.ok && res.status !== 206) throw new Error(`HTTP ${res.status}`);
-	const resumed = res.status === 206;
-	if (startAt > 0 && !resumed) throw new Error("server ignored the resume range; delete the .part and retry");
-	const total = (resumed ? startAt : 0) + Number(res.headers.get("content-length") ?? 0);
-	let seen = resumed ? startAt : 0;
-	lastByteAt = Date.now();
-	const timer = setInterval(() => {
-		const of = total ? ` / ${(total / 1e6).toFixed(0)} MB` : "";
-		process.stdout.write(`\r  ↓ ${job.note}: ${(seen / 1e6).toFixed(1)} MB${of}   `);
-	}, 1000);
+	// the watchdog must die on EVERY exit path: a fetch rejection, HTTP error,
+	// or ignored range returns before the pipeline's finally — one live
+	// interval per retry would keep the process running forever
 	try {
-		if (!res.body) throw new Error("empty response body");
-		// pipeline (not manual write/drain waits): a disk-full or permission
-		// error on the file stream must reject this job, never stall it or
-		// escape as an unhandled `error` event. the counter is a Transform —
-		// pipeline only accepts a Writable as the LAST stream, and a plain
-		// Writable in the middle throws at call time.
-		const counter = new Transform({
-			transform(chunk, _enc, cb) {
-				seen += chunk.byteLength;
-				lastByteAt = Date.now();
-				cb(null, chunk);
-			},
+		const res = await fetch(job.url, {
+			...(startAt > 0 ? { headers: { range: `bytes=${startAt}-` } } : {}),
+			signal: abort.signal,
 		});
-		await pipeline(res.body, counter, createWriteStream(partial, { flags: "a" }), { signal: abort.signal });
+		if (!res.ok && res.status !== 206) throw new Error(`HTTP ${res.status}`);
+		const resumed = res.status === 206;
+		if (startAt > 0 && !resumed) throw new Error("server ignored the resume range; delete the .part and retry");
+		const total = (resumed ? startAt : 0) + Number(res.headers.get("content-length") ?? 0);
+		let seen = resumed ? startAt : 0;
+		lastByteAt = Date.now();
+		const timer = setInterval(() => {
+			const of = total ? ` / ${(total / 1e6).toFixed(0)} MB` : "";
+			process.stdout.write(`\r  ↓ ${job.note}: ${(seen / 1e6).toFixed(1)} MB${of}   `);
+		}, 1000);
+		try {
+			if (!res.body) throw new Error("empty response body");
+			// pipeline (not manual write/drain waits): a disk-full or permission
+			// error on the file stream must reject this job, never stall it or
+			// escape as an unhandled `error` event. the counter is a Transform —
+			// pipeline only accepts a Writable as the LAST stream, and a plain
+			// Writable in the middle throws at call time.
+			const counter = new Transform({
+				transform(chunk, _enc, cb) {
+					seen += chunk.byteLength;
+					lastByteAt = Date.now();
+					cb(null, chunk);
+				},
+			});
+			await pipeline(res.body, counter, createWriteStream(partial, { flags: "a" }), { signal: abort.signal });
+		} finally {
+			clearInterval(timer);
+		}
+		const size = statSync(partial).size;
+		if (size < job.minBytes) {
+			unlinkSync(partial);
+			throw new Error(`download too small (${size} bytes) — deleted, retry`);
+		}
+		renameSync(partial, job.dest);
+		process.stdout.write(`\r  ✓ ${job.note} (${(size / 1e6).toFixed(1)} MB)            \n`);
 	} finally {
-		clearInterval(timer);
 		clearInterval(watchdog);
 	}
-	const size = statSync(partial).size;
-	if (size < job.minBytes) {
-		unlinkSync(partial);
-		throw new Error(`download too small (${size} bytes) — deleted, retry`);
-	}
-	renameSync(partial, job.dest);
-	process.stdout.write(`\r  ✓ ${job.note} (${(size / 1e6).toFixed(1)} MB)            \n`);
 }

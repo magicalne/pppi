@@ -203,6 +203,10 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 		}
 		this._state = "starting";
 		this.decoder = new StringDecoder("utf8");
+		// a half-written line from the dead child must not prefix the new
+		// child's first response — that merged line is unparseable and the
+		// handshake would time out and restart again
+		this.buffer = "";
 		const [cmd, ...args] = this.command;
 		if (!cmd) throw new Error("empty agent command");
 		const proc = spawn(cmd, args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], env: process.env });

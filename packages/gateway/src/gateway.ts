@@ -668,6 +668,10 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				send(ws, { type: "hello_ok", agent: agentInfo(), history });
 				// status-bar snapshot for this client (fresh ones arrive via broadcast)
 				send(ws, { type: "status", status: agent.status });
+				// same for voice occupancy: without a snapshot, a client that
+				// switches machines keeps the last connection's voice_active
+				// toast forever when the new one never changes the state
+				send(ws, { type: "voice_active", active: voiceActive });
 				return;
 			}
 			if (msg.type === "chat") {

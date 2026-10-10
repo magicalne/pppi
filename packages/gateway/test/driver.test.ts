@@ -1,3 +1,5 @@
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -46,6 +48,45 @@ function framingChild(extraLine: string, splitAt: number, gapMs: number): string
 		process.stdin.on("end", () => process.exit(0));
 	`;
 	return [process.execPath, "-e", script];
+}
+
+/**
+ * A child whose FIRST get_state writes half a JSON response line (no newline)
+ * and exits — the restarted instance sees the marker file and answers the
+ * handshake normally. Exercises the dead-child line fragment the driver's
+ * buffer must not carry across a restart.
+ */
+function halfLineChild(): { command: string[]; marker: string } {
+	const marker = join(tmpdir(), `pppi-halfline-${process.pid}-${Date.now()}`);
+	const script = `
+		const fs = require("node:fs");
+		const answers = {
+			get_state: { model: { provider: "mock", id: "mock-1", name: "Mock 1", reasoning: false, contextWindow: 10000 }, thinkingLevel: "off", isStreaming: false, sessionName: "omni", sessionId: "halfline" },
+			get_available_thinking_levels: { levels: ["off"] },
+			get_session_stats: { contextUsage: { tokens: 1, contextWindow: 10000, percent: 0.01 } },
+			set_auto_compaction: {},
+		};
+		let buf = "";
+		process.stdin.on("data", (chunk) => {
+			buf += chunk;
+			for (;;) {
+				const nl = buf.indexOf("\\n");
+				if (nl === -1) break;
+				const line = buf.slice(0, nl);
+				buf = buf.slice(nl + 1);
+				if (!line.trim()) continue;
+				const cmd = JSON.parse(line);
+				if (cmd.type === "get_state" && !fs.existsSync(${JSON.stringify(marker)})) {
+					fs.writeFileSync(${JSON.stringify(marker)}, "1");
+					process.stdout.write('{"id":"' + cmd.id + '","type":"respo'); // half a line
+					process.exit(3); // die with the fragment in the pipe
+				}
+				const data = answers[cmd.type] ?? {};
+				process.stdout.write(JSON.stringify({ id: cmd.id, type: "response", command: cmd.type, success: true, data }) + "\\n");
+			}
+		});
+	`;
+	return { command: [process.execPath, "-e", script], marker };
 }
 
 describe("rpc agent driver", () => {
@@ -335,5 +376,21 @@ describe("rpc agent driver", () => {
 		// ENOENT never emits exit — pre-fix this stayed at zero relaunches
 		expect(errors.filter((m) => /failed to spawn/.test(m)).length).toBeGreaterThanOrEqual(3);
 		expect(driver.state).toBe("starting");
+	});
+
+	it("discards a half-written line from a dead child so the restarted child's handshake lands", async () => {
+		process.env.PPPI_RESTART_BASE_MS = "30";
+		const { command, marker } = halfLineChild();
+		try {
+			driver = new RpcAgentDriver({ command, cwd: "/tmp" });
+			driver.on("error", () => {}); // exit/restart noise
+			driver.start();
+			// pre-fix: the fragment prefixed the new child's first response
+			// line, get_state never parsed, and the handshake timed out
+			await new Promise<void>((r) => driver.once("ready", r));
+			expect(driver.state).toBe("idle");
+		} finally {
+			rmSync(marker, { force: true });
+		}
 	});
 });

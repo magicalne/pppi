@@ -728,6 +728,8 @@ export class Speaker {
 		this.everStarted = false;
 		this.lastStartedId = null;
 		this.epoch++; // anything still draining from the previous turn is stale
+		this.queue.length = 0; // …including sentences still queued: a drain would
+		// dequeue them under the NEW epoch and speak them before this turn's reply
 		this.currentSynth?.abort(); // …and not worth finishing either
 	}
 
@@ -806,6 +808,9 @@ export class Speaker {
 						if (this.epoch === turn) {
 							this.sendEvent({ type: "voice_error", message: `tts: ${String((err as Error).message ?? err)}` });
 							if (started) this.sendEvent({ type: "tts_end", id: item.id });
+							// a failure on the LAST item otherwise strands the client
+							// in its prior speaking/thinking state — hand the mic back
+							if (this.queue.length === 0) this.sendEvent({ type: "voice_state", state: "listening" });
 						}
 						continue;
 					}
