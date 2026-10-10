@@ -79,6 +79,43 @@ describe("gateway server", () => {
 		expect(body.stt.ready).toBe(false);
 	});
 
+	it("boots without voice when neither audio service nor stt is configured", async () => {
+		// the extension host with no bun/node runner passes no audioService and no
+		// stt — the gateway must degrade to no-voice instead of crashing
+		const bareDriver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
+		const bare = await createGateway({ token, agent: bareDriver });
+		await bare.listen(0, "127.0.0.1");
+		const barePort = bare.address()?.port ?? 0;
+
+		const res = await fetch(`http://127.0.0.1:${barePort}/api/health`);
+		const body = (await res.json()) as any;
+		expect(res.status).toBe(200);
+		expect(body.stt).toEqual({ ready: false, reason: "no stt configured" });
+		expect(body.boot).toEqual({ stage: "unavailable", reason: "no voice configured" });
+
+		const voice = await fetch(`http://127.0.0.1:${barePort}/api/voice`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}` },
+			body: Buffer.alloc(44),
+		});
+		expect(voice.status).toBe(503);
+		expect(((await voice.json()) as any).error).toBe("no stt configured");
+
+		// /voice upgrades close gracefully instead of hitting a missing stack
+		await new Promise<void>((resolve) => {
+			const ws = new WebSocket(`ws://127.0.0.1:${barePort}/voice`);
+			const done = () => {
+				ws.terminate();
+				resolve();
+			};
+			ws.on("close", done);
+			ws.on("error", done);
+		});
+
+		await bare.close();
+		bareDriver.dispose();
+	});
+
 	it("rejects voice uploads with a bad token", async () => {
 		const res = await fetch(`http://127.0.0.1:${port}/api/voice`, {
 			method: "POST",
