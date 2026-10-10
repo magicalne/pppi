@@ -1034,14 +1034,18 @@ describe("interactive voice websocket", () => {
 		await sayPaced(voice, v, "speech", 8);
 		await sayPaced(voice, v, "silence", 30);
 		const start = await nextEvent(voice, "tts_start");
+		// arm the waiter BEFORE the barge-in audio: the interrupted end fires the
+		// instant the detector cuts in — a listener armed after the stream lands
+		// would miss it (one interrupted tts_end, ever)
+		const end = nextEvent(voice, "tts_end");
 
 		// user talks over the agent: bargeInMs (250ms) of sustained speech must
 		// cut the synthesis off — ~1s of speech is ample
 		await sayPaced(voice, v, "speech", 10);
 
-		const end = await nextEvent(voice, "tts_end");
-		expect(end.id).toBe(start.id);
-		expect(end.interrupted).toBe(true);
+		const cut = await end;
+		expect(cut.id).toBe(start.id);
+		expect(cut.interrupted).toBe(true);
 		expect(aborted).toBeGreaterThanOrEqual(1);
 		await new Promise((r) => setTimeout(r, 200));
 		voice.close();
@@ -1061,13 +1065,15 @@ describe("interactive voice websocket", () => {
 		await sayPaced(voice, v, "speech", 8);
 		await sayPaced(voice, v, "silence", 30);
 		await nextEvent(voice, "tts_start");
+		// arm the waiter BEFORE the speech (see the barge-in test above)
+		const end = nextEvent(voice, "tts_end");
 
 		// exactly ~0.8s of speech: enough for 250ms sustain, impossible to
 		// satisfy if barge-in ever drifts back to needing whole seconds
 		await sayPaced(voice, v, "speech", 8);
 
-		const end = await nextEvent(voice, "tts_end");
-		expect(end.interrupted).toBe(true);
+		const cut = await end;
+		expect(cut.interrupted).toBe(true);
 		expect(aborted).toBeGreaterThanOrEqual(1);
 		voice.close();
 	});
