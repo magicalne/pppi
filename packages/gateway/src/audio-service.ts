@@ -167,6 +167,10 @@ server.on("upgrade", (req, socket, head) => {
 					session.assistantFinal(m.id, m.text);
 				} else if (m.type === "__assistant_delta__" && m.id && m.delta) {
 					session.assistantDelta(m.id, m.delta);
+				} else if (m.type === "__assistant_whole__" && m.id && m.text) {
+					// a delegated peer reply that never streamed deltas — speak it whole
+					lastReplyText = m.text;
+					session.speakWhole(m.text, m.id);
 				}
 			} catch {
 				// not ours

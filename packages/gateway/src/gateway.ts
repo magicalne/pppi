@@ -422,8 +422,15 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				const id = randomUUID();
 				broadcast({ type: "assistant_final", id, text: e.reply, profileId: e.fromSessionId });
 				peerLog.push({ id, role: "assistant", text: e.reply, ts: Date.now(), profileId: e.fromSessionId });
-				// a delegated answer lands in the omni conversation — say it too
-				speakAssistant((s) => s.assistantFinal(id, e.reply!));
+				// a delegated answer lands in the omni conversation — say it too.
+				// No deltas ever streamed for it (fresh id), so assistantFinal()
+				// would be a no-op: route the whole text through speakWhole, and
+				// forward to the audio child the same way delta/final reach it.
+				lastReply = e.reply;
+				speakAssistant(
+					(s) => s.speakWhole(e.reply!, id),
+					(a) => a.speakWhole(id, e.reply!),
+				);
 			}
 		} catch {
 			// no replies yet / non-JSON
