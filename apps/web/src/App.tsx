@@ -712,6 +712,12 @@ function ConnectionsDrawer(props: {
 		e.currentTarget.reset();
 	};
 
+	// two gateways can share a machine name (same hostname, different hosts/ports) —
+	// suffix those rows with the connection's host:port so they're told apart
+	const dupNames = new Set(
+		props.connections.filter((c) => props.connections.some((o) => o !== c && o.name === c.name)).map((c) => c.name),
+	);
+
 	return (
 		<div className="conn-drawer" onClick={(e) => e.stopPropagation()}>
 			<h3>Machines</h3>
@@ -721,7 +727,7 @@ function ConnectionsDrawer(props: {
 				<div key={c.id} className={`crow ${c.id === props.activeId ? "active" : ""}`}>
 					<button type="button" className="crow-main" onClick={() => props.onSwitch(c.id)}>
 						<span className="cdot" style={{ background: c.color ?? "var(--dim)" }} />
-						<span className="cname">{c.name}</span>
+						<span className="cname">{dupNames.has(c.name) ? `${c.name} · ${hostOf(c.url)}` : c.name}</span>
 						{c.id === props.activeId && <span className="ctag">{props.connected ? "online" : "offline"}</span>}
 					</button>
 					<button type="button" className="crow-x" aria-label={`Remove ${c.name}`} onClick={() => props.onRemove(c.id)}>
