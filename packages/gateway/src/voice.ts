@@ -113,6 +113,8 @@ type Capture = {
 	fed: number;
 	stream: UtteranceStream | null;
 	opening: Promise<void>;
+	/** dropped (blip/close) — the opening continuation must dispose, never feed */
+	discarded: boolean;
 	/** endpointed, inside the grace window — may still merge or dispatch */
 	pending: boolean;
 	/** streaming feedback: prefix already dispatched for this utterance */
@@ -226,11 +228,32 @@ export class VoiceSession {
 		clearTimeout(this.helloTimer);
 		clearTimeout(this.idleTimer);
 		clearInterval(this.telemetryTimer);
-		this.capture?.stream?.dispose();
+		if (this.capture) this.discardCapture(this.capture);
 		this.capture = null;
 		this.speaker?.abort();
 		if (this.authed) this.deps.onClosed();
 		this.deps.onGone?.(reason);
+	}
+
+	/**
+	 * Release a capture's utterance stream — including one whose openUtterance
+	 * is still pending: the stream that materializes later must be disposed
+	 * too, or it holds the shared STT model slot forever (every later
+	 * utterance deadlocks behind it).
+	 */
+	private discardCapture(cap: Capture): void {
+		cap.discarded = true;
+		const stream = cap.stream;
+		cap.stream = null; // pending feed rejections see the mismatch and stay quiet
+		stream?.dispose();
+		void cap.opening.then(
+			() => {
+				const late = cap.stream;
+				cap.stream = null;
+				late?.dispose();
+			},
+			() => {},
+		);
 	}
 
 	private async onMessage(data: Buffer, isBinary: boolean): Promise<void> {
@@ -412,6 +435,7 @@ export class VoiceSession {
 			fed: 0,
 			stream: null,
 			opening: Promise.resolve(),
+			discarded: false,
 			pending: false,
 			sentPrefix: null,
 			prefixCancelled: false,
@@ -422,10 +446,17 @@ export class VoiceSession {
 		this.capture = cap;
 		cap.opening = (async () => {
 			try {
-				cap.stream = await this.deps.stt.openUtterance();
+				const stream = await this.deps.stt.openUtterance();
+				if (cap.discarded) {
+					// dropped while opening (blip/close) — release the model slot, feed nothing
+					stream?.dispose();
+					return;
+				}
+				cap.stream = stream;
 				this.pumpStream(cap); // pre-roll that buffered while the stream opened
 			} catch (err) {
-				this.send({ type: "voice_error", message: `stt: ${String((err as Error).message ?? err)}` });
+				if (!cap.discarded)
+					this.send({ type: "voice_error", message: `stt: ${String((err as Error).message ?? err)}` });
 			}
 		})();
 		this.send({ type: "vad", speaking: true });
@@ -436,7 +467,7 @@ export class VoiceSession {
 		if (!this.capture) return;
 		if (totalMs === 0) {
 			// blip — discard, back to idle
-			this.capture.stream?.dispose();
+			this.discardCapture(this.capture);
 			this.capture = null;
 			this.deps.vad.reset?.(); // a cough shouldn't poison the next turn
 			return;
