@@ -20,6 +20,9 @@ const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "mock-agent.mjs"
 const modelStatus = resolveSttModel();
 const gen = speechGenerator();
 const supported = modelStatus.ready && transcriptQualityGenerator(gen);
+// barge-in/endpointing assertions are structural — any voice-shaped audio
+// works, so that suite only needs SOME generator (espeak-ng included)
+const anyGen = modelStatus.ready && gen !== null;
 
 const phrases = [
 	"what is the current build status",
@@ -226,7 +229,10 @@ async function bargeInBody(
 	await until(() => events.filter((e) => e.type === "stt_final").length >= 2, 30_000);
 	const finals = events.filter((e) => e.type === "stt_final").map((e) => norm(e.text ?? ""));
 	expect(finals.length).toBeGreaterThanOrEqual(2); // the question + the interruption
-	expect(finals.at(-1)).toContain("stop");
+	// transcript CONTENT only with a quality generator — espeak's robotic
+	// voice can garble words while still exercising the full barge-in path
+	if (transcriptQualityGenerator(gen)) expect(finals.at(-1)).toContain("stop");
+	else expect(finals.at(-1)!.length).toBeGreaterThan(0);
 
 	voice.close();
 	await app.close();
@@ -234,7 +240,7 @@ async function bargeInBody(
 	vad.dispose();
 }
 
-describe.skipIf(!supported)("barge-in (real vad + stt + tts)", () => {
+describe.skipIf(!anyGen)("barge-in (real vad + stt + tts)", () => {
 	const token = "voice-barge-token";
 
 	afterEach(() => {

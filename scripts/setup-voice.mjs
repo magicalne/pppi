@@ -21,6 +21,8 @@ import { spawn } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 const argv = process.argv.slice(2);
 const ttsFlag = argv.find((a) => a.startsWith("--tts="))?.slice(6);
@@ -129,12 +131,16 @@ async function download(job) {
 	}, 1000);
 	try {
 		if (!res.body) throw new Error("empty response body");
-		const out = createWriteStream(partial, { flags: resumed ? "a" : "w" });
-		for await (const chunk of res.body) {
-			seen += chunk.byteLength;
-			if (!out.write(chunk)) await new Promise((resolve) => out.once("drain", resolve));
-		}
-		await new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve())));
+		// pipeline (not manual write/drain waits): a disk-full or permission
+		// error on the file stream must reject this job, never stall it or
+		// escape as an unhandled `error` event
+		const counter = new Writable({
+			write(chunk, _enc, cb) {
+				seen += chunk.byteLength;
+				cb();
+			},
+		});
+		await pipeline(res.body, counter, createWriteStream(partial, { flags: resumed ? "a" : "w" }));
 	} finally {
 		clearInterval(timer);
 	}

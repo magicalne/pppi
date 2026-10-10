@@ -84,9 +84,10 @@ sessions. Read README.md for the full picture.
   Linux prebuilds — same code path on both platforms.
 - `packages/gateway/src/tts.ts` — TTS providers behind `TtsProvider`
   (`PPPI_TTS_PROVIDER=kokoro|piper|espeak-ng|macos-say|auto`; auto = piper
-  → kokoro → platform fallback `say` on darwin, `espeak-ng` elsewhere; every
-  resolver searches `PPPI_TTS_MODEL` → `~/.pppi/models/tts/` → HF cache, so
-  `bun run setup:voice` needs no env vars).
+  → kokoro → platform fallback `say` on darwin, `espeak-ng` elsewhere;
+  resolvers search `PPPI_TTS_MODEL` → `~/.pppi/models/tts/`, kokoro also
+  the HF cache — `bun run setup:voice` populates that dir, no env vars
+  needed).
 - `packages/gateway/src/vad.ts` + `vadProcess.ts` — silero VAD in a host
   process (worker threads deadlock against kokoro's runtime) + the
   turn-taking state machine (`UtteranceDetector`, timings in

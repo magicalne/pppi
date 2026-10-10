@@ -76,8 +76,9 @@ says "code is on the screen" and the full answer stays in the bubble.
   (82M q8 ONNX, the best voice; slower on CPU), then the always-available
   platform voice — macOS `say`, espeak-ng elsewhere (`--tts=kokoro` for
   `setup:voice`, or lay out any model dir and point `PPPI_TTS_MODEL` at it).
-  Both resolvers search `PPPI_TTS_MODEL` → `~/.pppi/models/tts/` → the
-  HuggingFace cache, so `setup:voice` needs zero env vars.
+  Both resolvers search `PPPI_TTS_MODEL` → `~/.pppi/models/tts/` (kokoro
+  additionally scans the HuggingFace cache), so `setup:voice` needs zero
+  env vars.
 - Timing knobs live in `packages/gateway/src/vad.ts` (`DEFAULT_TIMINGS`).
 - Magic words never become turns: `stop` (also `cancel`, `quiet`) cuts
   playback and aborts the agent; `repeat` (also `say that again`) re-speaks

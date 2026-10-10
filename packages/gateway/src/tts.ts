@@ -5,8 +5,9 @@
 // model is cached, else the always-available platform voice — `say` on
 // macOS, espeak-ng elsewhere).
 //
-// Model resolution searches $PPPI_TTS_MODEL first, then ~/.pppi/models/tts/
-// (where `bun run setup:voice` puts things), then the HuggingFace cache:
+// Model resolution: $PPPI_TTS_MODEL, then ~/.pppi/models/tts/ (where
+// `bun run setup:voice` puts things) — plus the HuggingFace cache for
+// kokoro specifically:
 //   piper:  a sherpa-onnx vits dir (.onnx + tokens.txt + espeak-ng-data)
 //   kokoro: onnx-community/Kokoro-82M-v1.0-ONNX layout (onnx/model*.onnx + voices/)
 //
@@ -14,7 +15,7 @@
 // before calling; a coding agent's raw answer is garbage out loud.
 
 import { execFileSync, spawn } from "node:child_process";
-import { constants, accessSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { constants, accessSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { VoiceTtsStatus } from "@pppi/protocol";
@@ -84,14 +85,15 @@ export function resolveTtsProvider(opts: { piperDirs?: string[]; kokoroDirs?: st
 export function resolvePiperModel(searchDirs?: string[]): { dir: string; onnx: string } | { reason: string } {
 	const dirs = searchDirs ?? piperSearchDirs();
 	for (const explicit of dirs) {
-		if (!existsSync(explicit)) continue;
-		const onnx = readdirSync(explicit).find((f) => f.endsWith(".onnx"));
+		// a non-directory or unreadable path (PPPI_TTS_MODEL can point anywhere)
+		// is a non-match, never a boot crash — resolution falls through
+		const onnx = findOnnxInDir(explicit);
 		if (!onnx) continue;
 		let complete = true;
 		for (const need of ["tokens.txt", "espeak-ng-data"]) {
 			if (!existsSync(join(explicit, need))) complete = false;
 		}
-		if (complete) return { dir: explicit, onnx: join(explicit, onnx) };
+		if (complete) return { dir: explicit, onnx };
 	}
 	if (searchDirs === undefined || dirs.length === 0) {
 		return {
@@ -99,6 +101,17 @@ export function resolvePiperModel(searchDirs?: string[]): { dir: string; onnx: s
 		};
 	}
 	return { reason: `no complete piper model dir in ${dirs.join(", ")}` };
+}
+
+/** The first *.onnx directly inside `dir`, or "" when dir is missing/unreadable/not a directory. */
+function findOnnxInDir(dir: string): string {
+	try {
+		if (!statSync(dir).isDirectory()) return "";
+		const onnx = readdirSync(dir).find((f) => f.endsWith(".onnx"));
+		return onnx ? join(dir, onnx) : "";
+	} catch {
+		return "";
+	}
 }
 
 /** Piper candidate dirs: $PPPI_TTS_MODEL, then vits/piper dirs in ~/.pppi/models/tts (setup-voice layout). */
@@ -473,7 +486,9 @@ export class EspeakNgProvider implements TtsProvider {
 			const chunks: Buffer[] = [];
 			const proc = spawn(this.bin!, ["-v", this.voice, "-s", String(this.wpm), "--stdout", text]);
 			proc.stdout.on("data", (c: Buffer) => chunks.push(c));
-			proc.on("exit", (code) =>
+			// `close`, not `exit`: exit can fire before stdout has flushed its
+			// final bytes, which would truncate the WAV
+			proc.on("close", (code) =>
 				code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error(`espeak-ng exited ${code}`)),
 			);
 			proc.on("error", reject);

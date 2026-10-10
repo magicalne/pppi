@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -71,6 +71,21 @@ describe("tts provider resolution", () => {
 		expect("reason" in good ? good.reason : good.onnx).toContain("model.onnx");
 		const empty = resolvePiperModel([emptyDir]);
 		expect("reason" in empty).toBe(true);
+	});
+
+	it("piper resolution treats file paths and missing paths as non-matches, not crashes", () => {
+		// PPPI_TTS_MODEL can point anywhere — a stray file (e.g. a kokoro
+		// .onnx) must not abort gateway boot with a readdir error
+		const notADir = join(piperFixture, "vits-piper-x", "model.onnx");
+		expect(existsSync(notADir)).toBe(true);
+		const fileHit = resolvePiperModel([notADir, "/definitely/not/here"]);
+		expect("reason" in fileHit).toBe(true);
+		// and full auto resolution still completes through the fallback
+		vi.stubEnv("HOME", emptyDir); // the real ~/.pppi must not leak in
+		vi.stubEnv("PPPI_TTS_MODEL", notADir);
+		vi.stubEnv("PPPI_TTS_PROVIDER", "");
+		const provider = resolveTtsProvider({ piperDirs: undefined, kokoroDirs: [emptyDir] });
+		expect(provider.id).not.toBe("piper");
 	});
 
 	it("auto picks piper when a model dir is present", () => {

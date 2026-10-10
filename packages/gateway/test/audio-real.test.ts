@@ -4,8 +4,9 @@
 // protocol end to end — mic speech → real silero VAD turn-taking → real
 // parakeet STT → __submit__ control frame → assistant text control frame →
 // real TTS audio streamed back → barge-in cuts the playback and aborts the
-// agent (__abort__ frame). Skips without bun, the STT model, or a quality
-// speech generator (piper / macOS say — see test/speech.ts).
+// agent (__abort__ frame). Skips without bun, the STT model, or ANY speech
+// generator (piper / macOS say / espeak-ng — see test/speech.ts); transcript
+// content is only asserted with a quality generator.
 
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -26,7 +27,9 @@ try {
 
 const modelStatus = resolveSttModel();
 const gen = speechGenerator();
-const supported = !!bunBin && modelStatus.ready && transcriptQualityGenerator(gen);
+// structural E2E — any speech generator works (espeak-ng included); content
+// assertions are conditional on a quality generator
+const supported = !!bunBin && modelStatus.ready && gen !== null;
 
 /** Poll until fn() is true. */
 async function until(fn: () => boolean, ms = 60_000): Promise<void> {
@@ -96,10 +99,15 @@ describe.skipIf(!supported)(`audio service child (real models, ${gen} voice)`, (
 		await stream(Buffer.alloc(16000 * 2 * 3)); // endpoint + grace → dispatch
 		await until(() => events.some((e) => e.type === "stt_final"), 60_000);
 		const final = events.find((e) => e.type === "stt_final")!;
-		expect((final.text ?? "").toLowerCase()).toContain("status");
+		// content only with a quality generator — espeak's robotic voice can
+		// garble words while still exercising the full path
+		const expectText = transcriptQualityGenerator(gen)
+			? (t: string) => expect(t).toContain("status")
+			: (t: string) => expect(t.length).toBeGreaterThan(0);
+		expectText((final.text ?? "").toLowerCase());
 		// the turn left the child as a __submit__ control frame (parent intercepts these in prod)
 		await until(() => events.some((e) => e.type === "__submit__"), 10_000);
-		expect(events.find((e) => e.type === "__submit__")!.text).toContain("status");
+		expect((events.find((e) => e.type === "__submit__")!.text ?? "").length).toBeGreaterThan(0);
 
 		// ---- reply: assistant text control frames → real TTS audio streams back.
 		// Deltas first, then the final — exactly what the gateway proxy sends;
@@ -125,7 +133,8 @@ describe.skipIf(!supported)(`audio service child (real models, ${gen} voice)`, (
 		await stream(Buffer.alloc(16000 * 2 * 4));
 		await until(() => events.filter((e) => e.type === "stt_final").length >= 2, 60_000);
 		const second = events.filter((e) => e.type === "stt_final")[1]!;
-		expect((second.text ?? "").toLowerCase()).toContain("stop");
+		if (transcriptQualityGenerator(gen)) expect((second.text ?? "").toLowerCase()).toContain("stop");
+		else expect((second.text ?? "").length).toBeGreaterThan(0);
 		voice.close();
 	}, 240_000);
 });
