@@ -8,6 +8,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { StringDecoder } from "node:string_decoder";
 import type { AgentStatus, ContextInfo, ModelInfo } from "@pppi/protocol";
 
 export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming" | "compacting" | "waiting";
@@ -142,6 +143,10 @@ export function toolLabel(toolName: string, args: any): string {
 export class RpcAgentDriver extends EventEmitter implements AgentPort {
 	private proc: ChildProcessWithoutNullStreams | null = null;
 	private buffer = "";
+	// incremental UTF-8 decoding: pipe reads can split a multibyte code point
+	// across chunks, and Buffer.toString per chunk would turn each half into
+	// U+FFFD replacement chars (corrupted deltas / unparseable lines)
+	private decoder = new StringDecoder("utf8");
 	private nextId = 1;
 	private pending = new Map<string, { resolve: (r: RpcResponse) => void; timer: NodeJS.Timeout }>();
 	private disposed = false;
@@ -184,6 +189,7 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 	start(): void {
 		if (this.disposed) return;
 		this._state = "starting";
+		this.decoder = new StringDecoder("utf8");
 		const [cmd, ...args] = this.command;
 		if (!cmd) throw new Error("empty agent command");
 		const proc = spawn(cmd, args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], env: process.env });
@@ -205,6 +211,7 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 		proc.on("exit", (code) => {
 			this.proc = null;
 			this.isStreaming = false;
+			this.decoder.end();
 			if (this.disposed) return;
 			this.emit("error", `omni agent exited (code ${code}); restarting`);
 			this.setState("starting");
@@ -266,7 +273,7 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 	}
 
 	private onData(chunk: Buffer): void {
-		this.buffer += chunk.toString("utf8");
+		this.buffer += this.decoder.write(chunk);
 		for (;;) {
 			const nl = this.buffer.indexOf("\n");
 			if (nl === -1) break;

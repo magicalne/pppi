@@ -5,6 +5,49 @@ import { RpcAgentDriver, toolLabel } from "../src/agent.ts";
 
 const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "mock-agent.mjs");
 
+/**
+ * A minimal `pi --mode rpc` child for framing tests: answers the handshake
+ * commands, then writes `extraLine` to stdout — split at byte `splitAt` into
+ * two writes `gapMs` apart, so the driver's pipe reads land mid-line and
+ * (given a multibyte `extraLine`) mid-codepoint. The split is emitted on the
+ * LAST handshake command (`set_auto_compaction`): nothing else the driver
+ * sends may interleave stdout into the gap and merge with the halves.
+ */
+function framingChild(extraLine: string, splitAt: number, gapMs: number): string[] {
+	const script = `
+		const answers = {
+			get_state: { model: { provider: "mock", id: "mock-1", name: "Mock 1", reasoning: false, contextWindow: 10000 }, thinkingLevel: "off", isStreaming: false, sessionName: "omni", sessionId: "framing" },
+			get_available_thinking_levels: { levels: ["off"] },
+			get_session_stats: { contextUsage: { tokens: 1, contextWindow: 10000, percent: 0.01 } },
+			set_auto_compaction: {},
+		};
+		let buf = "";
+		let sent = false;
+		process.stdin.on("data", (chunk) => {
+			buf += chunk;
+			for (;;) {
+				const nl = buf.indexOf("\\n");
+				if (nl === -1) break;
+				const line = buf.slice(0, nl);
+				buf = buf.slice(nl + 1);
+				if (!line.trim()) continue;
+				const cmd = JSON.parse(line);
+				const data = answers[cmd.type] ?? {};
+				process.stdout.write(JSON.stringify({ id: cmd.id, type: "response", command: cmd.type, success: true, data }) + "\\n");
+				if (cmd.type === "set_auto_compaction" && !sent) {
+					sent = true;
+					const bytes = Buffer.from(${JSON.stringify(extraLine)}, "utf8");
+					const at = Math.max(1, Math.min(${splitAt}, bytes.length));
+					process.stdout.write(bytes.subarray(0, at));
+					setTimeout(() => process.stdout.write(bytes.subarray(at)), ${gapMs});
+				}
+			}
+		});
+		process.stdin.on("end", () => process.exit(0));
+	`;
+	return [process.execPath, "-e", script];
+}
+
 describe("rpc agent driver", () => {
 	let driver: RpcAgentDriver;
 
@@ -204,5 +247,34 @@ describe("rpc agent driver", () => {
 		expect(states).toContain("thinking");
 		expect(states).toContain("streaming");
 		expect(states.at(-1)).toBe("idle");
+	});
+
+	it("reassembles rpc lines whose utf-8 bytes split mid-codepoint across pipe reads", async () => {
+		const line = `${JSON.stringify({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "X好Y" } })}\n`;
+		const bytes = Buffer.from(line, "utf8");
+		const x = bytes.indexOf("X");
+		const cut = x + 2; // after the lead byte of 好 (a 3-byte code point)
+		expect(x).toBeGreaterThan(-1);
+		expect(bytes[cut]! & 0xc0).toBe(0x80); // the second read starts mid-codepoint
+
+		driver = new RpcAgentDriver({ command: framingChild(line, cut, 40), cwd: "/tmp" });
+		const deltas: string[] = [];
+		driver.on("assistant-delta", (_id, d) => deltas.push(d));
+		driver.start();
+		await new Promise<void>((r, j) => {
+			const timer = setTimeout(() => j(new Error("never ready")), 10_000);
+			driver.once("ready", () => {
+				clearTimeout(timer);
+				r();
+			});
+		});
+		await new Promise<void>((r, j) => {
+			const timer = setTimeout(() => j(new Error("split line never reassembled into a delta")), 10_000);
+			driver.once("assistant-delta", () => {
+				clearTimeout(timer);
+				r();
+			});
+		});
+		expect(deltas.join("")).toBe("X好Y");
 	});
 });
