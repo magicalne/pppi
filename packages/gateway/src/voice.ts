@@ -731,8 +731,13 @@ export class Speaker {
 		this.chunker.pending += delta;
 		// an unclosed code fence isn't prose yet — hold until it closes
 		if ((this.chunker.pending.match(/```/g)?.length ?? 0) % 2 === 1) return;
-		const { sentences, rest } = takeSentences(this.chunker.pending);
+		const before = this.chunker.pending;
+		const { sentences, rest } = takeSentences(before);
 		this.chunker.pending = rest;
+		// track how much of the RAW buffer was consumed — sentences come back
+		// trimmed, so concatenating them loses the whitespace between them and
+		// assistantFinal's prefix guard would fail once ≥2 sentences shipped
+		this.chunker.emitted += before.slice(0, before.length - rest.length);
 		for (const s of sentences) this.enqueue(s);
 	}
 
@@ -755,7 +760,6 @@ export class Speaker {
 	private enqueue(text: string): void {
 		const prose = speakProse(text);
 		if (!prose) return;
-		this.chunker.emitted += text;
 		this.queue.push({ id: randomUUID(), text: prose });
 		void this.drain();
 	}
