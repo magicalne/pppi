@@ -62,7 +62,7 @@ if (ttsSet.has("kokoro")) {
 		["tokenizer.json", 1024],
 		["tokenizer_config.json", 16],
 		["onnx/model_quantized.onnx", 80 * 1024 * 1024],
-		["voices/af_Heart.bin", 200 * 1024],
+		["voices/af_heart.bin", 200 * 1024],
 	]) {
 		jobs.push({
 			url: `${base}/${rel}`,

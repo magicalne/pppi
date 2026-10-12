@@ -408,6 +408,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			timeoutMs: 15_000,
 		});
 		if (res.code !== 0) return;
+		let spokenAny = false; // first unseen reply of THIS batch opens the speech turn
 		try {
 			const entries = JSON.parse(res.stdout) as Array<{
 				kind?: string;
@@ -426,10 +427,15 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				// No deltas ever streamed for it (fresh id), so assistantFinal()
 				// would be a no-op: route the whole text through speakWhole, and
 				// forward to the audio child the same way delta/final reach it.
+				// A poll can surface SEVERAL unseen replies: only the first may
+				// begin a turn (speakWhole cuts whatever is speaking); the rest
+				// queue behind it or only the last would be audible.
 				lastReply = e.reply;
+				const first = !spokenAny;
+				spokenAny = true;
 				speakAssistant(
-					(s) => s.speakWhole(e.reply!, id),
-					(a) => a.speakWhole(id, e.reply!),
+					(s) => (first ? s.speakWhole(e.reply!, id) : s.queueWhole(e.reply!, id)),
+					(a) => (first ? a.speakWhole(id, e.reply!) : a.queueWhole(id, e.reply!)),
 				);
 			}
 		} catch {

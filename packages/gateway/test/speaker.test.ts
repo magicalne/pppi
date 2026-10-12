@@ -211,6 +211,23 @@ describe("Speaker sentence chunking", () => {
 		expect(received).toEqual(["One.", "Fresh."]);
 	});
 
+	it("a mailbox batch speaks every reply — only the first begins the turn", async () => {
+		// several unseen delegated replies surface in one mailbox poll;
+		// speakWhole per entry aborts the previous one (beginTurn cuts
+		// whatever plays) and only the last reply would be audible
+		const { provider, received } = delayedTts(20);
+		const rec = recorder();
+		const speaker = new Speaker(provider, rec.sendBinary, rec.sendEvent);
+
+		speaker.speakWhole("First reply.");
+		speaker.queueWhole("Second reply.");
+		speaker.queueWhole("Third reply.");
+		await until(() => rec.starts().length === 3, 8_000);
+
+		expect(received).toEqual(["First reply.", "Second reply.", "Third reply."]);
+		expect(rec.ends().every((e) => !e.interrupted)).toBe(true);
+	});
+
 	it("a synthesis failure on the last item hands the mic back (listening)", async () => {
 		let calls = 0;
 		const received: string[] = [];

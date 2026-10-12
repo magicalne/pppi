@@ -264,8 +264,11 @@ export class AudioService {
 		const tearDown = () => {
 			this.ups.delete(sock);
 			// the child can't announce a client hang-up (its socket is already
-			// closing when onClosed fires), so the parent owns the active count
-			if (this.authedUps.delete(sock)) this.opts.setVoiceActive(this.authedUps.size > 0);
+			// closing when onClosed fires), so the parent owns the active count.
+			// setVoiceActive is DELTA accounting: this authed socket is gone,
+			// so exactly one -1 — the aggregate `size > 0` drifted the count
+			// upward on every multi-client close (voice_active stuck on)
+			if (this.authedUps.delete(sock)) this.opts.setVoiceActive(false);
 			try {
 				client.close();
 			} catch {
@@ -325,6 +328,11 @@ export class AudioService {
 	/** A whole reply with no streamed deltas (delegated peer answer): the child speaks it as its own turn. */
 	speakWhole(id: string, text: string): void {
 		this.toChild({ type: "__assistant_whole__", id, text });
+	}
+
+	/** A whole reply appended to the current speech turn (subsequent replies of a mailbox batch). */
+	queueWhole(id: string, text: string): void {
+		this.toChild({ type: "__assistant_whole__", id, text, queued: true });
 	}
 
 	private toChild(frame: object): void {

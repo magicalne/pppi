@@ -656,6 +656,11 @@ export class VoiceSession {
 		this.speaker?.speakWhole(text, id);
 	}
 
+	/** Queue a whole text without beginning a new turn (subsequent replies of a mailbox batch). */
+	queueWhole(text: string, id?: string): void {
+		this.speaker?.queueWhole(text, id);
+	}
+
 	/** Directly feed VAD probabilities (tests; bypasses the model). */
 	feedProbability(prob: number, advanceMs = 32): void {
 		this.audioMs += advanceMs;
@@ -758,6 +763,20 @@ export class Speaker {
 	/** Speak a finished text as its own turn (repeat magic word, delegated peer reply). */
 	speakWhole(text: string, id?: string): void {
 		this.beginTurn();
+		const prose = speakProse(text);
+		if (!prose) return;
+		this.queue.push({ id: id ?? randomUUID(), text: prose });
+		void this.drain();
+	}
+
+	/**
+	 * Queue a whole text WITHOUT beginning a new turn. A mailbox poll can
+	 * surface several unseen delegated replies; speakWhole per entry would
+	 * abort the still-speaking previous one (beginTurn cuts whatever plays),
+	 * leaving only the last reply audible. The FIRST reply of a batch opens
+	 * the turn; the rest append through here.
+	 */
+	queueWhole(text: string, id?: string): void {
 		const prose = speakProse(text);
 		if (!prose) return;
 		this.queue.push({ id: id ?? randomUUID(), text: prose });

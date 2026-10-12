@@ -1316,6 +1316,13 @@ fun ChatScreen(
 						.pointerInput(voiceOn, voiceBoot, micGranted) {
 							detectTapGestures(
 								onPress = {
+									val micPermissions = buildList {
+										add(Manifest.permission.RECORD_AUDIO)
+										// bluetooth headset mic routing needs this on 12+
+										if (Build.VERSION.SDK_INT >= 31) add(Manifest.permission.BLUETOOTH_CONNECT)
+										// the screen-off notification can stay hidden without it
+										if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+									}.toTypedArray()
 									when {
 										// the button always means stop/hang-up — mid-boot it cancels
 										voiceOn -> {
@@ -1331,7 +1338,13 @@ fun ChatScreen(
 											tryAwaitRelease()
 											stopRecordingAndSend()
 										}
-										micGranted -> {
+										// micGranted is remembered state — the permission may have been
+										// revoked in system settings while we stayed alive, and an
+										// unguarded startRecording() would throw SecurityException.
+										// Re-check live; a stale grant falls through to re-requesting.
+										micGranted &&
+											ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+											PackageManager.PERMISSION_GRANTED -> {
 											// voice first (AGENTS.md): press-and-hold = hold-to-talk —
 											// recording starts on press so the waveform and the
 											// "release to send" hint are live; release uploads it. A
@@ -1350,15 +1363,7 @@ fun ChatScreen(
 												}
 											}
 										}
-										else -> permissionLauncher.launch(
-											buildList {
-												add(Manifest.permission.RECORD_AUDIO)
-												// bluetooth headset mic routing needs this on 12+
-												if (Build.VERSION.SDK_INT >= 31) add(Manifest.permission.BLUETOOTH_CONNECT)
-												// the screen-off notification can stay hidden without it
-												if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
-											}.toTypedArray(),
-										)
+										else -> permissionLauncher.launch(micPermissions)
 									}
 								},
 							)
