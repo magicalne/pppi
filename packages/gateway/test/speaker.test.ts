@@ -271,6 +271,23 @@ describe("Speaker sentence chunking", () => {
 		expect(received).toEqual(["One that gets cut.", "Discrete immediately."]);
 	});
 
+	it("a later mailbox poll's first reply appends to still-speaking speech (cross-poll)", async () => {
+		// spokenAny used to reset per poll, so poll #2's first reply called
+		// speakWhole — cutting poll #1's replies that were still speaking
+		const { provider, received } = delayedTts(40);
+		const rec = recorder();
+		const speaker = new Speaker(provider, rec.sendBinary, rec.sendEvent);
+
+		speaker.speakDiscrete("First poll's reply."); // idle → fresh turn
+		await until(() => rec.starts().length === 1);
+		speaker.speakDiscrete("Later poll's first reply."); // still speaking → append
+		await until(() => rec.starts().length === 2);
+		await until(() => rec.ends().length === 2);
+
+		expect(received).toEqual(["First poll's reply.", "Later poll's first reply."]);
+		expect(rec.ends().every((e) => !e.interrupted)).toBe(true);
+	});
+
 	it("a synthesis failure on the last item hands the mic back (listening)", async () => {
 		let calls = 0;
 		const received: string[] = [];

@@ -127,4 +127,34 @@ describe("KokoroProvider generate scheduling", () => {
 		expect(ca.pcm.length).toBeGreaterThan(0);
 		expect(cb.pcm.length).toBeGreaterThan(0);
 	});
+
+	it("an abort that lands while QUEUED skips the stale generate entirely — the next turn is not delayed behind it", async () => {
+		vi.stubEnv("PPPI_TTS_STREAM", "0");
+		dir = fixtureDir();
+		const provider = new KokoroProvider([dir]);
+
+		// A hangs in the (uncancellable) native call…
+		const a = firstChunk(provider.synthesize("Hanging answer.", undefined));
+		await vi.waitFor(() => expect(kokoro.generate).toHaveBeenCalledTimes(1));
+
+		// B queues behind A, then its caller barge-ins while still QUEUED
+		const acB = new AbortController();
+		const b = firstChunk(provider.synthesize("Queued answer that will be aborted.", acB.signal));
+		await new Promise((r) => setTimeout(r, 50));
+		acB.abort();
+		await expect(b).rejects.toThrow(/aborted/); // the race unblocks immediately
+
+		// A finishes; B's queued callback must SKIP (signal set) — a fresh
+		// turn then runs without waiting behind B's stale synthesis
+		kokoro.releaseFirst();
+		const c = await Promise.race([
+			firstChunk(provider.synthesize("Fresh turn.")),
+			new Promise<never>((_, reject) =>
+				setTimeout(() => reject(new Error("fresh turn delayed behind a skipped-queue stale generate")), 4_000),
+			),
+		]);
+		expect(c.pcm.length).toBeGreaterThan(0);
+		// A ran, C ran — B never invoked the engine (pre-fix: B ran first, C waited)
+		expect(kokoro.generate).toHaveBeenCalledTimes(2);
+	});
 });

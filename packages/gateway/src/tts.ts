@@ -49,7 +49,13 @@ class GenerateQueue {
 	private serial: Promise<unknown> = Promise.resolve();
 
 	schedule<T>(gen: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-		const p = this.serial.then(gen);
+		const p = this.serial.then(() => {
+			// the caller may have been aborted while queued behind an earlier
+			// (uncancellable) generate — running the stale work now would delay
+			// the NEXT turn's fresh speech behind a synthesis nobody wants
+			if (signal?.aborted) throw abortError("tts generation aborted");
+			return gen();
+		});
 		this.serial = p.then(
 			() => {},
 			() => {},

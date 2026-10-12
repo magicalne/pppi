@@ -408,7 +408,6 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			timeoutMs: 15_000,
 		});
 		if (res.code !== 0) return;
-		let spokenAny = false; // first unseen reply of THIS batch opens the speech turn
 		try {
 			const entries = JSON.parse(res.stdout) as Array<{
 				kind?: string;
@@ -425,17 +424,14 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				peerLog.push({ id, role: "assistant", text: e.reply, ts: Date.now(), profileId: e.fromSessionId });
 				// a delegated answer lands in the omni conversation — say it too.
 				// No deltas ever streamed for it (fresh id), so assistantFinal()
-				// would be a no-op: route the whole text through speakWhole, and
-				// forward to the audio child the same way delta/final reach it.
-				// A poll can surface SEVERAL unseen replies: only the first may
-				// begin a turn (speakWhole cuts whatever is speaking); the rest
-				// queue behind it or only the last would be audible.
+				// would be a no-op. DISCRETE per entry: appends when a previous
+				// poll's replies are still speaking (cross-poll batches must not
+				// cut each other), opens a fresh turn when idle, and never
+				// inherits an aborted turn's stale state.
 				lastReply = e.reply;
-				const first = !spokenAny;
-				spokenAny = true;
 				speakAssistant(
-					(s) => (first ? s.speakWhole(e.reply!, id) : s.queueWhole(e.reply!, id)),
-					(a) => (first ? a.speakWhole(id, e.reply!) : a.queueWhole(id, e.reply!)),
+					(s) => s.speakDiscrete(e.reply!, id),
+					(a) => a.speakDiscrete(id, e.reply!),
 				);
 			}
 		} catch {
