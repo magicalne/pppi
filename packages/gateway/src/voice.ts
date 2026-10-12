@@ -661,6 +661,11 @@ export class VoiceSession {
 		this.speaker?.queueWhole(text, id);
 	}
 
+	/** A discrete whole delivery: fresh turn when idle, appended when speech is active. */
+	speakDiscrete(text: string, id?: string): void {
+		this.speaker?.speakDiscrete(text, id);
+	}
+
 	/** Directly feed VAD probabilities (tests; bypasses the model). */
 	feedProbability(prob: number, advanceMs = 32): void {
 		this.audioMs += advanceMs;
@@ -781,6 +786,20 @@ export class Speaker {
 		if (!prose) return;
 		this.queue.push({ id: id ?? randomUUID(), text: prose });
 		void this.drain();
+	}
+
+	/**
+	 * A discrete delivery (POST /api/peer-reply): append when a turn is
+	 * actively draining, but open a FRESH turn when idle — a bare queueWhole
+	 * after an aborted turn would inherit its stale aborted=true (the reply
+	 * becomes un-interruptible) and its everStarted/lastStartedId bookkeeping.
+	 */
+	speakDiscrete(text: string, id?: string): void {
+		if (this.draining || this.queue.length > 0) {
+			this.queueWhole(text, id);
+			return;
+		}
+		this.speakWhole(text, id);
 	}
 
 	private enqueue(text: string): void {

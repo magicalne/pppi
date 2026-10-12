@@ -591,13 +591,14 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			const id = randomUUID();
 			broadcast({ type: "assistant_final", id, text: replyText, profileId: session });
 			peerLog.push({ id, role: "assistant", text: replyText, ts: Date.now(), profileId: session });
-			// same speaking path as mailbox-discovered replies. queueWhole (never
-			// beginTurn): a discrete POST must not cut a reply still speaking —
-			// it queues behind it, or speaks immediately when idle
+			// same speaking path as mailbox-discovered replies, but DISCRETE:
+			// a fresh POST opens a fresh turn when idle (an inherited aborted
+			// flag would make the reply un-interruptible) and appends when a
+			// reply is still being spoken
 			lastReply = replyText;
 			speakAssistant(
-				(s) => s.queueWhole(replyText, id),
-				(a) => a.queueWhole(id, replyText),
+				(s) => s.speakDiscrete(replyText, id),
+				(a) => a.speakDiscrete(id, replyText),
 			);
 			return json(res, 200, { ok: true });
 		}

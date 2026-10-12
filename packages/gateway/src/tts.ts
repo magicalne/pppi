@@ -339,40 +339,54 @@ export class KokoroProvider implements TtsProvider {
 			// generate a short first phrase for fast first-audio, then larger
 			// phrases that stay hidden behind the audio already playing. Whole-
 			// sentence generation (old behavior) with PPPI_TTS_STREAM=0.
+			//
+			// Both paths serialize generate() through `serial` the same way:
+			// the new call is REGISTERED on the chain synchronously (queue
+			// before any await — a bare `await serial` first would let two
+			// sessions pass the same resolved promise and overlap), the chain
+			// swallows rejections so one failure can't poison later calls, and
+			// the caller races the abort signal so barge-in never waits on an
+			// uncancellable engine.generate (the loser keeps draining on the
+			// chain where the next synthesize waits for it).
 			if (provider.streaming) {
 				for (const seg of streamSegments(text)) {
 					throwIfAborted(signal);
-					await provider.serial;
-					const { audio, rate } = await engine.generate(seg, DEFAULT_KOKORO_VOICE);
-					provider.serial = Promise.resolve();
+					const gen: Promise<{ audio: Float32Array; rate: number }> = provider.serial.then(() =>
+						engine.generate(seg, DEFAULT_KOKORO_VOICE),
+					);
+					provider.serial = gen.then(
+						() => {},
+						() => {},
+					);
+					const { audio, rate } = await provider.raceAbort(gen, signal);
 					yield* floatPcmChunks(audio, rate, 50, signal);
 				}
 				return;
 			}
 			throwIfAborted(signal);
-			await provider.serial;
-			const gen: Promise<{ audio: Float32Array; rate: number }> = engine.generate(text, DEFAULT_KOKORO_VOICE);
-			// the engine cannot cancel an in-flight generate and supports no
-			// overlap: chain the orphan behind the NEXT synthesize, but race
-			// THIS await against the abort signal so barge-in unblocks the
-			// Speaker immediately (PPPI_TTS_STREAM=0 path; the streaming path
-			// already cancels between segments)
+			const gen: Promise<{ audio: Float32Array; rate: number }> = provider.serial.then(() =>
+				engine.generate(text, DEFAULT_KOKORO_VOICE),
+			);
 			provider.serial = gen.then(
 				() => {},
 				() => {},
 			);
-			if (signal) {
-				const aborted = new Promise<never>((_, reject) => {
-					if (signal.aborted) throw abortError("kokoro generation aborted");
-					signal.addEventListener("abort", () => reject(abortError("kokoro generation aborted")), {
-						once: true,
-					});
-				});
-				await Promise.race([gen, aborted]);
-			}
+			await provider.raceAbort(gen, signal);
 			const { audio, rate } = await gen;
 			yield* floatPcmChunks(audio, rate, 50, signal);
 		})();
+	}
+
+	/** Race a (non-cancellable) generation against the abort signal. */
+	private raceAbort<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+		if (!signal) return p;
+		return Promise.race([
+			p,
+			new Promise<never>((_, reject) => {
+				if (signal.aborted) throw abortError("kokoro generation aborted");
+				signal.addEventListener("abort", () => reject(abortError("kokoro generation aborted")), { once: true });
+			}),
+		]);
 	}
 
 	/** phrase-chunked synthesis (see synthesize); default on */

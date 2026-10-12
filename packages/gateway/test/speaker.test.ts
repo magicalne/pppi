@@ -228,6 +228,28 @@ describe("Speaker sentence chunking", () => {
 		expect(rec.ends().every((e) => !e.interrupted)).toBe(true);
 	});
 
+	it("a discrete reply after an aborted turn opens a fresh, interruptible turn", async () => {
+		const { provider, received } = delayedTts(30);
+		const rec = recorder();
+		const speaker = new Speaker(provider, rec.sendBinary, rec.sendEvent);
+
+		speaker.beginTurn();
+		speaker.assistantDelta("x", "One that gets cut.");
+		await until(() => rec.starts().length === 1);
+		speaker.abort();
+		await until(() => rec.ends().some((e) => e.interrupted));
+		await sleep(30); // let the drain loop exit — the speaker is idle now
+
+		// a discrete POST (speakDiscrete) must not inherit the aborted turn's
+		// stale aborted=true — pre-fix a bare queueWhole here was un-interruptible
+		speaker.speakDiscrete("Discrete reply.");
+		await until(() => rec.starts().length === 2);
+		speaker.abort(); // barge-in must be able to stop it
+		await until(() => rec.ends().filter((e) => e.interrupted).length === 2);
+
+		expect(received).toEqual(["One that gets cut.", "Discrete reply."]);
+	});
+
 	it("a synthesis failure on the last item hands the mic back (listening)", async () => {
 		let calls = 0;
 		const received: string[] = [];

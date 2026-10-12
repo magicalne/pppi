@@ -171,6 +171,7 @@ server.on("upgrade", (req, socket, head) => {
 					text?: string;
 					delta?: string;
 					queued?: boolean;
+					discrete?: boolean;
 				};
 				if (m.type === "__assistant_final__" && m.id && m.text) {
 					lastReplyText = m.text;
@@ -179,10 +180,11 @@ server.on("upgrade", (req, socket, head) => {
 					session.assistantDelta(m.id, m.delta);
 				} else if (m.type === "__assistant_whole__" && m.id && m.text) {
 					// a delegated peer reply that never streamed deltas — speak it
-					// whole; `queued` appends to the current turn (mailbox batch)
-					// instead of cutting whatever is already speaking
+					// whole. `queued` appends to the current turn (mailbox batch);
+					// `discrete` opens a fresh turn when idle, appends when active
 					lastReplyText = m.text;
-					if (m.queued) session.queueWhole(m.text, m.id);
+					if (m.discrete) session.speakDiscrete(m.text, m.id);
+					else if (m.queued) session.queueWhole(m.text, m.id);
 					else session.speakWhole(m.text, m.id);
 				}
 			} catch {

@@ -1,7 +1,9 @@
-// Regression coverage for the PPPI_TTS_STREAM=0 abort path: a full-answer
-// kokoro generate() the engine can neither cancel nor overlap must still
-// (a) unblock the Speaker the moment the abort signal fires, and (b) chain
-// the orphaned generate behind the next synthesize call.
+// Regression coverage for kokoro generate() scheduling: the engine can
+// neither cancel an in-flight call nor overlap two of them, so the provider
+// must (a) unblock the Speaker the moment an abort signal fires, (b) chain
+// the orphaned generate behind the next synthesize, and (c) register every
+// new generate on the serial chain synchronously — a bare `await serial`
+// first would let two sessions pass the same resolved promise and overlap.
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,19 +12,35 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { KokoroProvider, type TtsChunk } from "../src/tts.ts";
 
 const kokoro = vi.hoisted(() => {
-	// first generate hangs until released (the un-cancellable in-flight call);
-	// every later call resolves immediately — keyed on call COUNT, not pending
-	// resolvers (releasing the first would otherwise make call two hang too)
+	// the FIRST generate of each test hangs until released (the
+	// un-cancellable in-flight call); later calls resolve immediately —
+	// keyed on call count, not pending resolvers. any overlapping call
+	// throws: the engine supports no concurrency.
 	const resolvers: Array<(v: { audio: Float32Array; rate: number }) => void> = [];
 	let calls = 0;
+	let inFlight = 0;
 	const generate = vi.fn(() => {
+		if (inFlight > 0) return Promise.reject(new Error("overlapping generate — engine supports no concurrency"));
 		calls++;
-		if (calls === 1) return new Promise<{ audio: Float32Array; rate: number }>((r) => resolvers.push(r));
-		return Promise.resolve({ audio: new Float32Array(4), rate: 24_000 });
+		inFlight++;
+		const done = (r: { audio: Float32Array; rate: number }) => {
+			inFlight--;
+			return r;
+		};
+		if (calls === 1) {
+			return new Promise<{ audio: Float32Array; rate: number }>((r) => resolvers.push(r)).then(done);
+		}
+		return Promise.resolve({ audio: new Float32Array(4), rate: 24_000 }).then(done);
 	});
 	return {
 		generate,
 		releaseFirst: () => resolvers.shift()?.({ audio: new Float32Array(8), rate: 24_000 }),
+		reset: () => {
+			calls = 0;
+			inFlight = 0;
+			resolvers.length = 0;
+			generate.mockClear();
+		},
 	};
 });
 
@@ -32,20 +50,31 @@ vi.mock("kokoro-js", () => ({
 	},
 }));
 
-describe("KokoroProvider non-streaming abort (PPPI_TTS_STREAM=0)", () => {
+function fixtureDir(): string {
+	const dir = mkdtempSync(join(tmpdir(), "pppi-kokoro-abort-"));
+	mkdirSync(join(dir, "onnx"), { recursive: true });
+	writeFileSync(join(dir, "onnx", "model_quantized.onnx"), "x"); // all resolution needs
+	return dir;
+}
+
+const firstChunk = (iter: AsyncIterable<TtsChunk>) =>
+	(async () => {
+		for await (const c of iter) return c;
+		throw new Error("no chunk from the synthesis");
+	})();
+
+describe("KokoroProvider generate scheduling", () => {
 	let dir: string;
 
 	afterEach(() => {
 		vi.unstubAllEnvs();
+		kokoro.reset();
 		if (dir) rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("races the abort signal so barge-in unblocks the Speaker, then serializes the next generate behind the orphan", async () => {
+	it("non-streaming (PPPI_TTS_STREAM=0): races the abort signal so barge-in unblocks the Speaker, then serializes the next generate behind the orphan", async () => {
 		vi.stubEnv("PPPI_TTS_STREAM", "0");
-		dir = mkdtempSync(join(tmpdir(), "pppi-kokoro-abort-"));
-		mkdirSync(join(dir, "onnx"), { recursive: true });
-		writeFileSync(join(dir, "onnx", "model_quantized.onnx"), "x"); // all resolution needs
-
+		dir = fixtureDir();
 		const provider = new KokoroProvider([dir]);
 		expect(provider.status.ready).toBe(true);
 
@@ -69,15 +98,33 @@ describe("KokoroProvider non-streaming abort (PPPI_TTS_STREAM=0)", () => {
 		// it (no overlapping generate) and then speak normally
 		kokoro.releaseFirst();
 		const chunk = await Promise.race([
-			(async () => {
-				for await (const c of provider.synthesize("next turn")) return c;
-				throw new Error("no chunk from the second synthesis");
-			})(),
+			firstChunk(provider.synthesize("next turn")),
 			new Promise<never>((_, reject) =>
 				setTimeout(() => reject(new Error("next generate never ran — orphan not chained")), 4_000),
 			),
 		]);
 		expect(chunk.pcm.length).toBeGreaterThan(0);
 		expect(kokoro.generate).toHaveBeenCalledTimes(2);
+	});
+
+	it("streaming (default): a second session queues behind a pending generate instead of overlapping it", async () => {
+		vi.stubEnv("PPPI_TTS_STREAM", "1");
+		dir = fixtureDir();
+		const provider = new KokoroProvider([dir]);
+
+		// session A's first segment hangs in generate…
+		const a = firstChunk(provider.synthesize("First answer, sentence one. Sentence two. Sentence three."));
+		await vi.waitFor(() => expect(kokoro.generate).toHaveBeenCalledTimes(1));
+
+		// …session B starts while A is pending. pre-fix, B's `await serial`
+		// saw the same resolved promise and entered generate() concurrently
+		const b = firstChunk(provider.synthesize("Second answer, sentence one. Sentence two."));
+		await new Promise((r) => setTimeout(r, 150));
+		expect(kokoro.generate).toHaveBeenCalledTimes(1); // B queued behind A
+
+		kokoro.releaseFirst();
+		const [ca, cb] = await Promise.all([a, b]); // throws loudly on any overlap
+		expect(ca.pcm.length).toBeGreaterThan(0);
+		expect(cb.pcm.length).toBeGreaterThan(0);
 	});
 });

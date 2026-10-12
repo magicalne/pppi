@@ -341,6 +341,11 @@ export class AudioService {
 		this.toChild({ type: "__assistant_whole__", id, text, queued: true });
 	}
 
+	/** A discrete whole delivery: fresh turn when idle, appended when speech is active. */
+	speakDiscrete(id: string, text: string): void {
+		this.toChild({ type: "__assistant_whole__", id, text, discrete: true });
+	}
+
 	private toChild(frame: object): void {
 		const line = JSON.stringify(frame);
 		for (const up of this.ups) {
