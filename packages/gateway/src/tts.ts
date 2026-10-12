@@ -35,6 +35,36 @@ function throwIfAborted(signal?: AbortSignal): void {
 	if (signal?.aborted) throw abortError("tts synthesis aborted");
 }
 
+/**
+ * Serializes uncancellable native generates and races them against aborts.
+ * The engines (sherpa-onnx piper, kokoro-js) support neither cancellation
+ * nor overlapping calls: every generate is REGISTERED on the chain
+ * synchronously (a bare `await serial` first would let two sessions pass
+ * the same resolved promise and overlap), rejections are swallowed so one
+ * failure can't poison later calls, and the caller races the abort signal
+ * so barge-in never waits on the engine — the orphan keeps draining on the
+ * chain where the next synthesize waits for it.
+ */
+class GenerateQueue {
+	private serial: Promise<unknown> = Promise.resolve();
+
+	schedule<T>(gen: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+		const p = this.serial.then(gen);
+		this.serial = p.then(
+			() => {},
+			() => {},
+		);
+		if (!signal) return p;
+		return Promise.race([
+			p,
+			new Promise<never>((_, reject) => {
+				if (signal.aborted) throw abortError("tts generation aborted");
+				signal.addEventListener("abort", () => reject(abortError("tts generation aborted")), { once: true });
+			}),
+		]);
+	}
+}
+
 /** Where setup-voice.mjs / manual downloads land. */
 export function ttsModelRoot(): string {
 	return join(homedir(), ".pppi", "models", "tts");
@@ -151,6 +181,8 @@ function piperSearchDirs(): string[] {
 export class SherpaPiperProvider implements TtsProvider {
 	readonly id = "piper" as const;
 	private loading: Promise<PiperEngine | null> | null = null;
+	/** serializes native generates + races aborts (see GenerateQueue) */
+	private readonly queue = new GenerateQueue();
 	/** model resolution (boot-time truth) — a load failure flips `status`, never this */
 	private readonly resolvedStatus: VoiceTtsStatus;
 	private currentStatus: VoiceTtsStatus;
@@ -176,10 +208,13 @@ export class SherpaPiperProvider implements TtsProvider {
 			if (!provider.resolvedStatus.ready) throw new Error(provider.resolvedStatus.reason);
 			const engine = await provider.ensureEngine();
 			if (!engine) throw new Error("sherpa-onnx piper engine failed to load");
-			// same text-level streaming as kokoro: short first phrase, larger rest
+			// same text-level streaming as kokoro: short first phrase, larger
+			// rest — and the same GenerateQueue: the native generate is
+			// uncancellable and non-overlapping, so race the abort and chain
+			// any orphan behind later calls
 			for (const seg of streamSegments(text)) {
 				throwIfAborted(signal);
-				const { samples, rate } = await engine.generate(seg);
+				const { samples, rate } = await provider.queue.schedule(() => engine.generate(seg), signal);
 				yield* floatPcmChunks(samples, rate, 50, signal);
 			}
 		})();
@@ -311,9 +346,8 @@ export class KokoroProvider implements TtsProvider {
 	private readonly resolvedStatus: VoiceTtsStatus;
 	private currentStatus: VoiceTtsStatus;
 	private readonly model: { dir: string } | { reason: string };
-	/** serializes engine.generate calls — the engine supports no overlap, and an
-	 * abort-orphaned generate must finish before the next one starts */
-	private serial: Promise<unknown> = Promise.resolve();
+	/** serializes native generates + races aborts (see GenerateQueue) */
+	private readonly queue = new GenerateQueue();
 
 	constructor(searchDirs?: string[]) {
 		this.model = resolveKokoroModel(searchDirs);
@@ -338,55 +372,23 @@ export class KokoroProvider implements TtsProvider {
 			// kokoro-js has no native streaming, so stream at the TEXT level:
 			// generate a short first phrase for fast first-audio, then larger
 			// phrases that stay hidden behind the audio already playing. Whole-
-			// sentence generation (old behavior) with PPPI_TTS_STREAM=0.
-			//
-			// Both paths serialize generate() through `serial` the same way:
-			// the new call is REGISTERED on the chain synchronously (queue
-			// before any await — a bare `await serial` first would let two
-			// sessions pass the same resolved promise and overlap), the chain
-			// swallows rejections so one failure can't poison later calls, and
-			// the caller races the abort signal so barge-in never waits on an
-			// uncancellable engine.generate (the loser keeps draining on the
-			// chain where the next synthesize waits for it).
+			// sentence generation (old behavior) with PPPI_TTS_STREAM=0. Both
+			// paths go through the GenerateQueue (see SherpaPiperProvider).
 			if (provider.streaming) {
 				for (const seg of streamSegments(text)) {
 					throwIfAborted(signal);
-					const gen: Promise<{ audio: Float32Array; rate: number }> = provider.serial.then(() =>
-						engine.generate(seg, DEFAULT_KOKORO_VOICE),
+					const { audio, rate } = await provider.queue.schedule(
+						() => engine.generate(seg, DEFAULT_KOKORO_VOICE),
+						signal,
 					);
-					provider.serial = gen.then(
-						() => {},
-						() => {},
-					);
-					const { audio, rate } = await provider.raceAbort(gen, signal);
 					yield* floatPcmChunks(audio, rate, 50, signal);
 				}
 				return;
 			}
 			throwIfAborted(signal);
-			const gen: Promise<{ audio: Float32Array; rate: number }> = provider.serial.then(() =>
-				engine.generate(text, DEFAULT_KOKORO_VOICE),
-			);
-			provider.serial = gen.then(
-				() => {},
-				() => {},
-			);
-			await provider.raceAbort(gen, signal);
-			const { audio, rate } = await gen;
+			const { audio, rate } = await provider.queue.schedule(() => engine.generate(text, DEFAULT_KOKORO_VOICE), signal);
 			yield* floatPcmChunks(audio, rate, 50, signal);
 		})();
-	}
-
-	/** Race a (non-cancellable) generation against the abort signal. */
-	private raceAbort<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
-		if (!signal) return p;
-		return Promise.race([
-			p,
-			new Promise<never>((_, reject) => {
-				if (signal.aborted) throw abortError("kokoro generation aborted");
-				signal.addEventListener("abort", () => reject(abortError("kokoro generation aborted")), { once: true });
-			}),
-		]);
 	}
 
 	/** phrase-chunked synthesis (see synthesize); default on */

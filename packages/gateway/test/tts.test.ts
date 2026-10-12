@@ -211,11 +211,13 @@ describe.skipIf(!espeakBin)("espeak-ng abort (real binary)", () => {
 		await expect(first).rejects.toMatchObject({ name: "AbortError" });
 		expect(Date.now() - started).toBeLessThan(5_000); // minutes of synthesis, cut in seconds
 
-		// no orphaned espeak-ng process keeps synthesizing in the background
+		// no orphaned espeak-ng process keeps synthesizing in the background —
+		// scoped to THIS worker's direct children so an unrelated espeak-ng
+		// (another test worker, a user process) can't fail the assertion
 		await new Promise((r) => setTimeout(r, 300));
 		let orphan = false;
 		try {
-			execFileSync("pgrep", ["-f", "espeak-ng"]);
+			execFileSync("pgrep", ["-P", String(process.pid), "espeak-ng"]);
 			orphan = true;
 		} catch {
 			// pgrep exits 1 when nothing matches — that is the good case

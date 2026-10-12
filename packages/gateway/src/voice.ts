@@ -386,6 +386,9 @@ export class VoiceSession {
 			const pcm = cap.pcm[cap.fed++]!;
 			void stream.feed(pcm).then(
 				({ committed, tentative }) => {
+					// a feed that was in flight when the capture was discarded (blip,
+					// close) must not emit partials or dispatch a prefix afterwards
+					if (cap.discarded || cap.stream !== stream) return;
 					if (!cap.firstPartialAt && (committed.length > 0 || tentative.length > 0)) cap.firstPartialAt = Date.now();
 					this.send({ type: "stt_partial", committed, tentative });
 					this.maybeDispatchPrefix(cap, committed);
@@ -793,9 +796,11 @@ export class Speaker {
 	 * actively draining, but open a FRESH turn when idle — a bare queueWhole
 	 * after an aborted turn would inherit its stale aborted=true (the reply
 	 * becomes un-interruptible) and its everStarted/lastStartedId bookkeeping.
+	 * An ABORTED drain doesn't count as active: it is only unwinding, and
+	 * appending under it queues with aborted still true.
 	 */
 	speakDiscrete(text: string, id?: string): void {
-		if (this.draining || this.queue.length > 0) {
+		if (!this.aborted && (this.draining || this.queue.length > 0)) {
 			this.queueWhole(text, id);
 			return;
 		}
