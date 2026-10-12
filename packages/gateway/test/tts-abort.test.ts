@@ -133,8 +133,8 @@ describe("KokoroProvider generate scheduling", () => {
 		dir = fixtureDir();
 		const provider = new KokoroProvider([dir]);
 
-		// A hangs in the (uncancellable) native call…
-		const a = firstChunk(provider.synthesize("Hanging answer.", undefined));
+		// A hangs in the (uncancellable) native call… (its chunks go unconsumed)
+		void firstChunk(provider.synthesize("Hanging answer.", undefined));
 		await vi.waitFor(() => expect(kokoro.generate).toHaveBeenCalledTimes(1));
 
 		// B queues behind A, then its caller barge-ins while still QUEUED
