@@ -205,7 +205,12 @@ class VoiceAudioEngine(
 		// explicit guard: the caller checked at startMic, but a mid-session
 		// revocation must not construct AudioRecord (also satisfies lint)
 		if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-			if (fatal) keepRunning.set(false)
+			// a revocation is not recoverable inside this session (the UI layer
+			// re-requests and restarts voice): stop the reader AND release the
+			// old recorder — leaving either alive would report a live voice
+			// session with no usable capture
+			keepRunning.set(false)
+			closeRecorder()
 			onError("microphone permission missing")
 			return
 		}

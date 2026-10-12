@@ -311,6 +311,9 @@ export class KokoroProvider implements TtsProvider {
 	private readonly resolvedStatus: VoiceTtsStatus;
 	private currentStatus: VoiceTtsStatus;
 	private readonly model: { dir: string } | { reason: string };
+	/** serializes engine.generate calls — the engine supports no overlap, and an
+	 * abort-orphaned generate must finish before the next one starts */
+	private serial: Promise<unknown> = Promise.resolve();
 
 	constructor(searchDirs?: string[]) {
 		this.model = resolveKokoroModel(searchDirs);
@@ -339,13 +342,35 @@ export class KokoroProvider implements TtsProvider {
 			if (provider.streaming) {
 				for (const seg of streamSegments(text)) {
 					throwIfAborted(signal);
+					await provider.serial;
 					const { audio, rate } = await engine.generate(seg, DEFAULT_KOKORO_VOICE);
+					provider.serial = Promise.resolve();
 					yield* floatPcmChunks(audio, rate, 50, signal);
 				}
 				return;
 			}
 			throwIfAborted(signal);
-			const { audio, rate } = await engine.generate(text, DEFAULT_KOKORO_VOICE);
+			await provider.serial;
+			const gen: Promise<{ audio: Float32Array; rate: number }> = engine.generate(text, DEFAULT_KOKORO_VOICE);
+			// the engine cannot cancel an in-flight generate and supports no
+			// overlap: chain the orphan behind the NEXT synthesize, but race
+			// THIS await against the abort signal so barge-in unblocks the
+			// Speaker immediately (PPPI_TTS_STREAM=0 path; the streaming path
+			// already cancels between segments)
+			provider.serial = gen.then(
+				() => {},
+				() => {},
+			);
+			if (signal) {
+				const aborted = new Promise<never>((_, reject) => {
+					if (signal.aborted) throw abortError("kokoro generation aborted");
+					signal.addEventListener("abort", () => reject(abortError("kokoro generation aborted")), {
+						once: true,
+					});
+				});
+				await Promise.race([gen, aborted]);
+			}
+			const { audio, rate } = await gen;
 			yield* floatPcmChunks(audio, rate, 50, signal);
 		})();
 	}

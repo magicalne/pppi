@@ -339,6 +339,9 @@ describe("rpc agent driver", () => {
 			await vi.waitFor(() =>
 				expect(warn).toHaveBeenCalledWith(expect.stringContaining("dropping unparseable rpc line")),
 			);
+			// the dropped line is arbitrary child stdout — its content must
+			// never be logged, only the metadata
+			for (const call of warn.mock.calls) expect(String(call[0])).not.toContain("definitely not a json");
 		} finally {
 			warn.mockRestore();
 		}

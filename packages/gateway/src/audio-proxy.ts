@@ -301,10 +301,16 @@ export class AudioService {
 					this.opts.abortAgent();
 					return;
 				case "__voice_active__":
-					this.opts.setVoiceActive(evt.active === true);
+					// the child reports +1 exactly once per authed session; the
+					// authedUps mark IS the count, so a repeat frame can't drift
+					// the delta and a spurious false is simply ignored (teardown
+					// owns every -1)
+					if (evt.active === true && !this.authedUps.has(sock)) {
+						this.authedUps.add(sock);
+						this.opts.setVoiceActive(true);
+					}
 					return;
 				case "voice_hello_ok":
-					this.authedUps.add(sock);
 					return client.send(data, { binary: false });
 				default:
 					return client.send(data, { binary: false });
