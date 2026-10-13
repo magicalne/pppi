@@ -1,5 +1,5 @@
 // pppi paths + profile store shared by the pi extension commands.
-// Keep the JSON shapes in sync with apps/server/src/profiles.ts.
+// Keep the JSON shapes in sync with packages/gateway/src/profiles.ts.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -55,16 +55,20 @@ export function listProfiles(): Profile[] {
 	const dir = join(pppiDir(), "profiles");
 	if (!existsSync(dir)) return [];
 	try {
-		return readdirSync(dir)
-			.filter((f) => f.endsWith(".json"))
-			.map((f) => {
-				try {
-					return JSON.parse(readFileSync(join(dir, f), "utf8")) as Profile;
-				} catch {
-					return null;
-				}
-			})
-			.filter((p): p is Profile => p !== null && typeof p.name === "string");
+		return (
+			readdirSync(dir)
+				.filter((f) => f.endsWith(".json"))
+				.map((f) => {
+					try {
+						return JSON.parse(readFileSync(join(dir, f), "utf8")) as Profile;
+					} catch {
+						return null;
+					}
+				})
+				// same rule as the gateway's readProfileFile: a profile needs BOTH a
+				// name and a color — anything less is ignored, not half-rendered
+				.filter((p): p is Profile => p !== null && !!p.name && !!p.color)
+		);
 	} catch {
 		return [];
 	}

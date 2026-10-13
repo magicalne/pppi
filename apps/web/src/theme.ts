@@ -20,5 +20,9 @@ export function loadTheme(): ThemeId {
 
 export function applyTheme(id: ThemeId) {
 	document.documentElement.dataset.theme = id;
+	// the browser chrome (and task-switcher cards) should wear the theme too —
+	// read the live --bg token so tokens.css stays the single source of truth
+	const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+	if (bg) document.querySelector('meta[name="theme-color"]')?.setAttribute("content", bg);
 	localStorage.setItem(KEY, id);
 }

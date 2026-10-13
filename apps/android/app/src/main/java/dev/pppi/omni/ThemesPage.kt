@@ -85,6 +85,7 @@ private fun ThemeCard(t: PppiTheme, current: Boolean, modifier: Modifier, onClic
 					modifier = Modifier
 						.clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 12.dp, bottomEnd = 3.dp))
 						.background(t.userBubble)
+						.border(1.dp, t.userBubbleLine, RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 12.dp, bottomEnd = 3.dp))
 						.padding(horizontal = 8.dp, vertical = 4.dp),
 				)
 			}

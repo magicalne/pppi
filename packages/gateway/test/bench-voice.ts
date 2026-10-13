@@ -72,7 +72,6 @@ async function benchSttStreaming(dir: string): Promise<void> {
 	const feedMs: number[] = [];
 	let firstPartialMs: number | null = null;
 	let fedAudioMs = 0;
-	const start = performance.now();
 	for (let off = 0; off < pcm.length; off += chunk) {
 		const piece = pcm.subarray(off, Math.min(off + chunk, pcm.length));
 		const f0 = performance.now();

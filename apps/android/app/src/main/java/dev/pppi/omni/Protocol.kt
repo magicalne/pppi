@@ -56,6 +56,11 @@ sealed class ServerEvent {
 	@SerialName("error")
 	data class ErrorEvt(val message: String, val target: String? = null) : ServerEvent()
 
+	// interactive voice mode is (no longer) live on this gateway
+	@Serializable
+	@SerialName("voice_active")
+	data class VoiceActive(val active: Boolean) : ServerEvent()
+
 	// ---- status bar (protocol v5) ----
 
 	@Serializable
@@ -109,7 +114,7 @@ sealed class ClientMessage {
 
 	@Serializable
 	@SerialName("abort")
-	class Abort : ClientMessage()
+	data class Abort(val target: String? = null) : ClientMessage()
 
 	@Serializable
 	@SerialName("set_model")
@@ -259,13 +264,38 @@ sealed class VoiceServerEvent {
 }
 
 /** Voice client → server JSON (we only send these three; audio is binary frames). */
+@Serializable
+sealed class VoiceClientMessage {
+
+	@Serializable
+	@SerialName("hello")
+	data class Hello(val token: String, val client: String = "android") : VoiceClientMessage()
+
+	@Serializable
+	@SerialName("interrupt")
+	data object Interrupt : VoiceClientMessage()
+
+	@Serializable
+	@SerialName("playback_done")
+	data object PlaybackDone : VoiceClientMessage()
+}
+
+// encodeDefaults so "client":"android" stays on the wire like the web's frames
+val voiceJson = Json {
+	classDiscriminator = "type"
+	encodeDefaults = true
+}
+
 object VoiceClientMessages {
+	/** the token is arbitrary bytes from a pair link — never interpolate it into JSON */
 	fun hello(token: String): String =
-		"""{"type":"hello","token":"$token","client":"android"}"""
+		voiceJson.encodeToString(VoiceClientMessage.serializer(), VoiceClientMessage.Hello(token))
 
-	fun interrupt(): String = """{"type":"interrupt"}"""
+	fun interrupt(): String =
+		voiceJson.encodeToString(VoiceClientMessage.serializer(), VoiceClientMessage.Interrupt)
 
-	fun playbackDone(): String = """{"type":"playback_done"}"""
+	fun playbackDone(): String =
+		voiceJson.encodeToString(VoiceClientMessage.serializer(), VoiceClientMessage.PlaybackDone)
 }
 
 /** UI-facing turn-taking state, mirroring the web pill. */

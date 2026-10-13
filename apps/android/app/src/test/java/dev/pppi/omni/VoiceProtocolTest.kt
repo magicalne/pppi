@@ -52,6 +52,19 @@ class VoiceProtocolTest {
 		assertEquals("""{"type":"playback_done"}""", VoiceClientMessages.playbackDone())
 	}
 
+	@Test fun `hello escapes json-hostile tokens`() {
+		// pair-link tokens are arbitrary bytes — quotes and backslashes must not
+		// corrupt the frame, and the result must still parse back
+		val hostile = "a\"b\\c\nd"
+		val frame = VoiceClientMessages.hello(hostile)
+		assertEquals(
+			"""{"type":"hello","token":"a\"b\\c\nd","client":"android"}""",
+			frame,
+		)
+		val back = voiceJson.decodeFromString(VoiceClientMessage.serializer(), frame) as VoiceClientMessage.Hello
+		assertEquals(hostile, back.token)
+	}
+
 	@Test fun `phase machine mirrors the web state machine`() {
 		val m = VoicePhaseMachine()
 		assertEquals(VoicePhase.LISTENING, m.phase)

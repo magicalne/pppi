@@ -71,7 +71,7 @@ class PppiClient(
 
 	private fun scheduleReconnect() {
 		if (closedByUser) return
-	 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ if (!closedByUser) connect() }, retryDelayMs)
+		android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ if (!closedByUser) connect() }, retryDelayMs)
 		retryDelayMs = (retryDelayMs * 2).coerceAtMost(15_000)
 	}
 

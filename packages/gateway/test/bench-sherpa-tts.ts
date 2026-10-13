@@ -60,7 +60,7 @@ const paragraph =
 		text: paragraph,
 		sid: 8,
 		speed: 1.0,
-		onProgress: ({ samples: s }: { samples: Float32Array }) => chunks.push(performance.now() - t1),
+		onProgress: () => chunks.push(performance.now() - t1),
 	});
 	const audioMs = (audio.samples.length / audio.sampleRate) * 1000;
 	console.log(

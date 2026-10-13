@@ -606,6 +606,10 @@
 	max-width: 90vw;
 	z-index: 50;
 }
+/* informational variant — not an error (e.g. voice live on another screen) */
+.toast.info {
+	border-color: var(--line);
+}
 
 /* ---------------- themes page ---------------- */
 

@@ -422,8 +422,17 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				const id = randomUUID();
 				broadcast({ type: "assistant_final", id, text: e.reply, profileId: e.fromSessionId });
 				peerLog.push({ id, role: "assistant", text: e.reply, ts: Date.now(), profileId: e.fromSessionId });
-				// a delegated answer lands in the omni conversation — say it too
-				speakAssistant((s) => s.assistantFinal(id, e.reply!));
+				// a delegated answer lands in the omni conversation — say it too.
+				// No deltas ever streamed for it (fresh id), so assistantFinal()
+				// would be a no-op. DISCRETE per entry: appends when a previous
+				// poll's replies are still speaking (cross-poll batches must not
+				// cut each other), opens a fresh turn when idle, and never
+				// inherits an aborted turn's stale state.
+				lastReply = e.reply;
+				speakAssistant(
+					(s) => s.speakDiscrete(e.reply!, id),
+					(a) => a.speakDiscrete(id, e.reply!),
+				);
 			}
 		} catch {
 			// no replies yet / non-JSON
@@ -578,6 +587,15 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			const id = randomUUID();
 			broadcast({ type: "assistant_final", id, text: replyText, profileId: session });
 			peerLog.push({ id, role: "assistant", text: replyText, ts: Date.now(), profileId: session });
+			// same speaking path as mailbox-discovered replies, but DISCRETE:
+			// a fresh POST opens a fresh turn when idle (an inherited aborted
+			// flag would make the reply un-interruptible) and appends when a
+			// reply is still being spoken
+			lastReply = replyText;
+			speakAssistant(
+				(s) => s.speakDiscrete(replyText, id),
+				(a) => a.speakDiscrete(id, replyText),
+			);
 			return json(res, 200, { ok: true });
 		}
 		if (req.method === "GET") return serveStatic(res, path);
@@ -661,6 +679,10 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				send(ws, { type: "hello_ok", agent: agentInfo(), history });
 				// status-bar snapshot for this client (fresh ones arrive via broadcast)
 				send(ws, { type: "status", status: agent.status });
+				// same for voice occupancy: without a snapshot, a client that
+				// switches machines keeps the last connection's voice_active
+				// toast forever when the new one never changes the state
+				send(ws, { type: "voice_active", active: voiceActive });
 				return;
 			}
 			if (msg.type === "chat") {
@@ -671,7 +693,16 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 					);
 				}
 			} else if (msg.type === "abort") {
-				void agent.abort();
+				// Only the omni's own turn can be cut from here: peer sessions are
+				// reached through one-shot `pigeon send` calls with no abort channel,
+				// so a targeted abort must not fall through to killing the omni.
+				if (!msg.target || msg.target === agent.info.sessionId) void agent.abort();
+				else
+					send(ws, {
+						type: "error",
+						message: "can't stop a peer session from here — stop it on its machine",
+						target: msg.target,
+					});
 			} else if (msg.type === "set_model") {
 				agent
 					.setModel(String(msg.provider ?? ""), String(msg.modelId ?? ""))
@@ -713,7 +744,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 	// child mode (extension host): /voice sockets pipe to the audio service
 	if (audio) {
 		onVoiceSocket = (raw: WebSocket) => void audio.proxyVoice(raw);
-	} else {
+	} else if (opts.stt || opts.voiceStt) {
 		// in-process mode (cli host): the whole voice stack lives here
 		const sttPort = opts.voiceStt ?? voiceStt(opts.stt!);
 		// bundled silero model; a missing file leaves voice sessions connected but inert
@@ -759,6 +790,10 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			sessions.set(session, raw);
 		};
 	}
+	// else: no voice anywhere (no audio child — e.g. no bun on PATH — and no
+	// in-process stt): degrade instead of crashing. /voice upgrades stay on the
+	// default handler that closes the socket; /api/voice answers 503
+	// "no stt configured"; health's boot stage reports "unavailable".
 
 	// ---------------------------------------------------------------- lifecycle
 

@@ -67,7 +67,18 @@ const fakeStt: VoiceStt | null = fake
 	: null;
 
 const realStt = fake || process.env.PPPI_AUDIO_NO_STT === "1" ? null : Stt.create({});
-const sttPort: VoiceStt = fakeStt ?? voiceStt(realStt!);
+// PPPI_AUDIO_NO_STT boots the service WITHOUT native STT: sessions still
+// connect (honest not-ready status), they just never transcribe. A null
+// realStt here used to be `voiceStt(null!)` — a boot crash instead.
+const sttPort: VoiceStt =
+	fakeStt ??
+	(realStt
+		? voiceStt(realStt)
+		: {
+				status: { ready: false, reason: process.env.PPPI_AUDIO_NO_STT === "1" ? "stt disabled" : "no stt" },
+				openUtterance: () => Promise.resolve(null),
+				transcribeBuffer: () => Promise.resolve(""),
+			});
 const tts = fake ? null : resolveTtsProvider();
 
 // Warm the heavy models NOW, not on the first utterance/reply — eager load
@@ -143,19 +154,38 @@ server.on("upgrade", (req, socket, head) => {
 			onAuthed: () => ws.send(JSON.stringify({ type: "__voice_active__", active: true })),
 			onClosed: () => {
 				open = Math.max(0, open - 1);
-				if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "__voice_active__", active: open > 0 }));
+				// active-count teardown is owned by the PARENT (it sees its own
+				// proxied socket close and counts exactly one -1). the aggregate
+				// `open > 0` frame sent here drifted the parent's delta counter
+				// upward whenever one of several sessions closed (voice_active
+				// stuck true after the last client left).
 			},
 		});
 		// assistant text arrives as control frames — feed the speaker (+ repeat cache)
 		ws.on("message", (data: Buffer, isBinary: boolean) => {
 			if (isBinary) return;
 			try {
-				const m = JSON.parse(data.toString()) as { type?: string; id?: string; text?: string; delta?: string };
+				const m = JSON.parse(data.toString()) as {
+					type?: string;
+					id?: string;
+					text?: string;
+					delta?: string;
+					queued?: boolean;
+					discrete?: boolean;
+				};
 				if (m.type === "__assistant_final__" && m.id && m.text) {
 					lastReplyText = m.text;
 					session.assistantFinal(m.id, m.text);
 				} else if (m.type === "__assistant_delta__" && m.id && m.delta) {
 					session.assistantDelta(m.id, m.delta);
+				} else if (m.type === "__assistant_whole__" && m.id && m.text) {
+					// a delegated peer reply that never streamed deltas — speak it
+					// whole. `queued` appends to the current turn (mailbox batch);
+					// `discrete` opens a fresh turn when idle, appends when active
+					lastReplyText = m.text;
+					if (m.discrete) session.speakDiscrete(m.text, m.id);
+					else if (m.queued) session.queueWhole(m.text, m.id);
+					else session.speakWhole(m.text, m.id);
 				}
 			} catch {
 				// not ours

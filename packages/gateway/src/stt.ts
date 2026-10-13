@@ -8,7 +8,7 @@
 //   3. ~/.pppi/models/stt/*.gguf (where `bun run setup:voice` downloads it)
 //   4. pi-transcribe's recommended model in the HuggingFace cache
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { constants, accessSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type DecodedWav, toMono16k } from "./wav.ts";
@@ -16,32 +16,46 @@ import { type DecodedWav, toMono16k } from "./wav.ts";
 const RECOMMENDED_REPO_DIR = "models--handy-computer--parakeet-unified-en-0.6b-gguf";
 const RECOMMENDED_FILE = "parakeet-unified-en-0.6b-Q8_0.gguf";
 
+/** A readable regular file exists at `p` — directories (or unreadable files) named like models must not resolve. */
+function isFile(p: string): boolean {
+	try {
+		if (!statSync(p).isFile()) return false;
+		accessSync(p, constants.R_OK); // a chmod-000 gguf is not a model we can load
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export type SttStatus = { ready: true; modelPath: string; modelId: string } | { ready: false; reason: string };
 
 export function resolveSttModel(): SttStatus {
 	const explicit = process.env.PPPI_STT_MODEL;
 	if (explicit) {
-		if (!existsSync(explicit)) return { ready: false, reason: `PPPI_STT_MODEL points to a missing file: ${explicit}` };
+		if (!isFile(explicit)) return { ready: false, reason: `PPPI_STT_MODEL is not a readable file: ${explicit}` };
 		return { ready: true, modelPath: explicit, modelId: explicit };
 	}
 
 	const piTranscribeCfg = join(homedir(), ".pi", "agent", "pi-transcribe.json");
 	try {
 		const cfg = JSON.parse(readFileSync(piTranscribeCfg, "utf8")) as { model?: { path?: string; id?: string } };
-		if (cfg.model?.path && existsSync(cfg.model.path)) {
+		if (cfg.model?.path && isFile(cfg.model.path)) {
 			return { ready: true, modelPath: cfg.model.path, modelId: cfg.model.id ?? "pi-transcribe model" };
 		}
 	} catch {
 		// fall through
 	}
 
-	// setup-voice layout: any .gguf under ~/.pppi/models/stt/
+	// setup-voice layout: .gguf files under ~/.pppi/models/stt/ — prefer the
+	// recommended parakeet family, otherwise a stable (sorted) first pick
 	try {
 		const modelDir = join(homedir(), ".pppi", "models", "stt");
 		if (existsSync(modelDir)) {
-			for (const f of readdirSync(modelDir)) {
-				if (f.endsWith(".gguf")) return { ready: true, modelPath: join(modelDir, f), modelId: f };
-			}
+			const ggufs = readdirSync(modelDir)
+				.filter((f) => f.endsWith(".gguf") && isFile(join(modelDir, f)))
+				.sort();
+			const pick = ggufs.find((f) => /parakeet/i.test(f)) ?? ggufs[0];
+			if (pick) return { ready: true, modelPath: join(modelDir, pick), modelId: pick };
 		}
 	} catch {
 		// fall through
@@ -51,7 +65,7 @@ export function resolveSttModel(): SttStatus {
 	try {
 		for (const snap of readdirSync(hfCache)) {
 			const candidate = join(hfCache, snap, RECOMMENDED_FILE);
-			if (existsSync(candidate)) return { ready: true, modelPath: candidate, modelId: RECOMMENDED_FILE };
+			if (isFile(candidate)) return { ready: true, modelPath: candidate, modelId: RECOMMENDED_FILE };
 		}
 	} catch {
 		// fall through
@@ -63,14 +77,30 @@ export function resolveSttModel(): SttStatus {
 	};
 }
 
+/** Batch transcriptions get this much trailing silence appended: the model drops or garbles short speech that ends abruptly (streaming finalize is unaffected — endpointing already buffers trailing silence). */
+const BATCH_TAIL_SILENCE_SAMPLES = Math.round(0.75 * 16_000);
+
 export class Stt {
 	private model: TranscribeModelLike | null = null;
 	private loading: Promise<void> | null = null;
-	readonly status: SttStatus;
+	/** boot-time model resolution — the retry source of truth even after `status` flips */
+	private readonly resolved: SttStatus;
+	private current: SttStatus;
 	private queue: Promise<unknown> = Promise.resolve();
 
-	private constructor(status: SttStatus) {
-		this.status = status;
+	private constructor(resolved: SttStatus) {
+		this.resolved = resolved;
+		this.current = resolved;
+	}
+
+	/**
+	 * Live health: resolution at boot, then the truth about the loaded model.
+	 * A model that fails to LOAD flips this to not-ready (the ready line,
+	 * voice_hello_ok and /api/health must not keep claiming ready); a
+	 * successful retry flips it back.
+	 */
+	get status(): SttStatus {
+		return this.current;
 	}
 
 	static create(opts: { disabled?: boolean } = {}): Stt {
@@ -78,7 +108,7 @@ export class Stt {
 	}
 
 	get ready(): boolean {
-		return this.status.ready;
+		return this.current.ready;
 	}
 
 	/**
@@ -94,11 +124,20 @@ export class Stt {
 		if (this.model) return;
 		if (!this.loading) {
 			const loading = (async () => {
-				if (!this.status.ready) throw new Error(this.status.reason);
-				const mod = (await import("transcribe-cpp")) as {
-					TranscribeModel: { load(path: string): Promise<unknown> };
-				};
-				this.model = (await mod.TranscribeModel.load(this.status.modelPath)) as TranscribeModelLike;
+				if (!this.resolved.ready) throw new Error(this.resolved.reason);
+				try {
+					const mod = (await import("transcribe-cpp")) as {
+						TranscribeModel: { load(path: string): Promise<unknown> };
+					};
+					this.model = (await mod.TranscribeModel.load(this.resolved.modelPath)) as TranscribeModelLike;
+					this.current = this.resolved; // a retry recovered — healthy again
+				} catch (err) {
+					this.current = {
+						ready: false,
+						reason: `model failed to load: ${String((err as Error)?.message ?? err)}`,
+					};
+					throw err;
+				}
 			})();
 			this.loading = loading;
 			// a failed load must not poison every future utterance — allow a retry
@@ -114,8 +153,12 @@ export class Stt {
 		await this.ensureLoaded();
 		const pcm = toMono16k(wav);
 		if (pcm.length < 1600) return ""; // <0.1s of audio
+		// pad trailing silence: hold-to-talk uploads end the instant speech
+		// stops, and the model truncates/garbles audio without a silent tail
+		const padded = new Float32Array(pcm.length + BATCH_TAIL_SILENCE_SAMPLES);
+		padded.set(pcm);
 		const run = this.queue.then(async () => {
-			const result = await this.model!.transcribe(pcm);
+			const result = await this.model!.transcribe(padded);
 			return result.text.trim();
 		});
 		this.queue = run.catch(() => undefined);

@@ -264,8 +264,11 @@ export class AudioService {
 		const tearDown = () => {
 			this.ups.delete(sock);
 			// the child can't announce a client hang-up (its socket is already
-			// closing when onClosed fires), so the parent owns the active count
-			if (this.authedUps.delete(sock)) this.opts.setVoiceActive(this.authedUps.size > 0);
+			// closing when onClosed fires), so the parent owns the active count.
+			// setVoiceActive is DELTA accounting: this authed socket is gone,
+			// so exactly one -1 — the aggregate `size > 0` drifted the count
+			// upward on every multi-client close (voice_active stuck on)
+			if (this.authedUps.delete(sock)) this.opts.setVoiceActive(false);
 			try {
 				client.close();
 			} catch {
@@ -298,10 +301,16 @@ export class AudioService {
 					this.opts.abortAgent();
 					return;
 				case "__voice_active__":
-					this.opts.setVoiceActive(evt.active === true);
+					// the child reports +1 exactly once per authed session; the
+					// authedUps mark IS the count, so a repeat frame can't drift
+					// the delta and a spurious false is simply ignored (teardown
+					// owns every -1)
+					if (evt.active === true && !this.authedUps.has(sock)) {
+						this.authedUps.add(sock);
+						this.opts.setVoiceActive(true);
+					}
 					return;
 				case "voice_hello_ok":
-					this.authedUps.add(sock);
 					return client.send(data, { binary: false });
 				default:
 					return client.send(data, { binary: false });
@@ -320,6 +329,21 @@ export class AudioService {
 
 	assistantFinal(id: string, text: string): void {
 		this.toChild({ type: "__assistant_final__", id, text });
+	}
+
+	/** A whole reply with no streamed deltas (delegated peer answer): the child speaks it as its own turn. */
+	speakWhole(id: string, text: string): void {
+		this.toChild({ type: "__assistant_whole__", id, text });
+	}
+
+	/** A whole reply appended to the current speech turn (subsequent replies of a mailbox batch). */
+	queueWhole(id: string, text: string): void {
+		this.toChild({ type: "__assistant_whole__", id, text, queued: true });
+	}
+
+	/** A discrete whole delivery: fresh turn when idle, appended when speech is active. */
+	speakDiscrete(id: string, text: string): void {
+		this.toChild({ type: "__assistant_whole__", id, text, discrete: true });
 	}
 
 	private toChild(frame: object): void {
