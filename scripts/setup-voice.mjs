@@ -126,8 +126,14 @@ async function download(job) {
 			return;
 		} catch (e) {
 			err = e;
-			if (/^HTTP 4/.test(e.message)) break; // permanent — retrying can't help
-			if (attempt < 8) await new Promise((r) => setTimeout(r, 1000 * attempt));
+			// permanent client errors stop the loop; 408/429 are retryable
+			// (timeout / rate limit — exactly when a CDN wants you back later)
+			if (/^HTTP 4/.test(e.message) && !/^HTTP (408|429)/.test(e.message)) break;
+			if (attempt < 8) {
+				const asked = /retry-after=(\d+)/.exec(e.message); // honor 429 Retry-After
+				const waitMs = asked ? Math.min(Number(asked[1]) * 1000, 60_000) : 1000 * attempt;
+				await new Promise((r) => setTimeout(r, waitMs));
+			}
 		}
 	}
 	throw err;
@@ -151,7 +157,16 @@ async function attemptDownload(job) {
 			...(startAt > 0 ? { headers: { range: `bytes=${startAt}-` } } : {}),
 			signal: abort.signal,
 		});
-		if (!res.ok && res.status !== 206) throw new Error(`HTTP ${res.status}`);
+		if (!res.ok && res.status !== 206) {
+			// 408 (timeout) and 429 (rate limit) are retryable — common during
+			// large CDN downloads; surface Retry-After so the loop can honor it
+			const retryAfter = Number(res.headers.get("retry-after") ?? "");
+			throw new Error(
+				retryAfter > 0 && Number.isFinite(retryAfter)
+					? `HTTP ${res.status}; retry-after=${retryAfter}`
+					: `HTTP ${res.status}`,
+			);
+		}
 		const resumed = res.status === 206;
 		if (startAt > 0 && !resumed) throw new Error("server ignored the resume range; delete the .part and retry");
 		const total = (resumed ? startAt : 0) + Number(res.headers.get("content-length") ?? 0);

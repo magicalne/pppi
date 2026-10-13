@@ -332,7 +332,7 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 			} catch {
 				// metadata only: the raw line is arbitrary child stdout and may
 				// carry prompt/tool data or credentials — never log its content
-				console.error(`[agent] dropping unparseable rpc line (${line.length} bytes)`);
+				console.error(`[agent] dropping unparseable rpc line (${Buffer.byteLength(line, "utf8")} bytes)`);
 				continue;
 			}
 			if (msg.type === "response") this.onResponse(msg as RpcResponse);

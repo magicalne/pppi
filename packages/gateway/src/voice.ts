@@ -818,7 +818,13 @@ export class Speaker {
 		if (this.draining) return;
 		this.draining = true;
 		try {
-			while (this.queue.length > 0) {
+			// the aborted check matters AFTER the epoch refactor: late
+			// assistantDelta/assistantFinal events from a cancelled agent still
+			// enqueue items, and without this they'd synthesize under the
+			// current epoch — the interrupted reply spoken after the barge-in.
+			// beginTurn resets aborted (and clears any stale queue) for
+			// legitimate new speech.
+			while (this.queue.length > 0 && !this.aborted) {
 				const item = this.queue.shift()!;
 				const turn = this.epoch; // snapshot: stale items drop silently
 				const seenInterrupts = this.interruptedEnds; // …and never double-close a stream

@@ -288,6 +288,30 @@ describe("Speaker sentence chunking", () => {
 		expect(rec.ends().every((e) => !e.interrupted)).toBe(true);
 	});
 
+	it("late agent events after a barge-in never speak", async () => {
+		// the cancelled agent can still emit trailing deltas/finals; without
+		// the aborted check in drain they synthesized under the current epoch
+		const { provider, received } = delayedTts(20);
+		const rec = recorder();
+		const speaker = new Speaker(provider, rec.sendBinary, rec.sendEvent);
+
+		speaker.beginTurn();
+		speaker.assistantDelta("a", "Cut off now.");
+		await until(() => rec.starts().length === 1);
+		speaker.abort();
+		await until(() => rec.ends().some((e) => e.interrupted));
+
+		speaker.assistantDelta("a", "Late tail that must stay silent.");
+		await sleep(150); // pre-fix this synthesized and played
+		expect(received).toEqual(["Cut off now."]);
+
+		// a legitimate fresh turn still speaks (beginTurn clears stale queue)
+		speaker.beginTurn();
+		speaker.assistantDelta("b", "Fresh turn.");
+		await until(() => rec.starts().length === 2);
+		expect(received).toEqual(["Cut off now.", "Fresh turn."]);
+	});
+
 	it("a synthesis failure on the last item hands the mic back (listening)", async () => {
 		let calls = 0;
 		const received: string[] = [];
