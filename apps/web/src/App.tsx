@@ -3,6 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { copyTextToClipboard } from "./copy.ts";
 import { Markdown } from "./markdown.tsx";
 import { messageToPlainText } from "./plainText.ts";
+import { ReconnectController, type ReconnectState, mergeResume } from "./reconnect.ts";
 import { StatusBar } from "./status/StatusBar.tsx";
 import { THEMES, type ThemeId, applyTheme, loadTheme } from "./theme.ts";
 import { VoiceWave } from "./voice/VoiceWave.tsx";
@@ -86,8 +87,13 @@ function parsePairInput(input: string, tokenFallback: string): { url: string; to
 }
 
 /** PRD §5 grammar — the omni session's one-line status. */
-function omniStatus(state: AgentState, toolLabel: string | null, connected: boolean): string {
-	if (!connected) return "connecting…";
+function omniStatus(
+	state: AgentState,
+	toolLabel: string | null,
+	connected: boolean,
+	reconnect: ReconnectState = "connecting",
+): string {
+	if (!connected) return reconnect === "reconnecting" ? "reconnecting…" : "connecting…";
 	switch (state) {
 		case "thinking":
 			return "thinking…";
@@ -112,6 +118,8 @@ export default function App() {
 	const [connections, setConnections] = useState<Connection[]>(loadConnections);
 	const [activeId, setActiveId] = useState<string | null>(() => localStorage.getItem("pppi.active"));
 	const [connected, setConnected] = useState(false);
+	/** issue #22: chat-socket reconnect policy state — feeds the status line */
+	const [reconn, setReconn] = useState<ReconnectState>("connecting");
 	const [msgs, setMsgs] = useState<Msg[]>([]);
 	const [agentState, setAgentState] = useState<AgentState>("starting");
 	const [toolLabel, setToolLabel] = useState<string | null>(null);
@@ -128,6 +136,17 @@ export default function App() {
 	const [hasMoreHistory, setHasMoreHistory] = useState(false);
 	const [serverVersion, setServerVersion] = useState("");
 	const wsRef = useRef<WebSocket | null>(null);
+	/** mirrors of live state for non-React callbacks (ws handlers, drop snapshots) */
+	const msgsRef = useRef<Msg[]>([]);
+	msgsRef.current = msgs;
+	const agentStateRef = useRef<AgentState>("starting");
+	agentStateRef.current = agentState;
+	/** issue #22: last assistant text seen before a drop — compared after resume
+	 * to say "last reply may be incomplete" honestly (a reply that completed
+	 * server-side while we were away arrives longer; one still working isn't) */
+	const resumeCheckRef = useRef<{ id: string; text: string } | null>(null);
+	/** the active chat-socket reconnect controller (issue #22) */
+	const reconnCtlRef = useRef<ReconnectController | null>(null);
 	const listRef = useRef<HTMLDivElement | null>(null);
 	/** guards one in-flight older-page load at a time */
 	const loadingOlderRef = useRef(false);
@@ -195,7 +214,6 @@ export default function App() {
 		if (!conn) return;
 		const wsUrl = `${conn.url.replace(/^http/, "ws").replace(/\/$/, "")}/ws`;
 		let closed = false;
-		let retry: ReturnType<typeof setTimeout> | null = null;
 		const connect = () => {
 			if (closed) return;
 			const ws = new WebSocket(wsUrl);
@@ -204,13 +222,29 @@ export default function App() {
 			ws.onmessage = (m) => handleEvent(JSON.parse(m.data) as ServerEvent);
 			ws.onclose = () => {
 				setConnected(false);
-				if (!closed) retry = setTimeout(connect, 2000);
+				if (closed) return;
+				// issue #22: snapshot the last assistant text — after resume, an
+				// unchanged partial means the drop cut that reply off
+				const last = [...msgsRef.current].reverse().find((x) => x.role === "assistant" && !x.tool);
+				resumeCheckRef.current = last ? { id: last.id, text: last.text } : null;
+				rc.onDrop();
 			};
 		};
+		// issue #22: exponential backoff instead of a fixed 2s drum, plus an
+		// immediate retry on visibilitychange→visible (the phone-unlock case:
+		// frozen timers left the schedule stale, never wait out a backoff for it)
+		const rc = new ReconnectController({ onStateChange: setReconn, onRetry: connect });
+		reconnCtlRef.current = rc;
+		const onVisible = () => {
+			if (document.visibilityState === "visible") rc.onVisible();
+		};
+		document.addEventListener("visibilitychange", onVisible);
 		connect();
 		return () => {
 			closed = true;
-			if (retry) clearTimeout(retry);
+			rc.cancel();
+			reconnCtlRef.current = null;
+			document.removeEventListener("visibilitychange", onVisible);
 			wsRef.current?.close();
 			wsRef.current = null;
 		};
@@ -244,13 +278,27 @@ export default function App() {
 
 	function handleEvent(evt: ServerEvent) {
 		switch (evt.type) {
-			case "hello_ok":
+			case "hello_ok": {
 				setConnected(true);
 				setAgentState(evt.agent.state);
-				setMsgs(evt.history.map((h: ChatEntry) => ({ ...h })));
+				// idempotent resume (#22): server history replaces by id — a reply
+				// that finished while we were away lands complete, nothing dups
+				const historyMsgs = evt.history.map((h: ChatEntry) => ({ ...h }) as Msg);
+				setMsgs(mergeResume(msgsRef.current, historyMsgs));
 				setHasMoreHistory(evt.history.length >= HISTORY_PAGE);
+				// the drop cut a reply off if its last partial is unchanged and the
+				// agent went idle — the socket (and #26's TTS abort) ended it
+				const check = resumeCheckRef.current;
+				resumeCheckRef.current = null;
+				if (check && !["thinking", "tool", "streaming"].includes(evt.agent.state)) {
+					const after = mergeResume(msgsRef.current, historyMsgs).find((x) => x.id === check.id);
+					if (after && after.text === check.text && after.text !== "")
+						showNotice("reconnected — last reply may be incomplete");
+				}
+				reconnCtlRef.current?.onSuccess();
 				if (conn) void learnAbout(conn);
 				break;
+			}
 			case "hello_fail":
 				showNotice(evt.error);
 				if (conn) removeConnection(conn.id);
@@ -404,17 +452,19 @@ export default function App() {
 	const toggleVoice = useCallback(() => {
 		if (!conn) return;
 		if (voice.on || voice.state.boot) {
-			// the button always means stop/hang up — even mid-boot it cancels
-			void voice.stop();
+			// the button always means stop/hang up — even mid-boot it cancels.
+			// userInitiated (#22): the user ended the mic session — no auto-resume on unlock
+			void voice.stop(true);
 			return;
 		}
 		voice.start(conn.url, conn.token).catch(() => showNotice("microphone unavailable — check permissions"));
 	}, [conn, voice, showNotice]);
 
-	// leaving a machine (or unmount) ends its voice session
+	// leaving a machine (or unmount) ends its voice session — user-initiated:
+	// this device no longer wants the mic, so a later unlock must not re-arm it
 	// biome-ignore lint/correctness/useExhaustiveDependencies: only the connection change should end a session
 	useEffect(() => {
-		return () => void voice.stop();
+		return () => void voice.stop(true);
 	}, [conn?.id]);
 
 	// voice notices surface as the standard toast, then fade
@@ -474,7 +524,7 @@ export default function App() {
 			/>
 		);
 
-	const statusText = target.id ? peerStatus(sessions, target.id) : omniStatus(agentState, toolLabel, connected);
+	const statusText = target.id ? peerStatus(sessions, target.id) : omniStatus(agentState, toolLabel, connected, reconn);
 	const busy = !target.id && (agentState === "thinking" || agentState === "tool" || agentState === "streaming");
 	const visible = msgs.filter((m) => (m.target ?? undefined) === target.id);
 	const targetName = target.label;
