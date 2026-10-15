@@ -7,7 +7,8 @@
 // the echo gate holds the mic (tap stop — issue #21); the client stops
 // playback the moment it decides to cut the agent off.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { shouldAutoResumeVoice } from "../reconnect.ts";
 import { type VoiceBootFrame, VoiceClient } from "./client.ts";
 import { EchoGate } from "./echoGate.ts";
 import { MicStream } from "./mic.ts";
@@ -94,23 +95,34 @@ export function useVoice() {
 		// issue #21: half-duplex gate — while the agent's TTS plays (plus a
 		// short tail), mic audio is NOT sent; the server never hears the agent
 		gate: new EchoGate(),
+		// issue #22: the user wants the mic armed — survives drops so
+		// visibility→visible can auto-resume the session; cleared only by an
+		// explicit user stop (toggle, unmount, machine switch)
+		wasWanted: false,
+		// phase at the moment of the last drop — drives the honest
+		// "last reply may be incomplete" note on auto-resume
+		dropPhase: null as VoicePhase | null,
 	});
+
+	const bootRef = useRef<VoiceBoot | null>(null);
+
+	const setBoot = useCallback((boot: VoiceBoot | null, bootDetail: string | null = null) => {
+		bootRef.current = boot;
+		setState((s) => ({ ...s, boot, bootDetail }));
+	}, []);
 
 	const setPhase = useCallback((phase: VoicePhase) => {
 		refs.current.phase = phase;
 		setState((s) => ({ ...s, phase }));
 	}, []);
 
-	const setBoot = useCallback((boot: VoiceBoot | null, bootDetail: string | null = null) => {
-		setState((s) => ({ ...s, boot, bootDetail }));
-	}, []);
-
-	const stop = useCallback(async () => {
+	const stop = useCallback(async (userInitiated = false) => {
 		const { mic, client, player } = refs.current;
 		refs.current.client = null;
 		refs.current.mic = null;
 		refs.current.player = null;
-		refs.current.lastStart = null;
+		if (userInitiated) refs.current.wasWanted = false; // the user ended it — no auto-resume
+		refs.current.lastStart = userInitiated ? null : refs.current.lastStart;
 		refs.current.speakingSince = 0;
 		refs.current.lastPartialAt = 0;
 		refs.current.stalled = false;
@@ -221,6 +233,7 @@ export function useVoice() {
 					// stop() nulls the refs first, so a live client here = the drop
 					// was not user-initiated → auto-reconnect twice, then give up
 					if (refs.current.client !== client) return;
+					refs.current.dropPhase = refs.current.phase; // #22: for the resume note
 					const attempts = ++refs.current.attempts;
 					void stop();
 					if (attempts <= 2 && refs.current.lastStart) {
@@ -300,6 +313,8 @@ export function useVoice() {
 					}
 				});
 				setOn(true);
+				refs.current.wasWanted = true; // #22: mic armed — auto-resume on unlock if it drops
+				refs.current.dropPhase = null;
 				setBoot(null);
 				setState({
 					phase: "listening",
@@ -327,6 +342,37 @@ export function useVoice() {
 	);
 
 	refs.current.startFn = start;
+
+	// issue #22: unlock/background→foreground — if the user armed the mic but
+	// the session died (in-foreground retries exhausted while the page was
+	// frozen), bring it back by itself instead of "tap ● to start again"
+	useEffect(() => {
+		if (typeof document === "undefined") return;
+		const onVisible = () => {
+			if (document.visibilityState !== "visible") return;
+			const r = refs.current;
+			if (
+				!shouldAutoResumeVoice({
+					wasWanted: r.wasWanted,
+					live: r.client !== null,
+					booting: r.client !== null || bootRef.current !== null,
+				})
+			)
+				return;
+			r.attempts = 0;
+			const ls = r.lastStart;
+			if (!ls || !r.startFn) return;
+			const interruptedReply = r.dropPhase === "agent-speaking";
+			r.dropPhase = null;
+			setState((s) => ({
+				...s,
+				notice: interruptedReply ? "reconnected — last reply may be incomplete" : s.notice,
+			}));
+			void r.startFn(ls.base, ls.token, true);
+		};
+		document.addEventListener("visibilitychange", onVisible);
+		return () => document.removeEventListener("visibilitychange", onVisible);
+	}, []);
 
 	const interrupt = useCallback(() => {
 		refs.current.gate.interrupt(); // issue #21: explicit cut — reopen the mic after the short fade tail
