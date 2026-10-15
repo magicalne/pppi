@@ -1,5 +1,6 @@
 import type { AgentState, AgentStatus, ChatEntry, ModelInfo, ServerEvent, SessionsResponse } from "@pppi/protocol";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Markdown } from "./markdown.tsx";
 import { StatusBar } from "./status/StatusBar.tsx";
 import { THEMES, type ThemeId, applyTheme, loadTheme } from "./theme.ts";
 import { VoiceWave } from "./voice/VoiceWave.tsx";
@@ -568,7 +569,7 @@ export default function App() {
 							<div key={m.id} className="row peer">
 								<span className="who">{prof.name}</span>
 								<div className="bubble peer-msg" style={{ background: prof.color }}>
-									{m.text || "…"}
+									{m.text ? <Markdown text={m.text} /> : "…"}
 								</div>
 							</div>
 						);
@@ -578,7 +579,7 @@ export default function App() {
 							<span className="dotcol">
 								<i />
 							</span>
-							<span>{m.text || "…"}</span>
+							{m.text ? <Markdown text={m.text} /> : <span>…</span>}
 						</div>
 					);
 				})}

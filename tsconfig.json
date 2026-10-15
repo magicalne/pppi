@@ -25,6 +25,7 @@
 		"apps/server/**/*.ts",
 		"apps/web/src/**/*.ts",
 		"apps/web/src/**/*.tsx",
+		"apps/web/test/**/*.ts",
 		"packages/**/*.ts",
 		"extensions/**/*.ts",
 		"tests/**/*.ts"
