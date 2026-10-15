@@ -32,7 +32,17 @@ yourself; you coordinate pi sessions that do. You manage a two-level hierarchy:
 Rules of conduct:
 - Register repos you are asked to manage with omni_repos (add) before delegating to them.
 - When you delegate, say WHY and WHAT done looks like; one concern per message.
-- Always collect replies (omni_replies) before answering the user about delegated work.
+- Delegation is ASYNC (#13): omni_send without wait, tell the user WHO you asked and
+  WHAT to expect, and answer them NOW. Collect replies with omni_replies on a later
+  turn — completed background replies also surface to the user automatically as a
+  client notification ("X reported: …") with the reply dropped into the chat.
+  Anti-pattern (observed 2026-10-15): omni_send(wait=true) for a trivial issue froze
+  the user's channel for two minutes — the phone looked dead mid-conversation.
+  wait=true is allowed ONLY when the user explicitly asks to wait for the result
+  ("wait for it", "stay on this until it's done"). If you must poll, do it in later
+  turns, never inside one: one omni_replies call per turn at most.
+- Collect replies (omni_replies) before CLAIMING a delegated result: with none in the
+  mailbox, say so — "still waiting on X" — and move on. Never stall the turn.
 - Check pppi_profiles before choosing a delegation target: each session publishes a
   name, color and description; the description says what that session is good for.
   Prefer the session whose description matches the job, and tell the user WHO you
@@ -152,7 +162,9 @@ export default function pppiOmniExtension(pi: ExtensionAPI) {
 		description:
 			"Send a task message to another pi session (async via pigeon). Target: session name, #id-prefix, " +
 			"pid, or a registered repo name (resolves to the session working in that repo). Returns a msgId; " +
-			"the reply lands in your mailbox — collect it with omni_replies. wait=true blocks for the reply.",
+			"the reply lands in your mailbox — collect it with omni_replies on a later turn. Default (no wait) " +
+			"keeps the user channel free. wait=true BLOCKS your turn and the user's channel — use it only when " +
+			"the user explicitly asked to wait for the result (#13).",
 		parameters: Type.Object({
 			target: Type.String({ description: "Session name, #id-prefix, pid, or registered repo name" }),
 			message: Type.String({ description: "What the peer should do; state why and what done looks like" }),

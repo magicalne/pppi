@@ -196,6 +196,43 @@ describe("gateway server", () => {
 		b.close();
 	});
 
+	it("peer_reply while idle emits a peer_report notification (#13)", async () => {
+		const ws = await connect(token);
+		await nextEvent(ws, "hello_ok");
+		const finalP = nextEvent(ws, "assistant_final");
+		const reportP = nextEvent(ws, "peer_report");
+
+		const res = await fetch(`http://127.0.0.1:${port}/api/peer-reply`, {
+			method: "POST",
+			headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+			body: JSON.stringify({ session: "worker-1", text: "Issue #42 created.\n\nhttps://github.com/x/y/issues/42" }),
+		});
+		expect(res.status).toBe(200);
+
+		const final = await finalP;
+		const report = await reportP;
+		expect(report.profileId).toBe("worker-1");
+		expect(report.id).toBe(final.id); // tap jumps to exactly this reply
+		expect(report.preview).toBe("Issue #42 created."); // first line only, not the URL dump
+		ws.close();
+	});
+
+	it("peer_report preview skips blank leading lines and is capped (#13)", async () => {
+		const ws = await connect(token);
+		await nextEvent(ws, "hello_ok");
+		const reportP = nextEvent(ws, "peer_report");
+		const long = "x".repeat(200);
+		await fetch(`http://127.0.0.1:${port}/api/peer-reply`, {
+			method: "POST",
+			headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+			body: JSON.stringify({ session: "worker-2", text: `\n\n  ${long}\nsecond` }),
+		});
+		const report = await reportP;
+		expect(report.preview).toHaveLength(90);
+		expect(report.preview.startsWith("x")).toBe(true);
+		ws.close();
+	});
+
 	it("delivers an artifact: peeled from the reply, id-stable through history (#17)", async () => {
 		// inject a delegated reply (with an artifact fence) through the peer
 		// seam — the same extraction runs on omni replies and mailbox polls

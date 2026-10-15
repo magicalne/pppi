@@ -104,6 +104,12 @@ sessions. Read README.md for the full picture.
   playback, `useVoice` state machine).
 - `packages/protocol/src/index.ts` — the wire protocol; keep TS and Kotlin
   sides in sync (Kotlin mirror: apps/android/.../Protocol.kt).
+- background coordination (#13): delegation from the omni is ASYNC —
+  omni_send (no wait), report to the user now, collect with omni_replies on a
+  later turn. wait=true only when the user explicitly asks to wait. Delegated
+  replies landing while the omni is idle trigger a gateway `peer_report`
+  event → tappable phone notification ("X reported: …") + the reply in chat.
+  Pattern + anti-pattern: docs/omni-role.md.
 - artifacts (#17): agents emit rich views as fenced `pppi-artifact` blocks in
   a reply (tables/dashboards/visual/long structured reports → artifact; short
   answers → markdown). The gateway peels them out of the chat text; the phone

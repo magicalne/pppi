@@ -142,6 +142,10 @@ export type ServerEvent =
 	// status bar (v5)
 	| { type: "status"; status: AgentStatus }
 	| { type: "model_list"; models: ModelInfo[] }
+	// a delegated reply landed while no omni turn was active (#13) — the phone
+	// shows "name reported: <preview>"; tap jumps to the reply in the chat.
+	// `id` matches the assistant_final message id of that reply.
+	| { type: "peer_report"; id: string; profileId: string; preview: string }
 	// the omni session was reset (/new): clients clear their mirrored history
 	| { type: "session_new" }
 	// paged history: entries older than the requested `before`, newest-last

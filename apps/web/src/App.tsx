@@ -9,6 +9,7 @@ import type {
 } from "@pppi/protocol";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArtifactCard, useArtifactViewer } from "./Artifact.tsx";
+import { PeerReportToast } from "./PeerReportToast.tsx";
 import { copyTextToClipboard } from "./copy.ts";
 import { DEMO_ARTIFACT } from "./demoArtifact.ts";
 import { Markdown } from "./markdown.tsx";
@@ -144,6 +145,8 @@ export default function App() {
 	const [drawerOpen, setDrawerOpen] = useState(false);
 	/** issue #17: full-screen artifact viewer (cards in the chat open this) */
 	const artifactViewer = useArtifactViewer();
+	/** #13: a delegated reply landed while idle — tappable notification */
+	const [peerReport, setPeerReport] = useState<{ id: string; profileId: string; preview: string } | null>(null);
 	const [connOpen, setConnOpen] = useState(false);
 	const [sessions, setSessions] = useState<SessionsResponse | null>(null);
 	const [textInput, setTextInput] = useState("");
@@ -430,6 +433,10 @@ export default function App() {
 			case "voice_active":
 				setVoiceElsewhere(evt.active);
 				break;
+			case "peer_report":
+				// #13: background work finished — surface it, don't let it drown in chat
+				setPeerReport({ id: evt.id, profileId: evt.profileId, preview: evt.preview });
+				break;
 		}
 	}
 
@@ -497,6 +504,13 @@ export default function App() {
 	useEffect(() => {
 		return () => void voice.stop(true);
 	}, [conn?.id]);
+
+	// peer reports stay tappable longer than a toast flashes, then fade (#13)
+	useEffect(() => {
+		if (!peerReport) return;
+		const t = setTimeout(() => setPeerReport(null), 12_000);
+		return () => clearTimeout(t);
+	}, [peerReport]);
 
 	// voice notices surface as the standard toast, then fade
 	const voiceNotice = voice.state.notice;
@@ -657,7 +671,7 @@ export default function App() {
 					}
 					if (m.role === "user") {
 						return (
-							<div key={m.id} className="row user">
+							<div key={m.id} id={`msg-${m.id}`} className="row user">
 								<div className="bubble user-msg">
 									{m.source === "voice" && <span className="mic-glyph">🎙</span>}
 									{m.text}
@@ -669,7 +683,7 @@ export default function App() {
 					if (prof) {
 						// a profiled agent replied (delegation) — tint the bubble with its color
 						return (
-							<div key={m.id} className="row peer">
+							<div key={m.id} id={`msg-${m.id}`} className="row peer">
 								<span className="who">{prof.name}</span>
 								<div className="bubble peer-msg" style={{ background: prof.color }}>
 									{m.text ? <Markdown text={m.text} /> : m.artifacts?.length ? null : "…"}
@@ -682,7 +696,7 @@ export default function App() {
 						);
 					}
 					return (
-						<div key={m.id} className="assistant-msg">
+						<div key={m.id} id={`msg-${m.id}`} className="assistant-msg">
 							<span className="dotcol">
 								<i />
 							</span>
@@ -714,6 +728,24 @@ export default function App() {
 			{voice.state.notice && <div className="toast">{voice.state.notice}</div>}
 			{voiceElsewhere && !voice.on && !voice.state.boot && (
 				<div className="toast info">voice active on another screen</div>
+			)}
+			{peerReport && (
+				<PeerReportToast
+					profileId={peerReport.profileId}
+					preview={peerReport.preview}
+					profiles={sessions?.profiles}
+					onTap={() => {
+						const id = peerReport.id;
+						setPeerReport(null);
+						setTarget(OMNI()); // the reply lives in the omni lane
+						// land after the target switch re-renders the list
+						setTimeout(() => {
+							const hit = document.getElementById(`msg-${id}`);
+							if (hit) hit.scrollIntoView({ block: "center" });
+							else listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+						}, 50);
+					}}
+				/>
 			)}
 
 			<div className="composer-wrap">
