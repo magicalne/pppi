@@ -940,6 +940,45 @@ describe("interactive voice websocket", () => {
 		voice.close();
 	});
 
+	it("client disconnect mid-playback cancels synthesis cleanly via the abort seam", async () => {
+		// issue #21: the phone locks/drops while the agent is talking — the
+		// in-flight synthesis must terminate via its abort signal, not run to
+		// completion. Observable: the generator's finally (runs on return()
+		// from the drain loop's break) sees signal.aborted.
+		const rec = { terminated: false, signalledAtTermination: false, iterations: 0 };
+		const provider: VoiceTts = {
+			status: { ready: true, provider: "slow", voice: "v1" },
+			synthesize(_text: string, signal?: AbortSignal) {
+				return (async function* () {
+					try {
+						for (let i = 0; i < 40; i++) {
+							await new Promise((r) => setTimeout(r, 50));
+							rec.iterations++;
+							if (signal?.aborted) return; // honoured the seam — stop generating
+							yield { pcm: Buffer.from([0, 0]), rate: 24000 };
+						}
+					} finally {
+						rec.terminated = true;
+						rec.signalledAtTermination = signal?.aborted ?? false;
+					}
+				})();
+			},
+		};
+		const v = await boot(fakeStt("hello"), provider, "a fairly long spoken sentence for the slow voice");
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+
+		await sayPaced(voice, v, "speech", 8);
+		await sayPaced(voice, v, "silence", 30);
+		await nextEvent(voice, "tts_start"); // synthesis is streaming chunks
+		await new Promise((r) => setTimeout(r, 120)); // a few chunks in flight
+		voice.close(); // the phone drops mid-playback
+
+		await until(() => rec.terminated, 5000);
+		expect(rec.signalledAtTermination).toBe(true); // cancelled by abort
+		expect(rec.iterations).toBeLessThan(40); // …not drained to completion
+	});
+
 	// ---------------------------------------------------------------- tts
 
 	it("speaks the reply sentence by sentence with tts framing", async () => {

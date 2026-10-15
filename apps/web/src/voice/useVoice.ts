@@ -3,12 +3,13 @@
 //   boot:   off → connecting → warming? → (ready: boot = null)
 //   live:   listening ⇄ speaking(user) → thinking → agent-speaking → listening
 // Failures land back in "off" with a notice (tap ● to retry); a mid-session
-// drop auto-reconnects twice before giving up. Barge-in is server-decided
-// (it knows TTS state); the client just stops playback the moment `vad
-// speaking` arrives while the agent is talking.
+// drop auto-reconnects twice before giving up. Barge-in is explicit while
+// the echo gate holds the mic (tap stop — issue #21); the client stops
+// playback the moment it decides to cut the agent off.
 
 import { useCallback, useRef, useState } from "react";
 import { type VoiceBootFrame, VoiceClient } from "./client.ts";
+import { EchoGate } from "./echoGate.ts";
 import { MicStream } from "./mic.ts";
 import { TtsPlayer } from "./playback.ts";
 
@@ -90,6 +91,9 @@ export function useVoice() {
 		speakingSince: 0,
 		lastPartialAt: 0,
 		stalled: false,
+		// issue #21: half-duplex gate — while the agent's TTS plays (plus a
+		// short tail), mic audio is NOT sent; the server never hears the agent
+		gate: new EchoGate(),
 	});
 
 	const setPhase = useCallback((phase: VoicePhase) => {
@@ -110,6 +114,7 @@ export function useVoice() {
 		refs.current.speakingSince = 0;
 		refs.current.lastPartialAt = 0;
 		refs.current.stalled = false;
+		refs.current.gate.reset();
 		client?.close();
 		await mic?.stop().catch(() => {});
 		await player?.close().catch(() => {});
@@ -174,9 +179,11 @@ export function useVoice() {
 				onFinal: (text) => setState((s) => ({ ...s, committed: text, tentative: "" })),
 				onTtsStart: (rate) => {
 					refs.current.ttsRate = rate;
+					refs.current.gate.beginPlayback();
 					setPhase("agent-speaking");
 				},
 				onTtsChunk: (pcm) => {
+					refs.current.gate.feedChunk();
 					player.play(pcm, refs.current.ttsRate);
 					const now = Date.now();
 					if (now - refs.current.levelAt.out >= 80) {
@@ -188,9 +195,12 @@ export function useVoice() {
 					setPhase("listening");
 					if (interrupted) setState((s) => ({ ...s, notice: "interrupted" }));
 					setLevels((l) => ({ ...l, out: 0 }));
-					// speaker drained locally — tell the server so echo-aware
-					// barge-in thresholds can relax
-					void player.waitIdle().then(() => refs.current.client?.playbackDone());
+					// speaker drained locally — end the echo-gate tail, then tell
+					// the server so echo-aware barge-in thresholds can relax
+					void player.waitIdle().then(() => {
+						refs.current.gate.playbackDrained();
+						refs.current.client?.playbackDone();
+					});
 				},
 				onError: (message) => setState((s) => ({ ...s, notice: withTtsFix(message) })),
 				onBoot: (frame: VoiceBootFrame) => {
@@ -267,7 +277,11 @@ export function useVoice() {
 				clearInterval(poll);
 				refs.current.attempts = 0;
 				await mic.start((pcm) => {
-					client.sendAudio(pcm);
+					// echo gate (issue #21): while the agent's own TTS plays — plus the
+					// tail — the mic is NOT sent, so the server never hears the agent.
+					// Levels keep flowing so the soundwave stays alive; the explicit
+					// stop button (interrupt) works regardless.
+					if (!refs.current.gate.isGated()) client.sendAudio(pcm);
 					const now = Date.now();
 					if (now - refs.current.levelAt.mic >= 80) {
 						refs.current.levelAt.mic = now;
@@ -315,6 +329,7 @@ export function useVoice() {
 	refs.current.startFn = start;
 
 	const interrupt = useCallback(() => {
+		refs.current.gate.interrupt(); // issue #21: explicit cut — reopen the mic after the short fade tail
 		refs.current.player?.stopAll();
 		refs.current.client?.interrupt();
 		setPhase("listening");

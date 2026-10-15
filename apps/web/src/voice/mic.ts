@@ -2,6 +2,16 @@
 // noise suppression and AGC via getUserMedia constraints, resampled to
 // 16 kHz mono and emitted as ~100 ms Float32 chunks.
 
+/** The capture constraints — exported so tests can pin the echo-cancellation
+ * plumbing (issue #21): platform AEC is requested but NOT relied on; the
+ * echo gate provides the half-duplex guarantee on top. */
+export const MIC_CONSTRAINTS: MediaTrackConstraints = {
+	channelCount: 1,
+	echoCancellation: true,
+	noiseSuppression: true,
+	autoGainControl: true,
+};
+
 export class MicStream {
 	private stream: MediaStream | null = null;
 	private ctx: AudioContext | null = null;
@@ -12,9 +22,7 @@ export class MicStream {
 
 	async start(onChunk: (pcm: Float32Array) => void): Promise<void> {
 		this.onChunk = onChunk;
-		this.stream = await navigator.mediaDevices.getUserMedia({
-			audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-		});
+		this.stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS });
 		this.ctx = new AudioContext();
 		await this.ctx.audioWorklet.addModule("/pcm-worklet.js");
 		this.node = new AudioWorkletNode(this.ctx, "pcm-capture");
