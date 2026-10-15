@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { homedir } from "node:os";
-import { dirname, extname, join, normalize } from "node:path";
+import { basename, dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type PigeonSession, listSessions, pigeon } from "@pppi/omni/pigeon";
 import { loadRegistry } from "@pppi/omni/repos";
@@ -24,6 +24,7 @@ import type {
 	ModelInfo,
 	PairInfo,
 	PeerSession,
+	Profile,
 	ServerEvent,
 	SessionsResponse,
 	Target,
@@ -139,35 +140,97 @@ function enabledPatternsFromPi(cwd: string): string[] | undefined {
 	return merged.length > 0 ? merged : undefined;
 }
 
-async function classify(omniSessionId: string, registryDir?: string): Promise<SessionsResponse> {
-	const empty: SessionsResponse = { omniSessionId, projects: [], others: [], profiles: {} };
-	const res = await listSessions();
-	if (!Array.isArray(res)) return empty;
-	const reg = loadRegistry(registryDir);
+/** Read a `.git` pointer file; null for directories, missing paths, anything unreadable. */
+const readGitPointerFile = (p: string): string | null => {
+	try {
+		return statSync(p).isFile() ? readFileSync(p, "utf8") : null;
+	} catch {
+		return null;
+	}
+};
+
+/**
+ * A git worktree keeps `.git` as a FILE pointing into the main repo's store:
+ * `gitdir: <main>/.git/worktrees/<name>`. Resolve it so sessions whose cwd is a
+ * SIBLING dir (`road-80` checked out next to `road`, not under `.worktrees/`)
+ * still find their parent repo. Returns null for plain repos (.git is a
+ * directory), non-git dirs, and malformed pointers.
+ */
+export function resolveWorktreePointer(
+	cwd: string,
+	readGitFile: (p: string) => string | null = readGitPointerFile,
+): { mainPath: string; worktree: string | null } | null {
+	const raw = readGitFile(join(cwd, ".git"));
+	if (!raw) return null;
+	const line = raw.trim().split("\n")[0] ?? "";
+	const m = /^gitdir:\s*(.+?)\s*$/.exec(line);
+	if (!m) return null;
+	const gitdir = normalize(m[1]!);
+	const wt = /\/\.git\/worktrees\/([^/]+)$/.exec(gitdir);
+	if (wt) return { mainPath: gitdir.slice(0, wt.index), worktree: wt[1] ?? null };
+	if (gitdir.endsWith("/.git")) return { mainPath: gitdir.slice(0, -"/.git".length), worktree: null };
+	return null;
+}
+
+/**
+ * Pure grouping of pigeon sessions into the /api/sessions project tree.
+ * classify() below does the IO (pigeon list + registry + profiles); this core
+ * stays unit-testable.
+ *
+ * A session is claimed by a repo when its cwd sits inside the repo path
+ * (including `/.worktrees/<name>/…`, the pppi-native layout) OR when its cwd is
+ * a git worktree — sibling or not — whose `gitdir:` pointer resolves back to
+ * the repo. Unclaimed sessions land in `others` with `branch: "main"`.
+ */
+export function classifySessions(
+	sessions: PigeonSession[],
+	repos: { name: string; path: string }[],
+	opts: { profiles?: Record<string, Profile>; readGitFile?: (p: string) => string | null } = {},
+): Pick<SessionsResponse, "projects" | "others"> {
+	const pathWorktree = (cwd: string): string | null =>
+		cwd.includes("/.worktrees/") ? (cwd.split("/.worktrees/")[1]?.split("/")[0] ?? null) : null;
+	// sibling worktrees: <cwd>/.git is a file pointing at <main>/.git/worktrees/<name>
+	const pointer = new Map<string, { mainPath: string; name: string }>();
+	for (const s of sessions) {
+		const wt = resolveWorktreePointer(s.cwd, opts.readGitFile);
+		if (!wt || !repos.some((r) => r.path === wt.mainPath)) continue;
+		// prefer the visible dir name (road-80); fall back to the gitdir worktree name
+		pointer.set(s.sessionId, { mainPath: wt.mainPath, name: basename(s.cwd) || wt.worktree || "" });
+	}
 	const peer = (s: PigeonSession): PeerSession => {
-		const wtMatch = s.cwd.includes("/.worktrees/") ? s.cwd.split("/.worktrees/")[1]?.split("/")[0] : undefined;
+		const wt = pathWorktree(s.cwd) ?? (pointer.get(s.sessionId)?.name || null);
 		return {
 			sessionId: s.sessionId,
-			name: s.name,
+			name: s.name ?? opts.profiles?.[s.sessionId]?.name ?? null,
 			state: s.state === "idle" ? "idle" : s.state === "unreach" ? "unreachable" : "busy",
 			cwd: s.cwd,
-			branch: wtMatch ? "worktree" : "main",
-			worktree: wtMatch ?? null,
+			branch: wt ? "worktree" : "main",
+			worktree: wt,
 		};
 	};
-	const projects = reg.repos.map((r) => ({
+	const claims = (s: PigeonSession, path: string): boolean =>
+		s.cwd === path || s.cwd.startsWith(`${path}/`) || pointer.get(s.sessionId)?.mainPath === path;
+	const projects = repos.map((r) => ({
 		name: r.name,
 		path: r.path,
-		sessions: res.filter((s) => !s.me && (s.cwd === r.path || s.cwd.startsWith(`${r.path}/`))).map(peer),
+		sessions: sessions.filter((s) => claims(s, r.path)).map(peer),
 	}));
 	const claimed = new Set(projects.flatMap((p) => p.sessions.map((s) => s.sessionId)));
-	const others = res.filter((s) => !s.me && !claimed.has(s.sessionId) && s.sessionId !== omniSessionId).map(peer);
-	const all = [...projects.flatMap((p) => p.sessions), ...others];
+	const others = sessions.filter((s) => !claimed.has(s.sessionId)).map(peer);
+	return { projects, others };
+}
+
+async function classify(omniSessionId: string, registryDir?: string): Promise<SessionsResponse> {
+	const res = await listSessions();
+	if (!Array.isArray(res)) return { omniSessionId, projects: [], others: [], profiles: {} };
+	const reg = loadRegistry(registryDir);
+	const visible = res.filter((s) => !s.me && s.sessionId !== omniSessionId);
 	const profiles = buildProfiles(
-		[...all.map((s) => s.sessionId), omniSessionId],
-		[...all.map((s) => ({ id: s.sessionId, name: s.name, cwd: s.cwd }))],
+		[...visible.map((s) => s.sessionId), omniSessionId],
+		visible.map((s) => ({ id: s.sessionId, name: s.name, cwd: s.cwd })),
 		registryDir,
 	);
+	const { projects, others } = classifySessions(visible, reg.repos, { profiles });
 	return { omniSessionId, projects, others, profiles };
 }
 
