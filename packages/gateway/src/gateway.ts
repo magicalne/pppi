@@ -36,6 +36,7 @@ import type { AgentPort } from "./agent.ts";
 import { entryWithArtifacts, extractArtifacts } from "./artifacts.ts";
 import { AudioService } from "./audio-proxy.ts";
 import { tokensMatch } from "./config.ts";
+import { reportPreview, shouldPeerReport } from "./peerReport.ts";
 import { buildProfiles } from "./profiles.ts";
 import type { Stt } from "./stt.ts";
 import { SileroVad, type VadTimings } from "./vad.ts";
@@ -437,6 +438,17 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 		broadcast({ type: "agent_state", state, toolName });
 		if (state === "idle") flushPendingVoice();
 	});
+
+	// #13: a delegated reply landing while no omni turn is active deserves the
+	// user's attention even if they aren't looking at the chat — the client
+	// shows "name reported: <preview>" (tap jumps to the reply). Mid-turn
+	// replies are carried by the conversation itself, no extra nudge.
+	function maybePeerReport(id: string, profileId: string, reply: string): void {
+		if (!shouldPeerReport(agent.state)) return;
+		const preview = reportPreview(reply);
+		if (!preview) return;
+		broadcast({ type: "peer_report", id, profileId, preview });
+	}
 	agent.on("status", (status) => broadcast({ type: "status", status }));
 	agent.on("assistant-delta", (id: string, delta: string) => {
 		if (voiceInFlight) voiceInFlight.replied = true; // the agent is talking — never fold this turn away
@@ -498,6 +510,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 					profileId: e.fromSessionId,
 					...(replyArts.length ? { artifacts: replyArts } : {}),
 				});
+				maybePeerReport(id, e.fromSessionId, e.reply);
 				peerLog.push({ id, role: "assistant", text: e.reply, ts: Date.now(), profileId: e.fromSessionId });
 				// a delegated answer lands in the omni conversation — say it too.
 				// No deltas ever streamed for it (fresh id), so assistantFinal()
@@ -682,6 +695,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				profileId: session,
 				...(cleanArts.length ? { artifacts: cleanArts } : {}),
 			});
+			maybePeerReport(id, session, replyText);
 			peerLog.push({ id, role: "assistant", text: replyText, ts: Date.now(), profileId: session });
 			// same speaking path as mailbox-discovered replies, but DISCRETE:
 			// a fresh POST opens a fresh turn when idle (an inherited aborted

@@ -1375,3 +1375,36 @@
 	border: 0;
 	background: #fff;
 }
+
+/* ---------------- peer report notification (#13) ---------------- */
+
+.toast.report {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	text-align: left;
+	font: inherit;
+	font-size: 13.5px;
+	color: var(--text);
+	cursor: pointer;
+	max-width: 90vw;
+	border-color: var(--accent);
+}
+.toast.report .report-dot {
+	flex: none;
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+}
+.toast.report .report-body {
+	flex: 1;
+	min-width: 0;
+	line-height: 1.45;
+}
+.toast.report .report-body i {
+	display: block;
+	color: var(--dim);
+	font-size: 11.5px;
+	font-style: normal;
+	margin-top: 2px;
+}

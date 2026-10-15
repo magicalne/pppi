@@ -80,6 +80,10 @@ sealed class ServerEvent {
 
 	/** the omni session was reset (/new): clear the mirrored history */
 	@Serializable
+	@SerialName("peer_report")
+	data class PeerReport(val id: String, val profileId: String, val preview: String) : ServerEvent()
+
+	@Serializable
 	@SerialName("session_new")
 	data object SessionNew : ServerEvent()
 
