@@ -1,6 +1,16 @@
-import type { AgentState, AgentStatus, ChatEntry, ModelInfo, ServerEvent, SessionsResponse } from "@pppi/protocol";
+import type {
+	AgentState,
+	AgentStatus,
+	Artifact,
+	ChatEntry,
+	ModelInfo,
+	ServerEvent,
+	SessionsResponse,
+} from "@pppi/protocol";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ArtifactCard, useArtifactViewer } from "./Artifact.tsx";
 import { copyTextToClipboard } from "./copy.ts";
+import { DEMO_ARTIFACT } from "./demoArtifact.ts";
 import { Markdown } from "./markdown.tsx";
 import { messageToPlainText } from "./plainText.ts";
 import { ReconnectController, type ReconnectState, mergeResume } from "./reconnect.ts";
@@ -24,6 +34,8 @@ type Msg = {
 	target?: string;
 	profileId?: string;
 	tool?: { phase: "start" | "end"; label?: string };
+	/** artifacts extracted from this reply by the gateway (#17) */
+	artifacts?: Artifact[];
 	/** ms epoch, set on history entries — anchors older-page loads */
 	ts?: number;
 };
@@ -130,6 +142,8 @@ export default function App() {
 	const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
 	const [modelList, setModelList] = useState<ModelInfo[]>([]);
 	const [drawerOpen, setDrawerOpen] = useState(false);
+	/** issue #17: full-screen artifact viewer (cards in the chat open this) */
+	const artifactViewer = useArtifactViewer();
 	const [connOpen, setConnOpen] = useState(false);
 	const [sessions, setSessions] = useState<SessionsResponse | null>(null);
 	const [textInput, setTextInput] = useState("");
@@ -179,6 +193,16 @@ export default function App() {
 	// ?pair=<token> onboarding: opening the gateway's pair link pairs this browser.
 	// ?server=<url> supports static-hosted clients (GitHub Pages) whose origin is
 	// NOT the gateway: ?server=http%3A%2F%2Fmac%3A8787&pair=<token>
+	// issue #17 one-tap QA: open the client with ?demo-artifact and a local
+	// demo message (card + sandboxed viewer) appears — no agent round-trip
+	useEffect(() => {
+		if (!new URLSearchParams(location.search).has("demo-artifact")) return;
+		setMsgs((b) => [
+			...b,
+			{ id: "demo-artifact", role: "assistant", text: "Here's the demo artifact:", artifacts: [DEMO_ARTIFACT] },
+		]);
+	}, []);
+
 	useEffect(() => {
 		const params = new URLSearchParams(location.search);
 		const token = params.get("pair");
@@ -331,7 +355,7 @@ export default function App() {
 			case "assistant_final":
 				setMsgs((b) => {
 					const idx = b.findIndex((x) => x.id === evt.id);
-					const patch = (m: Msg): Msg => ({ ...m, text: evt.text, profileId: evt.profileId });
+					const patch = (m: Msg): Msg => ({ ...m, text: evt.text, profileId: evt.profileId, artifacts: evt.artifacts });
 					if (idx >= 0) {
 						const copy = [...b];
 						copy[idx] = patch(copy[idx]!);
@@ -339,7 +363,14 @@ export default function App() {
 					}
 					return [
 						...b,
-						{ id: evt.id, role: "assistant", text: evt.text, target: evt.target, profileId: evt.profileId },
+						{
+							id: evt.id,
+							role: "assistant",
+							text: evt.text,
+							target: evt.target,
+							profileId: evt.profileId,
+							artifacts: evt.artifacts,
+						},
 					];
 				});
 				break;
@@ -641,8 +672,11 @@ export default function App() {
 							<div key={m.id} className="row peer">
 								<span className="who">{prof.name}</span>
 								<div className="bubble peer-msg" style={{ background: prof.color }}>
-									{m.text ? <Markdown text={m.text} /> : "…"}
+									{m.text ? <Markdown text={m.text} /> : m.artifacts?.length ? null : "…"}
 								</div>
+								{m.artifacts?.map((a) => (
+									<ArtifactCard key={a.id} artifact={a} onOpen={artifactViewer.open} />
+								))}
 								<MsgCopyButton text={m.text} />
 							</div>
 						);
@@ -653,7 +687,10 @@ export default function App() {
 								<i />
 							</span>
 							<div className="assistant-body">
-								{m.text ? <Markdown text={m.text} /> : <span>…</span>}
+								{m.text ? <Markdown text={m.text} /> : m.artifacts?.length ? null : <span>…</span>}
+								{m.artifacts?.map((a) => (
+									<ArtifactCard key={a.id} artifact={a} onOpen={artifactViewer.open} />
+								))}
 								<MsgCopyButton text={m.text} />
 							</div>
 						</div>
@@ -764,6 +801,8 @@ export default function App() {
 				send={(msg) => wsRef.current?.send(JSON.stringify(msg))}
 				notify={showNotice}
 			/>
+
+			{artifactViewer.viewer}
 		</div>
 	);
 }

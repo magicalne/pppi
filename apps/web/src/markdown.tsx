@@ -508,6 +508,21 @@ function renderBlock(b: Block, key: string): ReactNode {
 			);
 		}
 		case "code":
+			// an artifact fence arriving via deltas (#17): show a building card, not
+			// the raw HTML — assistant_final swaps in the real artifact card
+			if (b.lang.startsWith("pppi-artifact")) {
+				return (
+					<div key={key} className="artifact-card pending">
+						<span className="artifact-glyph" aria-hidden>
+							◫
+						</span>
+						<span className="artifact-meta">
+							<span className="artifact-title">building artifact…</span>
+							<span className="artifact-kind">the view lands when the reply finishes</span>
+						</span>
+					</div>
+				);
+			}
 			return (
 				<div key={key} className="md-code-wrap">
 					<button
