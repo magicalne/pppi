@@ -42,7 +42,14 @@ sealed class ServerEvent {
 
 	@Serializable
 	@SerialName("assistant_final")
-	data class AssistantFinal(val id: String, val text: String, val target: String? = null, val profileId: String? = null) : ServerEvent()
+	data class AssistantFinal(
+		val id: String,
+		val text: String,
+		val target: String? = null,
+		val profileId: String? = null,
+		// artifacts (#17): rich views peeled out of the reply text by the gateway
+		val artifacts: List<Artifact> = emptyList(),
+	) : ServerEvent()
 
 	@Serializable
 	@SerialName("tool_event")
@@ -90,6 +97,18 @@ data class AgentInfo(
 	val state: String = "starting",
 )
 
+/**
+ * A rich, self-contained view delivered inside an assistant reply (#17).
+ * v1 kind is "html"; unknown kinds must render as an unsupported affordance.
+ */
+@Serializable
+data class Artifact(
+	val id: String,
+	val title: String,
+	val kind: String = "html",
+	val content: String,
+)
+
 @Serializable
 data class ChatEntry(
 	val id: String,
@@ -99,6 +118,7 @@ data class ChatEntry(
 	val ts: Long = 0,
 	val target: String? = null,
 	val profileId: String? = null,
+	val artifacts: List<Artifact> = emptyList(),
 )
 
 @Serializable

@@ -104,3 +104,10 @@ sessions. Read README.md for the full picture.
   playback, `useVoice` state machine).
 - `packages/protocol/src/index.ts` — the wire protocol; keep TS and Kotlin
   sides in sync (Kotlin mirror: apps/android/.../Protocol.kt).
+- artifacts (#17): agents emit rich views as fenced `pppi-artifact` blocks in
+  a reply (tables/dashboards/visual/long structured reports → artifact; short
+  answers → markdown). The gateway peels them out of the chat text; the phone
+  renders a card → sandboxed full-screen view (opaque origin, zero network).
+  Fence syntax, when-to-emit guidance and the sandbox policy:
+  docs/artifacts.md; one-tap demo: open the client with `?demo-artifact`
+  (fixture: docs/fixtures/demo-artifact.html).

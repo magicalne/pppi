@@ -196,6 +196,43 @@ describe("gateway server", () => {
 		b.close();
 	});
 
+	it("delivers an artifact: peeled from the reply, id-stable through history (#17)", async () => {
+		// inject a delegated reply (with an artifact fence) through the peer
+		// seam — the same extraction runs on omni replies and mailbox polls
+		const ws = await connect(token);
+		await nextEvent(ws, "hello_ok");
+		const finalP = nextEvent(ws, "assistant_final");
+
+		const res = await fetch(`http://127.0.0.1:${port}/api/peer-reply`, {
+			method: "POST",
+			headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+			body: JSON.stringify({
+				session: "peer-session-1",
+				text: 'Fleet overview below.\n\n```pppi-artifact title="Fleet status"\n<p>fleet</p>\n```\n\nDone.',
+			}),
+		});
+		expect(res.status).toBe(200);
+
+		const final = await finalP;
+		expect(final.text).toBe("Fleet overview below.\n\nDone.");
+		expect(final.artifacts).toHaveLength(1);
+		expect(final.artifacts[0]).toMatchObject({ title: "Fleet status", kind: "html", content: "<p>fleet</p>" });
+		const artId = final.artifacts[0].id as string;
+		expect(artId).toMatch(/^art-[0-9a-f]{12}$/);
+		ws.close();
+
+		// the reply sits in peerLog (raw, fence included); a fresh client (a
+		// phone reconnecting after unlock) gets the same artifact back out of
+		// history with the same stable id — extraction is idempotent
+		const second = await connect(token);
+		const hello = await nextEvent(second, "hello_ok");
+		const artMsg = hello.history.find((h: any) => h.artifacts?.length > 0);
+		expect(artMsg).toBeTruthy();
+		expect(artMsg.text).toBe("Fleet overview below.\n\nDone.");
+		expect(artMsg.artifacts[0].id).toBe(artId);
+		second.close();
+	});
+
 	it("handles /new: resets the session and tells every client to clear", async () => {
 		const a = await connect(token);
 		await nextEvent(a, "hello_ok");

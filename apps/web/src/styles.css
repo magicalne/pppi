@@ -1280,3 +1280,98 @@
 	transition: opacity 120ms ease;
 	pointer-events: none;
 }
+
+/* ---------------- artifacts (#17) ---------------- */
+
+.artifact-card {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	max-width: 340px;
+	margin: 6px 0 10px;
+	padding: 12px 14px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: 16px;
+	cursor: pointer;
+	text-align: left;
+	font: inherit;
+	color: var(--text);
+}
+.artifact-card:active {
+	border-color: var(--accent);
+}
+.artifact-card.unsupported {
+	cursor: default;
+	opacity: 0.65;
+}
+.artifact-card .artifact-glyph {
+	flex: none;
+	width: 34px;
+	height: 34px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 10px;
+	background: var(--user-bubble);
+	color: var(--accent);
+	font-size: 17px;
+}
+.artifact-card .artifact-meta {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.artifact-card .artifact-title {
+	font-weight: 600;
+	font-size: 14px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.artifact-card .artifact-kind {
+	color: var(--dim);
+	font-size: 11.5px;
+}
+.artifact-card .artifact-open {
+	color: var(--dim);
+	font-size: 15px;
+}
+.artifact-card.pending {
+	cursor: default;
+	opacity: 0.75;
+}
+
+.artifact-view {
+	position: fixed;
+	inset: 0;
+	z-index: 60;
+	display: flex;
+	flex-direction: column;
+	background: var(--bg);
+}
+.artifact-view .artifact-head {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: calc(12px + env(safe-area-inset-top)) 14px 12px;
+	border-bottom: 1px solid var(--line);
+	background: var(--bg);
+}
+.artifact-view .artifact-view-title {
+	font-size: 15px;
+	font-weight: 600;
+	color: var(--text);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.artifact-view iframe {
+	flex: 1;
+	width: 100%;
+	border: 0;
+	background: #fff;
+}

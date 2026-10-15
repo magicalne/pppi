@@ -33,6 +33,7 @@ import type {
 import { minimatch } from "minimatch";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { AgentPort } from "./agent.ts";
+import { entryWithArtifacts, extractArtifacts } from "./artifacts.ts";
 import { AudioService } from "./audio-proxy.ts";
 import { tokensMatch } from "./config.ts";
 import { buildProfiles } from "./profiles.ts";
@@ -322,11 +323,13 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			// direct 1:1 session: no tint needed there — profile colors attribute
 			// delegated work inside the omni conversation (see /api/peer-reply)
 			const replyId = randomUUID();
+			const { text: replyClean, artifacts: replyArts } = extractArtifacts(reply || "(empty reply)");
 			broadcast({
 				type: "assistant_final",
 				id: replyId,
-				text: reply || "(empty reply)",
+				text: replyClean,
 				target,
+				...(replyArts.length ? { artifacts: replyArts } : {}),
 			});
 			peerLog.push({ id: replyId, role: "assistant", text: reply || "(empty reply)", ts: Date.now(), target });
 		} else {
@@ -447,7 +450,10 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 	agent.on("assistant-final", (id: string, text: string) => {
 		if (voiceInFlight) voiceInFlight.replied = true;
 		lastReply = text;
-		broadcast({ type: "assistant_final", id, text });
+		// artifacts (#17): peel fenced views out of the chat text; stored text
+		// stays raw (voice/repeat/history re-extract on their way out)
+		const { text: clean, artifacts } = extractArtifacts(text);
+		broadcast({ type: "assistant_final", id, text: clean, ...(artifacts.length ? { artifacts } : {}) });
 		speakAssistant(
 			(s) => s.assistantFinal(id, text),
 			(a) => a.assistantFinal(id, text),
@@ -484,7 +490,14 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				if (seenReplies.has(e.msgId)) continue;
 				seenReplies.add(e.msgId);
 				const id = randomUUID();
-				broadcast({ type: "assistant_final", id, text: e.reply, profileId: e.fromSessionId });
+				const { text: replyClean, artifacts: replyArts } = extractArtifacts(e.reply);
+				broadcast({
+					type: "assistant_final",
+					id,
+					text: replyClean,
+					profileId: e.fromSessionId,
+					...(replyArts.length ? { artifacts: replyArts } : {}),
+				});
 				peerLog.push({ id, role: "assistant", text: e.reply, ts: Date.now(), profileId: e.fromSessionId });
 				// a delegated answer lands in the omni conversation — say it too.
 				// No deltas ever streamed for it (fresh id), so assistantFinal()
@@ -661,7 +674,14 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				return json(res, 400, { ok: false, error: "session and text are required" });
 			}
 			const id = randomUUID();
-			broadcast({ type: "assistant_final", id, text: replyText, profileId: session });
+			const { text: cleanText, artifacts: cleanArts } = extractArtifacts(replyText);
+			broadcast({
+				type: "assistant_final",
+				id,
+				text: cleanText,
+				profileId: session,
+				...(cleanArts.length ? { artifacts: cleanArts } : {}),
+			});
 			peerLog.push({ id, role: "assistant", text: replyText, ts: Date.now(), profileId: session });
 			// same speaking path as mailbox-discovered replies, but DISCRETE:
 			// a fresh POST opens a fresh turn when idle (an inherited aborted
@@ -747,6 +767,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 					const { entries } = await agent.history({ limit: 50 });
 					history = [...entries, ...peerLog]
 						.map((h) => ({ ...h, id: randomUUID() }))
+						.map(entryWithArtifacts)
 						.sort((a, b) => a.ts - b.ts)
 						.slice(-50);
 				} catch {
@@ -798,7 +819,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 					});
 					send(ws, {
 						type: "history_page",
-						entries: entries.map((h) => ({ ...h, id: randomUUID() })),
+						entries: entries.map((h) => ({ ...h, id: randomUUID() })).map(entryWithArtifacts),
 						hasMore,
 					});
 				})().catch((err) => send(ws, { type: "error", message: String(err.message ?? err) }));

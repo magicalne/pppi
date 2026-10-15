@@ -13,7 +13,10 @@
 //     extension UI dialogs); the status line says "needs you" instead of
 //     the gateway silently auto-dismissing.
 
-export type AgentState = "starting" | "idle" | "thinking" | "tool" | "streaming" | "compacting" | "waiting";
+export type AgentState =
+	// v7: artifacts — rich self-contained HTML views delivered inside a reply
+	//     (fenced ```pppi-artifact blocks, extracted by the gateway). Issue #17.
+	"starting" | "idle" | "thinking" | "tool" | "streaming" | "compacting" | "waiting";
 
 export type MessageSource = "voice" | "text";
 
@@ -76,6 +79,25 @@ export type AgentStatus = {
 	context: ContextInfo | null;
 };
 
+// ---------------------------------------------------------------- artifacts (#17)
+
+/** Artifact render kinds. v1 ships "html"; "svg"/"mermaid" are planned
+ *  additions — the wire shape stays stable; clients render an "unsupported"
+ *  affordance for kinds they don't know yet. */
+export type ArtifactKind = "html";
+
+/** A rich, self-contained view delivered inside an assistant reply.
+ *  Agents emit it as a fenced ```pppi-artifact block; the gateway extracts
+ *  it from the reply text (the chat text stays clean) and attaches it here. */
+export type Artifact = {
+	/** stable per content — re-extraction on reconnect/history yields the same id */
+	id: string;
+	title: string;
+	kind: ArtifactKind;
+	/** self-contained document (HTML). Rendered in a sandboxed iframe. */
+	content: string;
+};
+
 export type ChatEntry = {
 	id: string;
 	role: "user" | "assistant";
@@ -85,6 +107,8 @@ export type ChatEntry = {
 	target?: Target;
 	/** set when the message is attributed to a profiled agent (delegated reply) */
 	profileId?: string;
+	/** artifacts extracted from this entry's text by the gateway (#17) */
+	artifacts?: Artifact[];
 };
 
 // ---------------------------------------------------------------- client → server
@@ -109,7 +133,7 @@ export type ServerEvent =
 	| { type: "user_message"; id: string; text: string; source: MessageSource; target?: Target }
 	| { type: "transcript"; id: string; text: string; target?: Target }
 	| { type: "assistant_delta"; id: string; delta: string; target?: Target; profileId?: string }
-	| { type: "assistant_final"; id: string; text: string; target?: Target; profileId?: string }
+	| { type: "assistant_final"; id: string; text: string; target?: Target; profileId?: string; artifacts?: Artifact[] }
 	| { type: "tool_event"; toolName: string; phase: "start" | "end"; label?: string }
 	| { type: "agent_notify"; level: "info" | "warning" | "error"; message: string }
 	| { type: "error"; message: string; target?: Target }
