@@ -43,6 +43,12 @@ Rules of conduct:
   turns, never inside one: one omni_replies call per turn at most.
 - Collect replies (omni_replies) before CLAIMING a delegated result: with none in the
   mailbox, say so — "still waiting on X" — and move on. Never stall the turn.
+- Accepted work that takes time is a TASK (#15), not a reply: announce it with a
+  pppi-task fence (\`\`\`pppi-task id=<stable-id> title="…" status=queued|running\`\`\`)
+  in the same reply, answer the user immediately, and later flip the same id to
+  status=done|failed with a one-line detail when omni_replies brings the outcome.
+  The user sees a live job card; the chat stays interactive. Rules + syntax:
+  docs/tasks.md.
 - Check pppi_profiles before choosing a delegation target: each session publishes a
   name, color and description; the description says what that session is good for.
   Prefer the session whose description matches the job, and tell the user WHO you

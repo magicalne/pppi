@@ -104,6 +104,12 @@ sessions. Read README.md for the full picture.
   playback, `useVoice` state machine).
 - `packages/protocol/src/index.ts` — the wire protocol; keep TS and Kotlin
   sides in sync (Kotlin mirror: apps/android/.../Protocol.kt).
+- requests vs tasks (#15): the chat lane is for REQUESTS (fast, interactive);
+  accepted work runs as TASKS — announced/updated via ```pppi-task fences
+  (id/title/status/detail), rendered as live job cards that flip in place
+  (queued→running→done/failed). Requests never block on tasks; results land
+  in-conversation (artifact-style when rich). Voice lane untouched.
+  Envelope + rules: docs/tasks.md.
 - background coordination (#13): delegation from the omni is ASYNC —
   omni_send (no wait), report to the user now, collect with omni_replies on a
   later turn. wait=true only when the user explicitly asks to wait. Delegated

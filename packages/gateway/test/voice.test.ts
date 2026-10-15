@@ -1018,6 +1018,24 @@ describe("interactive voice websocket", () => {
 		voice.close();
 	});
 
+	it("voice lane is isolated from tasks: fences never spoken, chat text clean (#15)", async () => {
+		const { provider, received } = fakeTts();
+		const reply = 'On it.\n\n```pppi-task id=deploy title="Deploy v1.2" status=queued\n```\n\nI\'ll report back.';
+		const v = await boot(fakeStt("deploy it"), provider, reply);
+		const voice = await voiceConnect(token);
+		await nextEvent(voice, "voice_hello_ok");
+		say(voice, v, "speech", 8);
+		say(voice, v, "silence", 30);
+		await new Promise((r) => setTimeout(r, 300));
+
+		const spoken = received.join(" | ");
+		expect(spoken).toContain("On it.");
+		expect(spoken).toContain("I'll report back.");
+		expect(spoken).not.toContain("pppi-task");
+		expect(spoken).not.toContain("deploy"); // the id/title never reach the ear
+		voice.close();
+	});
+
 	it("keeps code fences out of the spoken prose", async () => {
 		const { provider, received } = fakeTts();
 		const v = await boot(fakeStt("show me"), provider, "Look. ```js\nlet x = 1\n```\nDone.");

@@ -1408,3 +1408,68 @@
 	font-style: normal;
 	margin-top: 2px;
 }
+
+/* ---------------- task cards (#15) ---------------- */
+
+.task-card {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	max-width: 340px;
+	margin: 6px 0 10px;
+	padding: 11px 14px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: 16px;
+}
+.task-card .task-glyph {
+	flex: none;
+	font-size: 15px;
+	color: var(--dim);
+	line-height: 1;
+}
+.task-card.running {
+	border-color: var(--accent);
+}
+.task-card.running .task-glyph {
+	color: var(--accent);
+}
+.task-card.done .task-glyph {
+	color: var(--ok, #3fd68f);
+}
+.task-card.failed {
+	border-color: var(--danger);
+}
+.task-card.failed .task-glyph {
+	color: var(--danger);
+}
+.task-card .task-meta {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.task-card .task-title {
+	font-weight: 600;
+	font-size: 14px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.task-card .task-detail {
+	color: var(--dim);
+	font-size: 11.5px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+@keyframes task-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+.task-card .task-glyph.spin {
+	display: inline-block;
+	animation: task-spin 2.4s linear infinite;
+}

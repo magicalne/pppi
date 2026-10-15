@@ -196,6 +196,51 @@ describe("gateway server", () => {
 		b.close();
 	});
 
+	it("task fences become live task events; hello snapshots the registry (#15)", async () => {
+		const ws = await connect(token);
+		await nextEvent(ws, "hello_ok");
+		const finalP = nextEvent(ws, "assistant_final");
+		const taskP = nextEvent(ws, "task");
+
+		await fetch(`http://127.0.0.1:${port}/api/peer-reply`, {
+			method: "POST",
+			headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+			body: JSON.stringify({
+				session: "worker-1",
+				text: 'Kicking it off now.\n\n```pppi-task id=deploy-v12 title="Deploy v1.2" status=queued\n```',
+			}),
+		});
+
+		const final = await finalP;
+		expect(final.text).toBe("Kicking it off now.");
+		expect(final.tasks).toEqual([{ id: "deploy-v12", title: "Deploy v1.2", status: "queued" }]);
+		const task1 = await taskP;
+		expect(task1.task).toEqual({ id: "deploy-v12", title: "Deploy v1.2", status: "queued" });
+
+		// later update: same id flips to done — a NEW task event, not a replay
+		const task2P = nextEvent(ws, "task");
+		const final2P = nextEvent(ws, "assistant_final");
+		await fetch(`http://127.0.0.1:${port}/api/peer-reply`, {
+			method: "POST",
+			headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+			body: JSON.stringify({
+				session: "worker-1",
+				text: 'Done.\n\n```pppi-task id=deploy-v12 status=done detail="PR #31 merged"\n```',
+			}),
+		});
+		await final2P;
+		const task2 = await task2P;
+		expect(task2.task.status).toBe("done");
+		expect(task2.task.detail).toBe("PR #31 merged");
+
+		// reconnect: hello seeds the registry with the latest status
+		const second = await connect(token);
+		const hello = await nextEvent(second, "hello_ok");
+		expect(hello.tasks).toEqual([{ id: "deploy-v12", title: "Deploy v1.2", status: "done", detail: "PR #31 merged" }]);
+		ws.close();
+		second.close();
+	});
+
 	it("peer_reply while idle emits a peer_report notification (#13)", async () => {
 		const ws = await connect(token);
 		await nextEvent(ws, "hello_ok");
