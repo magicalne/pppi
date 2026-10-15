@@ -87,7 +87,12 @@ sessions. Read README.md for the full picture.
   → kokoro → platform fallback `say` on darwin, `espeak-ng` elsewhere;
   resolvers search `PPPI_TTS_MODEL` → `~/.pppi/models/tts/`, kokoro also
   the HF cache — `bun run setup:voice` populates that dir, no env vars
-  needed).
+  needed). setup:voice ALSO installs/verifies the `sherpa-onnx-node` runtime
+  piper loads through (bun install; it's an optionalDependency of
+  @pppi/gateway, and install:ext symlinks it + its platform binary into the
+  extension) — run it once per machine, or piper resolves its model but
+  never speaks. TTS engine failures log to ~/.pppi/logs/audio.log and show
+  in /api/health's `tts` block.
 - `packages/gateway/src/vad.ts` + `vadProcess.ts` — silero VAD in a host
   process (worker threads deadlock against kokoro's runtime) + the
   turn-taking state machine (`UtteranceDetector`, timings in

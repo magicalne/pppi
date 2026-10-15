@@ -5,29 +5,9 @@
 // hold-to-talk uploads forward to the child's /transcribe.
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { request } from "node:http";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { WebSocket as WsSocket } from "ws";
-
-const LOG_PATH = join(homedir(), ".pppi", "logs", "audio.log");
-const LOG_MAX_BYTES = 5_000_000;
-
-/**
- * The voice pipeline's diary (utt timings, uplink telemetry, stt failures)
- * lands here — a file, not pi's TUI: the pane is a conversation, not a log
- * viewer. Rotation keeps it bounded; logging never takes voice down.
- */
-function childLog(line: string): void {
-	try {
-		mkdirSync(join(LOG_PATH, ".."), { recursive: true });
-		if (existsSync(LOG_PATH) && statSync(LOG_PATH).size > LOG_MAX_BYTES) renameSync(LOG_PATH, `${LOG_PATH}.1`);
-		appendFileSync(LOG_PATH, `${new Date().toISOString().slice(11, 23)} ${line}\n`);
-	} catch {
-		// best-effort
-	}
-}
+import { audioLog } from "./audio-log.ts";
 
 export type AudioServiceOptions = {
 	/** How to run the child, e.g. ["bun", "<ext>/node_modules/@pppi/gateway/src/audio-service.ts"]. */
@@ -146,7 +126,7 @@ export class AudioService {
 					const text = line.trim();
 					if (!text) continue;
 					this.lastStderr = text;
-					childLog(text);
+					audioLog(text);
 				}
 			};
 			const onExit = (code: number | null) => {

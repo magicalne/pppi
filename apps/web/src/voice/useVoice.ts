@@ -54,6 +54,14 @@ const BOOT_COMPONENT: Record<string, string> = {
 	vad: "the ear model",
 };
 
+/** What to do when the gateway's TTS can't load (runtime/model missing). */
+const TTS_FIX = "run `bun run setup:voice` on the gateway";
+
+/** TTS-related failures carry the fix; everything else passes through. */
+function withTtsFix(message: string): string {
+	return /^tts/i.test(message) ? `${message} — ${TTS_FIX}` : message;
+}
+
 const WARMING_CAP_MS = 90_000;
 
 export function useVoice() {
@@ -184,11 +192,17 @@ export function useVoice() {
 					// barge-in thresholds can relax
 					void player.waitIdle().then(() => refs.current.client?.playbackDone());
 				},
-				onError: (message) => setState((s) => ({ ...s, notice: message })),
+				onError: (message) => setState((s) => ({ ...s, notice: withTtsFix(message) })),
 				onBoot: (frame: VoiceBootFrame) => {
 					if (frame.stage === "ready") return; // one component done; hello is next
 					if (frame.stage === "failed") {
-						setBoot("warming", frame.reason ?? "the Mac's voice models aren't ready");
+						// tts failures name the fix, not just the symptom
+						setBoot(
+							"warming",
+							frame.component === "tts"
+								? withTtsFix(frame.reason ?? "the gateway's voice is not set up")
+								: (frame.reason ?? "the gateway's voice models aren't ready"),
+						);
 						return;
 					}
 					setBoot("warming", `loading ${BOOT_COMPONENT[frame.component ?? ""] ?? "the voice models"}…`);

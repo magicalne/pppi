@@ -16,9 +16,12 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import { constants, accessSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { VoiceTtsStatus } from "@pppi/protocol";
+import { audioLog } from "./audio-log.ts";
 import { type VoiceTts, abortError } from "./voice.ts";
 import { decodeWav } from "./wav.ts";
 
@@ -116,8 +119,14 @@ export function resolveTtsProvider(opts: { piperDirs?: string[]; kokoroDirs?: st
 	// same env var would otherwise confuse kokoro's resolver, and anyone who
 	// downloaded a piper model clearly wants it)
 	const piper = new SherpaPiperProvider(opts.piperDirs);
-	if (piper.status.ready) return piper;
-	if (kokoro.status.ready) return kokoro;
+	const piperStatus = piper.status;
+	if (piperStatus.ready) return piper;
+	// a skipped engine is LOUD: "TTS dead on the phone" went undiagnosed
+	// because fallthrough was silent — audio.log gets the reason every boot
+	audioLog(`tts: piper skipped — ${piperStatus.reason}`);
+	const kokoroStatus = kokoro.status;
+	if (kokoroStatus.ready) return kokoro;
+	audioLog(`tts: kokoro skipped — ${kokoroStatus.reason}`);
 	// always-works fallback per platform: say on macOS, espeak-ng elsewhere
 	return process.platform === "darwin" ? new MacosSayProvider() : new EspeakNgProvider();
 }
@@ -193,6 +202,8 @@ export class SherpaPiperProvider implements TtsProvider {
 	private readonly resolvedStatus: VoiceTtsStatus;
 	private currentStatus: VoiceTtsStatus;
 	private readonly model: { dir: string; onnx: string } | { reason: string };
+	/** last load failure already filed to audio.log — repeats collapse to one line */
+	private loggedFailure: string | null = null;
 
 	constructor(searchDirs?: string[]) {
 		this.model = resolvePiperModel(searchDirs);
@@ -241,39 +252,89 @@ export class SherpaPiperProvider implements TtsProvider {
 			try {
 				const engine = await loadPiperEngine(this.model);
 				if (!engine) {
-					this.currentStatus = { ready: false, reason: "sherpa-onnx addon unavailable" };
+					const reason = "sherpa-onnx-node runtime not installed — run `bun run setup:voice` on the gateway host";
+					this.currentStatus = { ready: false, reason };
+					this.noteFailure(reason);
 					this.loading = null; // retry later — the addon may appear after an install
 				} else {
 					this.currentStatus = this.resolvedStatus; // healthy (again)
+					this.loggedFailure = null;
 				}
 				return engine;
 			} catch (err) {
-				this.currentStatus = {
-					ready: false,
-					reason: `engine failed to load: ${String((err as Error)?.message ?? err)}`,
-				};
+				const reason = `engine failed to load: ${String((err as Error)?.message ?? err)}`;
+				this.currentStatus = { ready: false, reason };
+				this.noteFailure(reason);
 				this.loading = null; // next attempt retries the load
 				throw err;
 			}
 		})();
 		return this.loading;
 	}
+
+	/** Every DISTINCT load failure lands in audio.log once (the voice diary) — a silent one is how dead TTS went unnoticed. */
+	private noteFailure(reason: string): void {
+		if (this.loggedFailure === reason) return;
+		this.loggedFailure = reason;
+		audioLog(`tts: piper load failed — ${reason}`);
+	}
 }
 
 type PiperEngine = { generate(text: string): Promise<{ samples: Float32Array; rate: number }> };
 
+/** The sherpa-onnx-node addon's surface piper uses (untyped: it's an optional native dep). */
+type SherpaAddon = { OfflineTts: new (cfg: Record<string, unknown>) => any };
+
+/** Repo roots stamped by install.mjs (repo.json next to the gateway runtime), read once. */
+function stampedRepoRoots(): string[] {
+	// this file: <ext>/node_modules/@pppi/gateway/src/tts.ts — the extension
+	// root is four dirs up; in a plain checkout that path has no repo.json
+	const extRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+	try {
+		const stamp = JSON.parse(readFileSync(join(extRoot, "repo.json"), "utf8")) as { repoRoot?: string };
+		return stamp.repoRoot ? [stamp.repoRoot] : [];
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * The sherpa-onnx-node runtime piper speaks through, or null when it isn't
+ * installed anywhere pppi looks: next to this gateway build (repo checkout,
+ * or an extension whose install:ext symlinked the runtime in), then — via
+ * install:ext's repo.json stamp — the repo checkout the extension came from,
+ * so `bun run setup:voice` can make piper load without reinstalling the ext.
+ * Exported for tests; `lookup` overrides the search (defaults to reality).
+ */
+export function resolveSherpaAddon(lookup: { bases?: string[]; repoRoots?: string[] } = {}): SherpaAddon | null {
+	const requireFrom = (base: string): SherpaAddon | null => {
+		try {
+			// optional native dependency — absent addon means "provider unavailable".
+			// CJS module: createRequire, because a bare dynamic import of it loses
+			// the constructor through ESM interop.
+			return createRequire(base)("sherpa-onnx-node") as SherpaAddon;
+		} catch {
+			return null;
+		}
+	};
+	for (const base of lookup.bases ?? [import.meta.url]) {
+		const mod = requireFrom(base);
+		if (mod) return mod;
+	}
+	// the gateway package's node_modules is where bun links the optional dependency
+	for (const root of lookup.repoRoots ?? stampedRepoRoots()) {
+		for (const pkg of [join(root, "packages", "gateway", "package.json"), join(root, "package.json")]) {
+			const mod = requireFrom(pkg);
+			if (mod) return mod;
+		}
+	}
+	return null;
+}
+
 async function loadPiperEngine(model: { dir: string; onnx: string } | { reason: string }): Promise<PiperEngine | null> {
 	if ("reason" in model) return null;
-	let addon: { OfflineTts: new (cfg: Record<string, unknown>) => any };
-	try {
-		// optional native dependency — absent addon means "provider unavailable".
-		// CJS module: createRequire, because a bare dynamic import of it loses
-		// the constructor through ESM interop.
-		const { createRequire } = await import("node:module");
-		addon = createRequire(import.meta.url)("sherpa-onnx-node");
-	} catch {
-		return null;
-	}
+	const addon = resolveSherpaAddon();
+	if (!addon) return null;
 	const tts = new addon.OfflineTts({
 		model: {
 			vits: { model: model.onnx, tokens: join(model.dir, "tokens.txt"), dataDir: join(model.dir, "espeak-ng-data") },
@@ -354,6 +415,8 @@ export class KokoroProvider implements TtsProvider {
 	private readonly model: { dir: string } | { reason: string };
 	/** serializes native generates + races aborts (see GenerateQueue) */
 	private readonly queue = new GenerateQueue();
+	/** last load failure already filed to audio.log — repeats collapse to one line */
+	private loggedFailure: string | null = null;
 
 	constructor(searchDirs?: string[]) {
 		this.model = resolveKokoroModel(searchDirs);
@@ -412,21 +475,29 @@ export class KokoroProvider implements TtsProvider {
 				const engine = await loadKokoroEngine(this.model);
 				if (!engine) {
 					this.currentStatus = { ready: false, reason: "kokoro-js dependency unavailable" };
+					this.noteFailure("kokoro-js dependency unavailable");
 					this.loading = null;
 				} else {
 					this.currentStatus = this.resolvedStatus;
+					this.loggedFailure = null;
 				}
 				return engine;
 			} catch (err) {
-				this.currentStatus = {
-					ready: false,
-					reason: `engine failed to load: ${String((err as Error)?.message ?? err)}`,
-				};
+				const reason = `engine failed to load: ${String((err as Error)?.message ?? err)}`;
+				this.currentStatus = { ready: false, reason };
+				this.noteFailure(reason);
 				this.loading = null; // next attempt retries the load
 				throw err;
 			}
 		})();
 		return this.loading;
+	}
+
+	/** Every DISTINCT load failure lands in audio.log once (the voice diary) — a silent one is how dead TTS went unnoticed. */
+	private noteFailure(reason: string): void {
+		if (this.loggedFailure === reason) return;
+		this.loggedFailure = reason;
+		audioLog(`tts: kokoro load failed — ${reason}`);
 	}
 }
 

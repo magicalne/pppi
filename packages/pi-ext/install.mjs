@@ -80,8 +80,19 @@ try {
 
 // native voice deps stay OUT of the extension dir; symlink this repo's copies
 // so the audio-service child finds them on dev machines (missing → voice
-// degrades gracefully, /api/health reports why)
-for (const dep of ["transcribe-cpp", "kokoro-js", "onnxruntime-node", "onnxruntime-common", "onnxruntime-web"]) {
+// degrades gracefully, /api/health reports why). sherpa-onnx-node's addon
+// requires its platform binary as a SIBLING (../sherpa-onnx-<plat>-<arch>/
+// sherpa-onnx.node) — link both or piper resolves but never loads.
+const sherpaPlatform = `sherpa-onnx-${process.platform === "win32" ? "win" : process.platform}-${process.arch}`;
+for (const dep of [
+	"transcribe-cpp",
+	"kokoro-js",
+	"onnxruntime-node",
+	"onnxruntime-common",
+	"onnxruntime-web",
+	"sherpa-onnx-node",
+	sherpaPlatform,
+]) {
 	const from = depDir(dep);
 	const to = join(dest, "node_modules", dep);
 	try {

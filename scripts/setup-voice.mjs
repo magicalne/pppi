@@ -1,11 +1,15 @@
 #!/usr/bin/env node
-// setup-voice — download the local voice models pppi's inference layer needs.
+// setup-voice — make local voice work on this machine: models AND the piper
+// runtime.
 //
-//   node scripts/setup-voice.mjs [--stt] [--no-stt] [--tts=piper|kokoro|none] [--all]
+//   node scripts/setup-voice.mjs [--stt] [--no-stt] [--tts=piper|kokoro|none] [--all] [--no-runtime]
 //
 // Defaults: STT (parakeet GGUF) + piper TTS. `--all` takes STT + piper +
 // kokoro. Models land under ~/.pppi/models/, which the gateway's resolvers
-// pick up with zero env vars. Idempotent; interrupted downloads resume.
+// pick up with zero env vars. The runtime step installs/verifies the
+// sherpa-onnx-node addon piper loads through (bun install; npm fallback) —
+// without it piper resolves its model but never speaks. Run ONCE per
+// machine/checkout. Idempotent; interrupted downloads resume.
 //
 //   STT    ~/.pppi/models/stt/parakeet-unified-en-0.6b-Q8_0.gguf   (~660 MB)
 //          the model pi-transcribe recommends (transcribe.cpp GGUF)
@@ -19,10 +23,12 @@
 
 import { spawn } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { fileURLToPath } from "node:url";
 
 const argv = process.argv.slice(2);
 const ttsFlag = argv.find((a) => a.startsWith("--tts="))?.slice(6);
@@ -32,6 +38,8 @@ const ttsSet = new Set(argv.includes("--all") ? ["piper", "kokoro"] : []);
 if (!argv.includes("--all") && ttsFlag !== "none") ttsSet.add(ttsFlag ?? "piper");
 
 const ROOT = join(homedir(), ".pppi", "models");
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const gatewayRequire = createRequire(join(repoRoot, "packages", "gateway", "package.json"));
 const jobs = [];
 
 if (stt) {
@@ -73,13 +81,27 @@ if (ttsSet.has("kokoro")) {
 	}
 }
 
-if (jobs.length === 0) {
-	console.log("nothing selected — flags: --stt, --no-stt, --tts=piper|kokoro|none, --all");
-	process.exit(0);
+// ---- piper runtime: sherpa-onnx-node (optional native dep) ----------------
+// Models alone are not enough: piper loads through the sherpa-onnx-node
+// addon, and a checkout that never ran `bun install` (or where the optional
+// install failed) resolves the model but cannot speak. Verify, install when
+// missing, be loud about it either way. --no-runtime skips this step.
+console.log(`pppi voice setup → models in ${ROOT}, runtime in ${repoRoot}\n`);
+let failed = false;
+if (argv.includes("--no-runtime")) {
+	console.log("runtime: skipped (--no-runtime)\n");
+} else if (!(await ensureSherpaRuntime())) {
+	failed = true;
 }
 
-console.log(`pppi voice models → ${ROOT}\n`);
-let failed = false;
+if (jobs.length === 0) {
+	if (!argv.includes("--no-runtime")) {
+		console.log(failed ? "\nsetup incomplete — see above.\n" : "\ndone — voice models/runtime checked.\n");
+	}
+	console.log("nothing selected — flags: --stt, --no-stt, --tts=piper|kokoro|none, --all, --no-runtime");
+	process.exit(failed ? 1 : 0);
+}
+
 for (const job of jobs) {
 	try {
 		await download(job);
@@ -105,6 +127,44 @@ console.log(
 		: "\ndone. boot the gateway (or /pppi_gateway) and talk — models load eagerly at startup.\n",
 );
 process.exit(failed ? 1 : 0);
+
+/** True when sherpa-onnx-node resolves from the gateway package (where bun links it). */
+function sherpaInstalled() {
+	try {
+		gatewayRequire.resolve(join("sherpa-onnx-node", "package.json"));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** Install (bun install; npm fallback) or verify the piper runtime. Idempotent. */
+async function ensureSherpaRuntime() {
+	if (sherpaInstalled()) {
+		console.log("  ✓ TTS runtime: sherpa-onnx-node present (piper can load)");
+		return true;
+	}
+	console.log("  ↓ TTS runtime: sherpa-onnx-node missing — installing…");
+	const run = (cmd, cwd = repoRoot) =>
+		new Promise((r) => {
+			const proc = spawn(cmd[0], cmd.slice(1), { cwd, stdio: "inherit" });
+			proc.on("exit", (code) => r(code === 0));
+			proc.on("error", () => r(false));
+		});
+	// bun install pulls the optional dependency (+ the platform prebuild);
+	// npm fallback for node-only machines (--no-save: no lockfile churn)
+	const ok =
+		(await run(["bun", "install"])) ||
+		(await run(["npm", "install", "--no-save", "--prefix", "packages/gateway", "sherpa-onnx-node"]));
+	if (ok && sherpaInstalled()) {
+		console.log("  ✓ TTS runtime: sherpa-onnx-node installed");
+		return true;
+	}
+	console.error("  ✗ TTS runtime still missing — piper TTS will NOT load.");
+	console.error(`    fix: cd ${repoRoot} && bun install`);
+	console.error("    (or: npm install --no-save --prefix packages/gateway sherpa-onnx-node)");
+	return false;
+}
 
 async function download(job) {
 	// extracted payloads count as done even without the tarball
