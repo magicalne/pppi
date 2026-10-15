@@ -172,12 +172,103 @@
 	opacity: 0.75;
 }
 
+/* ---------------- text selection + copy affordances (issue #12) ----------------
+ * Nothing in the app set user-select:none on messages, but Android Chrome
+ * needs the explicit opt-in on the content to show long-press selection
+ * handles reliably; these declarations pin that in (regression-tested in
+ * apps/web/test/copy.test.ts). */
+.assistant-msg,
+.assistant-msg .md,
+.bubble.user-msg,
+.bubble.peer-msg,
+.bubble.peer-msg .md,
+.toolchip {
+	-webkit-user-select: text;
+	user-select: text;
+	-webkit-touch-callout: default;
+}
+
+.msg-copy {
+	align-self: flex-start;
+	margin-top: 4px;
+	background: none;
+	border: 0;
+	padding: 2px 4px;
+	color: var(--dim);
+	font-size: 11.5px;
+	font-family: var(--font-ui);
+	cursor: pointer;
+	opacity: 0.65;
+	user-select: none;
+	-webkit-user-select: none;
+}
+.row.user .msg-copy {
+	align-self: flex-end; /* hug the bubble's tail corner */
+	margin-right: 2px;
+}
+.msg-copy:active {
+	opacity: 1;
+}
+.msg-copy.ok {
+	color: var(--accent);
+	opacity: 1;
+}
+.msg-copy.fail {
+	color: var(--danger);
+	opacity: 1;
+}
+.assistant-msg .assistant-body {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.md-code-wrap {
+	position: relative;
+	margin: 0 0 10px;
+}
+.md-code-wrap > .md-pre {
+	margin: 0;
+}
+.md-code-copy {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	width: 26px;
+	height: 26px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--surface);
+	color: var(--dim);
+	font-size: 12px;
+	cursor: pointer;
+	opacity: 0.72;
+	user-select: none;
+	-webkit-user-select: none;
+}
+.md-code-copy:active {
+	opacity: 1;
+}
+.md-code-copy.ok {
+	color: var(--accent);
+	border-color: var(--accent);
+	opacity: 1;
+}
+.md-code-copy.fail {
+	color: var(--danger);
+	border-color: var(--danger);
+	opacity: 1;
+}
+
 /* ---------------- markdown (assistant + delegated replies) ---------------- */
 
 .md {
 	white-space: normal;
 	min-width: 0;
-	flex: 1;
 	word-break: break-word;
 	line-height: 1.5;
 }
@@ -231,7 +322,7 @@
 	border: 1px solid var(--line);
 	border-radius: 14px;
 	padding: 10px 12px;
-	margin: 0 0 10px;
+	margin: 0;
 	overflow-x: auto;
 	white-space: pre;
 }

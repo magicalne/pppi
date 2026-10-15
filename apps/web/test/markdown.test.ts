@@ -204,6 +204,7 @@ describe("markdown: XSS safety", () => {
 			"h4",
 			"h5",
 			"h6",
+			"button", // our code-block copy affordance (fixed label, no model content)
 		]);
 		for (const tag of tags) expect(allowed.has(tag), `unexpected tag <${tag}> in ${html}`).toBe(true);
 		// and anchors never carry an unsafe href
