@@ -666,7 +666,7 @@ export default function App() {
 									{voice.state.phase === "thinking" && <span className="hint-line">thinking…</span>}
 									{voice.state.phase === "agent-speaking" && (
 										<span className="hint-line">
-											talking… speak up to interrupt
+											talking… tap stop to interrupt
 											<button type="button" className="stop" onClick={voice.interrupt}>
 												stop
 											</button>
