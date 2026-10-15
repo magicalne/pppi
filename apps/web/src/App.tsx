@@ -1,6 +1,8 @@
 import type { AgentState, AgentStatus, ChatEntry, ModelInfo, ServerEvent, SessionsResponse } from "@pppi/protocol";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { copyTextToClipboard } from "./copy.ts";
 import { Markdown } from "./markdown.tsx";
+import { messageToPlainText } from "./plainText.ts";
 import { StatusBar } from "./status/StatusBar.tsx";
 import { THEMES, type ThemeId, applyTheme, loadTheme } from "./theme.ts";
 import { VoiceWave } from "./voice/VoiceWave.tsx";
@@ -579,6 +581,7 @@ export default function App() {
 									{m.source === "voice" && <span className="mic-glyph">🎙</span>}
 									{m.text}
 								</div>
+								<MsgCopyButton text={m.text} />
 							</div>
 						);
 					}
@@ -590,6 +593,7 @@ export default function App() {
 								<div className="bubble peer-msg" style={{ background: prof.color }}>
 									{m.text ? <Markdown text={m.text} /> : "…"}
 								</div>
+								<MsgCopyButton text={m.text} />
 							</div>
 						);
 					}
@@ -598,7 +602,10 @@ export default function App() {
 							<span className="dotcol">
 								<i />
 							</span>
-							{m.text ? <Markdown text={m.text} /> : <span>…</span>}
+							<div className="assistant-body">
+								{m.text ? <Markdown text={m.text} /> : <span>…</span>}
+								<MsgCopyButton text={m.text} />
+							</div>
 						</div>
 					);
 				})}
@@ -708,6 +715,26 @@ export default function App() {
 				notify={showNotice}
 			/>
 		</div>
+	);
+}
+
+/** issue #12: one-tap full-message copy — plain text for markdown bodies */
+function MsgCopyButton({ text }: { text: string }) {
+	const [state, setState] = useState<"ok" | "fail" | null>(null);
+	const onCopy = async () => {
+		const ok = await copyTextToClipboard(messageToPlainText(text));
+		setState(ok ? "ok" : "fail");
+		setTimeout(() => setState(null), 1400);
+	};
+	return (
+		<button
+			type="button"
+			className={`msg-copy ${state ?? ""}`.trim()}
+			aria-label="Copy message text"
+			onClick={() => void onCopy()}
+		>
+			{state === "ok" ? "copied ✓" : state === "fail" ? "copy failed — select manually" : "⧉ copy"}
+		</button>
 	);
 }
 

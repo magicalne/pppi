@@ -1,4 +1,5 @@
 import { type ReactNode, useMemo } from "react";
+import { copyTextToClipboard } from "./copy.ts";
 
 /**
  * Minimal markdown renderer for chat messages — issue #16.
@@ -441,6 +442,17 @@ export function parseBlocks(src: string): Block[] {
 
 const HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
 
+/** code-block copy: write the RAW code (no artifacts), flash ✓ / ✕ on the button */
+async function flashCopied(btn: HTMLButtonElement, code: string) {
+	const ok = await copyTextToClipboard(code);
+	btn.classList.add(ok ? "ok" : "fail");
+	btn.textContent = ok ? "✓" : "✕";
+	setTimeout(() => {
+		btn.classList.remove("ok", "fail");
+		btn.textContent = "⧉";
+	}, 1400);
+}
+
 /** text node with `\n` soft breaks rendered as <br> */
 function textWithBreaks(s: string, key: string): ReactNode {
 	const parts = s.split("\n");
@@ -497,9 +509,19 @@ function renderBlock(b: Block, key: string): ReactNode {
 		}
 		case "code":
 			return (
-				<pre key={key} className="md-pre">
-					<code>{b.s}</code>
-				</pre>
+				<div key={key} className="md-code-wrap">
+					<button
+						type="button"
+						className="md-code-copy"
+						aria-label="Copy code"
+						onClick={(e) => flashCopied(e.currentTarget, b.s)}
+					>
+						⧉
+					</button>
+					<pre className="md-pre">
+						<code>{b.s}</code>
+					</pre>
+				</div>
 			);
 		case "hr":
 			return <hr key={key} className="md-hr" />;
