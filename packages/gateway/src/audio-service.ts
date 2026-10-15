@@ -21,6 +21,7 @@
 
 import { type ServerResponse, createServer } from "node:http";
 import { type WebSocket, WebSocketServer } from "ws";
+import { audioLog } from "./audio-log.ts";
 import { Stt } from "./stt.ts";
 import { resolveTtsProvider } from "./tts.ts";
 import { SileroVad } from "./vad.ts";
@@ -80,6 +81,9 @@ const sttPort: VoiceStt =
 				transcribeBuffer: () => Promise.resolve(""),
 			});
 const tts = fake ? null : resolveTtsProvider();
+// engine LOAD failures log from inside the providers (both hosts share that);
+// the only case only this boot sees: no provider at all
+if (!tts) audioLog("tts: no provider resolved — voice replies will be silent");
 
 // Warm the heavy models NOW, not on the first utterance/reply — eager load
 // plus the boot lines above is what lets clients show honest progress.

@@ -56,9 +56,16 @@ exists as a fallback, but the big round button is the point.
 One command fetches every local model the voice stack wants (Linux and macOS):
 
 ```bash
-bun run setup:voice            # STT (parakeet GGUF) + TTS (piper) into ~/.pppi/models/
+bun run setup:voice            # once per machine: STT + TTS models into ~/.pppi/models/,
+                               # AND installs/verifies the sherpa-onnx-node runtime piper loads through
 sudo apt install espeak-ng     # Linux: the always-works fallback voice (brew install espeak on macOS)
 ```
+
+Models alone are not enough for piper: it speaks through the optional
+`sherpa-onnx-node` native addon, which `setup:voice` (via `bun install`)
+installs and verifies. A gateway with models but no runtime fails LOUDLY —
+`~/.pppi/logs/audio.log` names the engine and reason, and `/api/health`
+carries a `tts` block (`{ready, engine, modelId, reason?}`).
 
 ### Interactive mode (hands-free)
 
@@ -258,7 +265,7 @@ once with `bun run install:ext` (copies it to `~/.pi/agent/extensions/pppi/`):
 bun run typecheck       # strict TS across TS packages
 bun run test            # 98 tests incl. real STT/barge-in (skip without models/speech gen)
 bun run build:web
-bun run setup:voice     # download the local voice models (~/.pppi/models)
+bun run setup:voice     # once per machine: voice models + the piper runtime
 
 # android (JDK 17 + Android SDK required)
 cd apps/android

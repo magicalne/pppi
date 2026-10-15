@@ -1,14 +1,17 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	EspeakNgProvider,
+	KokoroProvider,
 	MacosSayProvider,
 	SherpaPiperProvider,
 	findExecutable,
 	resolvePiperModel,
+	resolveSherpaAddon,
 	resolveTtsProvider,
 	streamSegments,
 } from "../src/tts.ts";
@@ -253,5 +256,146 @@ describe("invalid PPPI_TTS_PROVIDER", () => {
 		} finally {
 			rmSync(home, { recursive: true, force: true });
 		}
+	});
+});
+
+// --------------------------------------------------- sherpa runtime resolution + loud failures
+
+/** A fake sherpa-onnx-node package under <root>/node_modules (resolution only — never loads). */
+function fakeSherpaPackage(root: string): void {
+	const dir = join(root, "node_modules", "sherpa-onnx-node");
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(
+		join(dir, "package.json"),
+		JSON.stringify({ name: "sherpa-onnx-node", version: "0.0.0-test", main: "index.js" }),
+	);
+	writeFileSync(join(dir, "index.js"), "module.exports = { OfflineTts: class OfflineTts {} };");
+}
+
+describe("sherpa runtime resolution (piper)", () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it("resolves the addon from a base next to the package", () => {
+		const root = mkdtempSync(join(tmpdir(), "pppi-sherpa-base-"));
+		fakeSherpaPackage(root);
+		const addon = resolveSherpaAddon({ bases: [join(root, "probe.js")], repoRoots: [] });
+		expect(addon).not.toBeNull();
+		expect(typeof addon!.OfflineTts).toBe("function");
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("falls back to the repo checkout an extension was stamped from", () => {
+		const repo = mkdtempSync(join(tmpdir(), "pppi-sherpa-repo-"));
+		fakeSherpaPackage(join(repo, "packages", "gateway"));
+		writeFileSync(join(repo, "packages", "gateway", "package.json"), JSON.stringify({ name: "@pppi/gateway" }));
+		// bases miss; the gateway package's node_modules is the fallback leg
+		const miss = mkdtempSync(join(tmpdir(), "pppi-sherpa-miss-"));
+		const addon = resolveSherpaAddon({ bases: [join(miss, "probe.js")], repoRoots: [repo] });
+		expect(addon).not.toBeNull();
+		rmSync(repo, { recursive: true, force: true });
+		rmSync(miss, { recursive: true, force: true });
+	});
+
+	it("returns null when the runtime is nowhere", () => {
+		const miss = mkdtempSync(join(tmpdir(), "pppi-sherpa-none-"));
+		expect(resolveSherpaAddon({ bases: [join(miss, "probe.js")], repoRoots: [miss] })).toBeNull();
+		rmSync(miss, { recursive: true, force: true });
+	});
+});
+
+describe("tts failure loudness (audio.log)", () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it("logs why auto skipped piper and kokoro", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pppi-tts-loud-"));
+		// HOME → empty: no models; PPPI_DIR → tmp: capture the diary
+		vi.stubEnv("HOME", dir);
+		vi.stubEnv("PPPI_DIR", dir);
+		vi.stubEnv("PPPI_TTS_MODEL", "");
+		vi.stubEnv("PPPI_TTS_PROVIDER", "");
+		resolveTtsProvider({ piperDirs: [], kokoroDirs: [] });
+		const log = readFileSync(join(dir, "logs", "audio.log"), "utf8");
+		expect(log).toMatch(/tts: piper skipped — /);
+		expect(log).toMatch(/tts: kokoro skipped — /);
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("kokoro: a load failure flips status, retries (no sticky cache), and lands in audio.log", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pppi-tts-kokoro-loud-"));
+		// a complete-looking kokoro dir whose model is garbage: resolution
+		// succeeds, the engine load throws (offline env: no network rescue)
+		mkdirSync(join(dir, "onnx"), { recursive: true });
+		writeFileSync(join(dir, "onnx", "model_quantized.onnx"), "garbage");
+		vi.stubEnv("PPPI_DIR", dir);
+		vi.stubEnv("HF_HUB_OFFLINE", "1");
+		vi.stubEnv("TRANSFORMERS_OFFLINE", "1");
+		const provider = new KokoroProvider([dir]);
+		expect(provider.status.ready).toBe(true); // resolution is fine…
+
+		await expect(provider.warm()).rejects.toThrow();
+		expect(provider.status.ready).toBe(false); // …but health reports the LOAD
+		expect(provider.status).toMatchObject({ reason: expect.stringContaining("failed") });
+		// not sticky: the retry reports a fresh failure, not a cached verdict
+		await expect(provider.warm()).rejects.toThrow();
+		expect(provider.status.ready).toBe(false);
+		const log = readFileSync(join(dir, "logs", "audio.log"), "utf8");
+		expect(log).toMatch(/tts: kokoro load failed — /);
+		rmSync(dir, { recursive: true, force: true });
+	}, 60_000);
+});
+
+describe("auto engine selection", () => {
+	let piperFixture: string;
+	let kokoroFixture: string;
+	let emptyDir: string;
+
+	beforeAll(() => {
+		emptyDir = mkdtempSync(join(tmpdir(), "pppi-tts-sel-empty-"));
+		piperFixture = mkdtempSync(join(tmpdir(), "pppi-tts-sel-piper-"));
+		const vits = join(piperFixture, "vits-piper-x");
+		mkdirSync(join(vits, "espeak-ng-data"), { recursive: true });
+		writeFileSync(join(vits, "model.onnx"), "fake");
+		writeFileSync(join(vits, "tokens.txt"), "fake");
+		kokoroFixture = mkdtempSync(join(tmpdir(), "pppi-tts-sel-kokoro-"));
+		mkdirSync(join(kokoroFixture, "onnx"), { recursive: true });
+		writeFileSync(join(kokoroFixture, "onnx", "model_quantized.onnx"), "fake");
+	});
+
+	afterAll(() => {
+		for (const d of [emptyDir, piperFixture, kokoroFixture]) rmSync(d, { recursive: true, force: true });
+	});
+
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it("prefers piper when both models are present (faster CPU default)", () => {
+		vi.stubEnv("PPPI_TTS_PROVIDER", "");
+		vi.stubEnv("PPPI_TTS_MODEL", "");
+		const provider = resolveTtsProvider({
+			piperDirs: [join(piperFixture, "vits-piper-x")],
+			kokoroDirs: [kokoroFixture],
+		});
+		expect(provider.id).toBe("piper");
+	});
+
+	it("auto falls to kokoro when piper's model is absent", () => {
+		vi.stubEnv("PPPI_TTS_PROVIDER", "");
+		vi.stubEnv("PPPI_TTS_MODEL", "");
+		const provider = resolveTtsProvider({ piperDirs: [emptyDir], kokoroDirs: [kokoroFixture] });
+		expect(provider.id).toBe("kokoro");
+	});
+
+	it("explicit kokoro wins even when a piper model is present", () => {
+		vi.stubEnv("PPPI_TTS_PROVIDER", "kokoro");
+		const provider = resolveTtsProvider({
+			piperDirs: [join(piperFixture, "vits-piper-x")],
+			kokoroDirs: [kokoroFixture],
+		});
+		expect(provider.id).toBe("kokoro");
 	});
 });

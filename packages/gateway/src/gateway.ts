@@ -28,6 +28,7 @@ import type {
 	ServerEvent,
 	SessionsResponse,
 	Target,
+	VoiceTtsStatus,
 } from "@pppi/protocol";
 import { minimatch } from "minimatch";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -575,12 +576,24 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			// kick the child so a crashed/starting audio service self-heals
 			void audio?.ensure();
 			const status = audio ? audio.health().stt : (opts.stt?.status ?? { ready: false, reason: "no stt configured" });
+			// tts mirrors stt (additive): engine + model when ready, the fix
+			// hint rides inside `reason` when not
+			const ttsStatus: VoiceTtsStatus = audio
+				? audio.health().tts
+				: (opts.tts?.status ?? { ready: false, reason: "no tts configured" });
 			return json(res, 200, {
 				ok: true,
 				name: "pppi",
 				gateway: gatewayVersion(),
 				agent: agentInfo(),
 				stt: status.ready ? { ready: true, modelId: status.modelId } : { ready: false, reason: status.reason },
+				tts: ttsStatus.ready
+					? { ready: true, engine: ttsStatus.provider, modelId: ttsStatus.voice }
+					: {
+							ready: false,
+							reason: ttsStatus.reason,
+							...(audio ? {} : { engine: (opts.tts as { id?: string } | null)?.id }),
+						},
 				boot: audio ? audio.health().boot : (inProcessBoot ?? { stage: "unavailable", reason: "no voice configured" }),
 			});
 		}

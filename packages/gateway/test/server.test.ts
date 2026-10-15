@@ -464,6 +464,17 @@ describe("pairing + profiles api", () => {
 		expect(res.status).toBe(404);
 	});
 
+	it("reports an additive tts block in /api/health mirroring stt", async () => {
+		await boot(false)();
+		const res = await fetch(`http://127.0.0.1:${app.address()?.port ?? 0}/api/health`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
+		// this gateway boots with stt disabled and no tts → honest not-ready,
+		// with the reason ops can act on
+		expect(body.stt).toMatchObject({ ready: false });
+		expect(body.tts).toMatchObject({ ready: false, reason: "no tts configured" });
+	});
+
 	it("keeps the /api/sessions shape with a profiles map", async () => {
 		await boot(false)();
 		const res = await fetch(`http://127.0.0.1:${app.address()?.port ?? 0}/api/sessions`);
