@@ -5,6 +5,7 @@ import { StatusBar } from "./status/StatusBar.tsx";
 import { THEMES, type ThemeId, applyTheme, loadTheme } from "./theme.ts";
 import { VoiceWave } from "./voice/VoiceWave.tsx";
 import { useVoice } from "./voice/useVoice.ts";
+import { useWakeLock } from "./wakeLock.ts";
 
 type Pairing = { server: string; token: string };
 type Target = { id: string | undefined; label: string };
@@ -131,6 +132,15 @@ export default function App() {
 	/** set when prepending a history page so the scroll effect restores position instead of jumping to bottom */
 	const prependScrollRef = useRef<{ height: number; top: number } | null>(null);
 	const voice = useVoice();
+	// issue #18: keep the screen awake while the conversation is live — voice on,
+	// voice booting, or an omni/delegated stream visibly working. The optional
+	// "Keep screen on" toggle (Appearance page) forces it on regardless.
+	const wakeActive =
+		(!target.id && (agentState === "thinking" || agentState === "tool" || agentState === "streaming")) ||
+		(target.id ? peerStatus(sessions, target.id) === "working…" : false) ||
+		voice.on ||
+		voice.state.boot !== null;
+	const wake = useWakeLock(wakeActive);
 
 	const conn = connections.find((c) => c.id === activeId) ?? connections[0] ?? null;
 
@@ -451,7 +461,16 @@ export default function App() {
 			/>
 		);
 
-	if (tab === "themes") return <ThemesPage theme={theme} onPick={(id) => setTheme(id)} onBack={() => setTab("chat")} />;
+	if (tab === "themes")
+		return (
+			<ThemesPage
+				theme={theme}
+				onPick={(id) => setTheme(id)}
+				onBack={() => setTab("chat")}
+				keepScreenOn={wake.toggle}
+				onKeepScreenOn={wake.setToggle}
+			/>
+		);
 
 	const statusText = target.id ? peerStatus(sessions, target.id) : omniStatus(agentState, toolLabel, connected);
 	const busy = !target.id && (agentState === "thinking" || agentState === "tool" || agentState === "streaming");
@@ -904,10 +923,14 @@ function ThemesPage({
 	theme,
 	onPick,
 	onBack,
+	keepScreenOn,
+	onKeepScreenOn,
 }: {
 	theme: ThemeId;
 	onPick: (id: ThemeId) => void;
 	onBack: () => void;
+	keepScreenOn: boolean;
+	onKeepScreenOn: (enabled: boolean) => void;
 }) {
 	return (
 		<div className="themes">
@@ -950,6 +973,25 @@ function ThemesPage({
 						</div>
 					</button>
 				))}
+			</div>
+
+			<div className="settings">
+				<div className="settings-row">
+					<div>
+						<p className="s-title">Keep screen on</p>
+						<p className="s-hint">Awake while the agent talks or streams — otherwise the screen sleeps normally.</p>
+					</div>
+					<button
+						type="button"
+						className={`switch ${keepScreenOn ? "on" : ""}`}
+						role="switch"
+						aria-checked={keepScreenOn}
+						aria-label="Keep screen on"
+						onClick={() => onKeepScreenOn(!keepScreenOn)}
+					>
+						<span className="knob" />
+					</button>
+				</div>
 			</div>
 		</div>
 	);
