@@ -30,6 +30,12 @@ omni pi session
 - **Layer 2 — repo → worktrees.** Each repo session manages parallel work as
   git worktrees under `<repo>/.worktrees/<name>` on branches `wt/<name>`.
 
+Workers don't need to exist already: `pppi dispatch <repo> <role>` (or
+`omni_dispatch` from the agent) creates the worktree, opens a fresh pi in a
+tmux window there, and registers it in pigeon under the role name — so a repo
+  with no live session, or a dead worker, is one command away from a live one.
+See [docs/dispatch.md](docs/dispatch.md).
+
 ## Three ways in, one session
 
 | Client | How it talks to the omni agent |
@@ -238,6 +244,7 @@ once with `bun run install:ext` (copies it to `~/.pi/agent/extensions/pppi/`):
 | `omni_send` | delegate a task to a repo's session (async, msgId ticket) |
 | `omni_replies` | collect replies to sent messages |
 | `omni_worktree` | create / list / remove git worktrees per repo |
+| `omni_dispatch` | spawn a worker: worktree + fresh pi in a tmux window, pigeon-named (see [docs/dispatch.md](docs/dispatch.md)) |
 | `/pppi_tree` | print the current hierarchy (omni session only) |
 
 ## Releases & the hosted web client
