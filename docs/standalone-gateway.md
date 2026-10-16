@@ -73,3 +73,7 @@ curl -s localhost:8787/api/health | head -c 400
 # 4. survives reboot (once linger is on): sudo reboot, then re-check 1;
 #    loginctl show-user "$USER" -p Linger   # → Linger=yes
 ```
+
+The reboot check can be deferred — verify at the next natural reboot; if
+linger is enabled the unit auto-starts then. Steps 1–3 (start/stop/health,
+TUI exit, crash-restart) are sufficient to ship.
