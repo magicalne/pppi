@@ -45,6 +45,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -1136,36 +1137,43 @@ fun ChatScreen(
 			}
 			items(visible, key = { it.id }) { m ->
 				if (m.role == "user") {
-					Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-						Text(
-							text = (if (m.source == "voice") "🎙 " else "") + m.text.ifEmpty { "…" },
-							color = theme.userBubbleInk,
-							fontSize = 17.sp,
-							modifier = Modifier
-								.widthIn(max = 300.dp)
-								.clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 6.dp))
-								.background(theme.userBubble)
-								.border(1.dp, theme.userBubbleLine, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 6.dp))
-								.padding(horizontal = 14.dp, vertical = 10.dp),
-						)
+					Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+						Row(horizontalArrangement = Arrangement.End) {
+							SelectionContainer {
+							Text(
+								text = (if (m.source == "voice") "🎙 " else "") + m.text.ifEmpty { "…" },
+								color = theme.userBubbleInk,
+								fontSize = 17.sp,
+								modifier = Modifier
+									.widthIn(max = 300.dp)
+									.clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 6.dp))
+									.background(theme.userBubble)
+									.border(1.dp, theme.userBubbleLine, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 6.dp))
+									.padding(horizontal = 14.dp, vertical = 10.dp),
+							)
+							}
+						}
+						MsgCopyAffordance(m.text, theme)
 					}
+
 				} else {
 					val prof = m.profileId?.let { pid -> sessions?.profiles?.get(pid) }
 					if (prof != null) {
 						// a profiled agent replied (delegation) — tint the bubble with its color
 						Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
 							Text(prof.name, color = theme.dim, fontSize = 12.sp, modifier = Modifier.padding(end = 4.dp, bottom = 3.dp))
-							Text(
-								text = m.text.ifEmpty { "…" },
-								color = Color(0xFF141210),
-								fontSize = 17.sp,
-								lineHeight = 26.sp,
-								modifier = Modifier
-									.widthIn(max = 300.dp)
-									.clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 6.dp))
-									.background(parseHexColor(prof.color) ?: theme.accent)
-									.padding(horizontal = 14.dp, vertical = 10.dp),
-							)
+							SelectionContainer {
+								Box(
+									Modifier
+										.widthIn(max = 300.dp)
+										.clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 6.dp))
+										.background(parseHexColor(prof.color) ?: theme.accent)
+										.padding(horizontal = 14.dp, vertical = 10.dp),
+								) {
+									MarkdownBody(m.text.ifEmpty { "…" }, theme, color = Color(0xFF141210))
+								}
+							}
+							MsgCopyAffordance(m.text, theme)
 						}
 					} else {
 						Row(Modifier.fillMaxWidth()) {
@@ -1173,7 +1181,12 @@ fun ChatScreen(
 								Box(Modifier.size(7.dp).clip(CircleShape).background(theme.accent.copy(alpha = 0.85f)))
 							}
 							Spacer(Modifier.width(10.dp))
-							Text(m.text.ifEmpty { "…" }, color = theme.text, fontSize = 17.sp, lineHeight = 26.sp)
+							Column(Modifier.weight(1f)) {
+								SelectionContainer {
+									MarkdownBody(m.text.ifEmpty { "…" }, theme)
+								}
+								MsgCopyAffordance(m.text, theme, alignEnd = false)
+							}
 						}
 					}
 				}

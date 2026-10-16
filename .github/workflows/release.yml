@@ -42,6 +42,9 @@ jobs:
       - name: build release APK
         run: cd apps/android && ./gradlew :app:assembleRelease --no-daemon
 
+      - name: unit tests
+        run: cd apps/android && ./gradlew :app:testDebugUnitTest --no-daemon
+
       - name: rename artifact
         run: |
           mkdir -p dist
