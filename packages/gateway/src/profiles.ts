@@ -14,8 +14,6 @@ import { PROFILE_COLORS, type Profile } from "@pppi/protocol";
 export { PROFILE_COLORS };
 import { pppiDir } from "./config.ts";
 
-
-
 export function colorForId(sessionId: string): string {
 	const hash = createHash("sha1").update(sessionId).digest();
 	return PROFILE_COLORS[hash[0]! % PROFILE_COLORS.length]!;
