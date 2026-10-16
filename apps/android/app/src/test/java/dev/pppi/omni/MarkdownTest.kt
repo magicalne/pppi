@@ -68,18 +68,23 @@ class MarkdownTest {
 	@Test
 	fun imagesRenderAsLinks() {
 		val out = Markdown.parseInline("![alt text](https://example.com/i.png)")
-		val link = out[1] as MdInline.Link
+		val link = out[0] as MdInline.Link
 		assertEquals("https://example.com/i.png", link.href)
 		assertEquals(listOf(MdInline.Text("alt text")), link.c)
 	}
 
 	@Test
 	fun neverAnchorsJavascriptOrDataHrefs() {
-		// explicit [x](javascript:…) — unsafe scheme keeps the label, drops the URL
-		val out = Markdown.parseInline("click [me](javascript:alert(1)) now")
+		// a parseable unsafe href keeps the label, drops the URL
+		val out = Markdown.parseInline("click [me](javascript:x) now")
 		assertEquals(
 			listOf(MdInline.Text("click "), MdInline.Text("me"), MdInline.Text(" now")),
 			out,
+		)
+		// a parenthesized unsafe href never parses as a link at all — literal text
+		assertEquals(
+			listOf(MdInline.Text("click [me](javascript:alert(1)) now")),
+			Markdown.parseInline("click [me](javascript:alert(1)) now"),
 		)
 		assertNull(Markdown.safeHref("javascript:alert(1)"))
 		assertNull(Markdown.safeHref("data:text/html,<script>"))
@@ -162,15 +167,22 @@ class MarkdownTest {
 
 	@Test
 	fun unorderedAndOrderedListsWithContinuations() {
+		// v1 parity with the web: flat lists — a later ordered run merges into
+		// the open unordered list instead of starting a new one
 		val blocks = Markdown.parseBlocks("- one\n- two\n  two more\n1. first\n2. second")
-		assertEquals(2, blocks.size)
+		assertEquals(1, blocks.size)
 		val ul = blocks[0] as MdBlock.ListBlock
 		assertEquals(false, ul.ordered)
 		assertEquals(
-			listOf(listOf(MdInline.Text("one")), listOf(MdInline.Text("two\ntwo more"))),
+			listOf(
+				listOf(MdInline.Text("one")),
+				listOf(MdInline.Text("two\ntwo more")),
+				listOf(MdInline.Text("first")),
+				listOf(MdInline.Text("second")),
+			),
 			ul.items,
 		)
-		val ol = blocks[1] as MdBlock.ListBlock
+		val ol = Markdown.parseBlocks("1. first\n2. second")[0] as MdBlock.ListBlock
 		assertEquals(true, ol.ordered)
 		assertEquals(1, ol.start)
 		assertEquals(listOf(MdInline.Text("second")), ol.items[1])
@@ -256,7 +268,7 @@ class MarkdownTest {
 	@Test
 	fun plainTextListsKeepMarkersAndNumbering() {
 		assertEquals(
-			"- one\n- two\n  two more\n1. first\n2. second",
+			"- one\n- two\n  two more\n\n1. first\n2. second",
 			Markdown.messageToPlainText("- one\n- two\n  two more\n\n1. first\n2. second"),
 		)
 	}
