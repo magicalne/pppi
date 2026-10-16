@@ -9,21 +9,12 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import type { Profile } from "@pppi/protocol";
+import { PROFILE_COLORS, type Profile } from "@pppi/protocol";
+
+export { PROFILE_COLORS };
 import { pppiDir } from "./config.ts";
 
-export const PROFILE_COLORS = [
-	"#e8b14a", // amber
-	"#5b8c51", // matcha
-	"#7aa2ff", // periwinkle
-	"#d96c47", // ember
-	"#b48ead", // lilac
-	"#4fb0a5", // teal
-	"#e05f65", // rose
-	"#8fae5b", // moss
-	"#c78a4d", // caramel
-	"#6f8db9", // steel
-] as const;
+
 
 export function colorForId(sessionId: string): string {
 	const hash = createHash("sha1").update(sessionId).digest();

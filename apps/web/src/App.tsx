@@ -4,6 +4,7 @@ import type {
 	Artifact,
 	ChatEntry,
 	ModelInfo,
+	Profile,
 	ServerEvent,
 	SessionsResponse,
 	TaskUpdate,
@@ -11,6 +12,7 @@ import type {
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArtifactCard, useArtifactViewer } from "./Artifact.tsx";
 import { PeerReportToast } from "./PeerReportToast.tsx";
+import { OMNI, SessionDrawer, type Target } from "./SessionDrawer.tsx";
 import { TaskCard, liveTask } from "./Task.tsx";
 import { copyTextToClipboard } from "./copy.ts";
 import { DEMO_ARTIFACT } from "./demoArtifact.ts";
@@ -24,7 +26,6 @@ import { useVoice } from "./voice/useVoice.ts";
 import { useWakeLock } from "./wakeLock.ts";
 
 type Pairing = { server: string; token: string };
-type Target = { id: string | undefined; label: string };
 
 /** One paired machine (gateway + its omni). Clients hold only the token. */
 type Connection = { id: string; name: string; url: string; token: string; color?: string };
@@ -47,8 +48,6 @@ type Msg = {
 
 /** the recent window cached on the client; older pages load only on demand (scroll to top) */
 const HISTORY_PAGE = 50;
-
-const OMNI = (): Target => ({ id: undefined, label: "Omni" });
 
 // sspi → pppi rename: carry pre-rename localStorage keys (pairing, theme) across
 for (let i = localStorage.length - 1; i >= 0; i--) {
@@ -625,6 +624,7 @@ export default function App() {
 						<div className="backdrop" onClick={() => setDrawerOpen(false)} />
 						<SessionDrawer
 							sessions={sessions}
+							profiles={sessions?.profiles}
 							target={target}
 							onPick={(t) => {
 								setTarget(t);
@@ -934,68 +934,6 @@ function ConnectionsDrawer(props: {
 				<button type="submit">Add machine</button>
 			</form>
 			<p className="conn-hint">Run /pppi_pair in any pi session on the machine to get a link or QR.</p>
-		</div>
-	);
-}
-
-function SessionDrawer(props: {
-	sessions: SessionsResponse | null;
-	target: Target;
-	onPick: (t: Target) => void;
-	onUnpair: () => void;
-}) {
-	const { sessions, target } = props;
-	const stateLabel = (state: string) =>
-		state === "busy" ? "working…" : state === "unreachable" ? "unreachable" : "idle";
-	const peerRow = (label: string, id: string, state: string, depth: number): React.ReactNode => (
-		<button
-			type="button"
-			key={id}
-			className={`srow ${target.id === id ? "active" : ""}`}
-			onClick={() => props.onPick({ id, label })}
-		>
-			{Array.from({ length: depth }, (_, i) => i).map((v) => (
-				<span key={`guide-${v}`} className="guide" aria-hidden />
-			))}
-			<span className="ring" />
-			<span className="sname">{label}</span>
-			<span className="sstate">{stateLabel(state)}</span>
-		</button>
-	);
-
-	return (
-		<div className="drawer" onClick={(e) => e.stopPropagation()}>
-			<h3>Sessions</h3>
-			<button type="button" className={`srow ${!target.id ? "active" : ""}`} onClick={() => props.onPick(OMNI())}>
-				<span className="ring" />
-				<span className="sname">Omni</span>
-				<span className="sstate">the whole fleet</span>
-			</button>
-
-			{(sessions?.projects ?? []).map((p) => {
-				const mains = p.sessions.filter((s) => !s.worktree);
-				const wts = p.sessions.filter((s) => s.worktree);
-				return (
-					<div key={p.name}>
-						{mains.length === 0 && (
-							<div className="srow empty-row">
-								<span className="guide" aria-hidden />
-								<span className="sname">{p.name} — no open session</span>
-							</div>
-						)}
-						{mains.map((s, i) => peerRow(i === 0 ? p.name : (s.name ?? "main"), s.sessionId, s.state, 1))}
-						{wts.map((s) => peerRow(s.worktree ?? "", s.sessionId, s.state, 2))}
-					</div>
-				);
-			})}
-			{(sessions?.others ?? []).map((s) => peerRow(s.name ?? `#${s.sessionId.slice(0, 4)}`, s.sessionId, s.state, 1))}
-
-			<div className="sep" />
-			<div className="footer">
-				<button type="button" className="unpair" onClick={props.onUnpair}>
-					Unpair this device
-				</button>
-			</div>
 		</div>
 	);
 }

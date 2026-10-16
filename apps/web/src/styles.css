@@ -577,6 +577,9 @@
 	height: 8px;
 	border-radius: 50%;
 	border: 2px solid transparent;
+	/* identity fills can be low-contrast on same-luminance theme bgs (amber
+	   on dawn, #45) — a text-tinted keyline guarantees the dot's shape */
+	box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--text) 35%, transparent);
 }
 .srow.active .ring {
 	background: var(--accent);
@@ -1472,4 +1475,50 @@
 .task-card .task-glyph.spin {
 	display: inline-block;
 	animation: task-spin 2.4s linear infinite;
+}
+
+/* ---------------- sessions drawer: profile identity (#45) ---------------- */
+/* dots wear the session's profile color (attribution twin); state modifiers
+   keep busy/idle/unreachable distinguishable alongside the textual label */
+.srow .ring.busy {
+	animation: ring-pulse 1.6s ease-in-out infinite;
+}
+.srow .ring.unreach {
+	background: transparent;
+	border-color: var(--dim);
+}
+@media (prefers-reduced-motion: reduce) {
+	.srow .ring.busy {
+		animation: none;
+		opacity: 0.55;
+	}
+}
+@keyframes ring-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.35;
+	}
+}
+/* section headers wear the repo's main-session profile color */
+.shead {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 12px 16px 4px;
+	font-size: 12.5px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--dim);
+	border-top: 1px solid var(--line);
+}
+.shead-dot {
+	flex: none;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--accent);
 }
