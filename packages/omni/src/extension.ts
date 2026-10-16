@@ -13,6 +13,7 @@
 import { readFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { dispatch, formatDispatchResult, realDeps } from "./dispatch.ts";
 import { type PigeonSession, listSessions, pigeon, sessionsForRepo } from "./pigeon.ts";
 import { type RepoRegistry, addRepo, displayPath, findRepo, loadRegistry, removeRepo } from "./repos.ts";
 import { addWorktree, listWorktrees, parseWorktrees, removeWorktree } from "./worktree.ts";
@@ -57,7 +58,15 @@ Rules of conduct:
 - You may be talking to the user through a phone or the web: keep replies short and free
   of terminal noise. Never reveal API keys, tokens, or env secrets in replies.
 - When the user's intent is ambiguous, inspect state first (omni_sessions, omni_repos,
-  omni_worktree list) instead of asking immediately.`;
+  omni_worktree list) instead of asking immediately.
+- Self-spawn workers (omni_dispatch): when a registered repo has NO live session to
+  delegate to, or its worker died (state "unreach" / never replies), dispatch one —
+  it creates the worktree, opens a fresh pi in a tmux window the human can watch, and
+  registers it in pigeon under the role name. Then delegate with omni_send as usual.
+  Cap: at most 2 dispatched workers per repo unless the user asks for more. Role names
+  are load-bearing (worktree, branch wt/<role>, tmux window, and the session name all
+  derive from them): short, kebab-case, stable per concern (e.g. "reconnect-resume").
+  Re-dispatching an existing role is safe — it returns the live session's handle.`;
 
 type ToolResponse = { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> };
 
@@ -268,6 +277,45 @@ export default function pppiOmniExtension(pi: ExtensionAPI) {
 			if (!params.name) return text("remove needs a worktree name");
 			const res = await removeWorktree(repo.path, params.name);
 			return text(res.ok ? `removed worktree "${params.name}"` : `error: ${res.error}`);
+		},
+	});
+
+	// ---------------------------------------------------------------- dispatch
+
+	pi.registerTool({
+		name: "omni_dispatch",
+		label: "Omni Dispatch",
+		description:
+			"Spawn a worker agent for a registered repo: creates <repo>/.worktrees/<role> on " +
+			"branch wt/<role>, launches a fresh pi in a tmux window there, waits for it to " +
+			"register in pigeon, and names the session <role> so omni_send (and clients) can " +
+			"target it. Idempotent: if a live session already holds the role (by name or cwd), " +
+			"returns its handle without spawning. Use when a repo has no live session or its " +
+			"worker died.",
+		parameters: Type.Object({
+			repo: Type.String({ description: "Registered repo name or path" }),
+			role: Type.String({ description: "Worker role: worktree/branch/window/session name" }),
+			base: Type.Optional(Type.String({ description: "Base ref for a fresh worktree (default: repo HEAD)" })),
+			session: Type.Optional(
+				Type.String({ description: "tmux session for the window (default: repo-named; created detached if missing)" }),
+			),
+		}),
+		async execute(_toolCallId, params) {
+			const reg = loadRegistry();
+			const repo = findRepo(reg, params.repo);
+			if (!repo) return text(`unknown repo "${params.repo}" — register it first with omni_repos action=add`);
+			try {
+				const result = await dispatch(realDeps(), {
+					repo: repo.path,
+					role: params.role,
+					base: params.base,
+					session: params.session,
+				});
+				return text(formatDispatchResult(result));
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				return text(`dispatch failed: ${msg}`);
+			}
 		},
 	});
 

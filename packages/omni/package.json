@@ -7,7 +7,11 @@
 		".": "./src/extension.ts",
 		"./repos": "./src/repos.ts",
 		"./worktree": "./src/worktree.ts",
-		"./pigeon": "./src/pigeon.ts"
+		"./pigeon": "./src/pigeon.ts",
+		"./dispatch": "./src/dispatch.ts"
+	},
+	"bin": {
+		"pppi": "./src/cli.ts"
 	},
 	"dependencies": {
 		"@pppi/protocol": "*"
