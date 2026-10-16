@@ -42,6 +42,8 @@ class VoiceAudioEngine(
 	private val audioManager: AudioManager,
 	private val onMicLevel: (Int) -> Unit = {},
 	private val onPlayLevel: (Int) -> Unit = {},
+	/** echo gate (#21 parity): while gated, mic frames are NOT sent — levels still flow */
+	private val gate: EchoGate? = null,
 ) {
 
 	private val recordRef = AtomicReference<AudioRecord?>(null)
@@ -187,7 +189,10 @@ class VoiceAudioEngine(
 					} else {
 						silentChunks = 0
 					}
-					if (keepRunning.get()) client.sendAudio(bytes.copyOf(n * 2))
+					// echo gate (#21): while the agent's own TTS plays — plus the tail —
+					// the mic is NOT sent, so the server never hears the agent.
+					// Levels (above) keep flowing so the soundwave stays alive.
+					if (keepRunning.get() && gate?.isGated() != true) client.sendAudio(bytes.copyOf(n * 2))
 				}
 			} catch (_: Exception) {
 				if (keepRunning.get()) {
