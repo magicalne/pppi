@@ -29,7 +29,7 @@ function luminance(hex: string): number {
 	const r = Number.parseInt(h.slice(0, 2), 16) / 255;
 	const g = Number.parseInt(h.slice(2, 4), 16) / 255;
 	const b = Number.parseInt(h.slice(4, 6), 16) / 255;
-	const ch = (v: number) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+	const ch = (v: number) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
 	return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b);
 }
 
