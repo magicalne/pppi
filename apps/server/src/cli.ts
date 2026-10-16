@@ -6,7 +6,7 @@
 //                                 [--cwd ~/.pppi/omni-home] [--agent-cmd "..."]
 //                                 [--no-stt]
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -22,18 +22,7 @@ import {
 	writePairFile,
 } from "@pppi/gateway";
 import QRCode from "qrcode";
-
-function parseArgs(argv: string[]): Record<string, string | boolean> {
-	const out: Record<string, string | boolean> = {};
-	for (let i = 0; i < argv.length; i++) {
-		const a = argv[i];
-		if (a === undefined || !a.startsWith("--")) continue;
-		const key = a.slice(2);
-		if (key === "no-stt") out[key] = true;
-		else out[key] = argv[++i] ?? "";
-	}
-	return out;
-}
+import { markedOmniSession, parseArgs, resolveAgentCmd } from "./lib.ts";
 
 const args = parseArgs(process.argv.slice(2));
 const cfg = loadOrCreateConfig({
@@ -53,24 +42,15 @@ writePairFile(pair);
 
 // ------------------------------------------------------------- omni marking
 // `/pppi_gateway mark` (pi extension) writes omni.json marking which session is the
-// machine's omni; the gateway resumes that session by id.
-
-function markedOmniSession(): string | null {
-	const p = join(pppiDir(), "omni.json");
-	if (!existsSync(p)) return null;
-	try {
-		const raw = JSON.parse(readFileSync(p, "utf8")) as { sessionId?: string };
-		return typeof raw.sessionId === "string" && raw.sessionId ? raw.sessionId : null;
-	} catch {
-		return null;
-	}
-}
+// machine's omni; the gateway resumes that session by id (lib.ts).
 
 const omniSessionId = markedOmniSession() ?? "pppi-omni";
 
-const agentCmd = args["agent-cmd"]
-	? String(args["agent-cmd"]).split(/\s+/)
-	: ["pi", "--mode", "rpc", "--session-id", omniSessionId, "--no-approve", "-e", extensionPath];
+const agentCmd = resolveAgentCmd(
+	args["agent-cmd"] ? String(args["agent-cmd"]) : undefined,
+	omniSessionId,
+	extensionPath,
+);
 
 mkdirSync(cfg.cwd, { recursive: true });
 

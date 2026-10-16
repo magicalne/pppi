@@ -155,6 +155,8 @@ bun run install:ext
 # 3a. start the gateway from any pi session — type /pppi_gateway in pi
 #    → prints the LAN URL + QR; clients pair while that session lives
 #    (or run the standalone host: bun run dev:server -- --host 0.0.0.0)
+#    → unattended box? scripts/install-systemd.sh runs it as a systemd --user
+#      unit that survives TUI exit + reboot: docs/standalone-gateway.md
 #    → both read the same ~/.pppi/config.json token, so clients stay paired
 
 # 3b. or make THIS pi session the omni itself (/pppi_gateway here)
