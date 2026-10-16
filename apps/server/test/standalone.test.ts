@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { markedOmniSession, parseArgs, resolveAgentCmd } from "../src/lib.ts";
+import { markedOmniSession, parseArgs, resolveAgentCmd, resolvePiBinary } from "../src/lib.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const cli = join(here, "..", "src", "cli.ts");
@@ -55,18 +55,39 @@ describe("markedOmniSession", () => {
 	});
 });
 
+describe("resolvePiBinary", () => {
+	it("prefers the pi sitting next to the running bun (systemd has no PATH)", () => {
+		const bin = tempDir("ppi-bin-");
+		writeFileSync(join(bin, "pi"), "#!/bin/sh\n", { mode: 0o755 });
+		writeFileSync(join(bin, "bun"), "", { mode: 0o755 });
+		expect(resolvePiBinary({ HOME: "/nonexistent" }, join(bin, "bun"))).toBe(join(bin, "pi"));
+	});
+	it("falls back to $HOME/.bun/bin/pi, then bare pi", () => {
+		const home = tempDir("ppi-home-");
+		mkdirSync(join(home, ".bun", "bin"), { recursive: true });
+		writeFileSync(join(home, ".bun", "bin", "pi"), "#!/bin/sh\n", { mode: 0o755 });
+		expect(resolvePiBinary({ HOME: home }, "/usr/local/bin/bun")).toBe(join(home, ".bun", "bin", "pi"));
+		expect(resolvePiBinary({ HOME: "/nonexistent" }, "/nowhere/bun")).toBe("pi");
+	});
+});
+
 describe("resolveAgentCmd", () => {
 	it("defaults to an rpc-mode pi resuming the marked session with the omni extension", () => {
-		expect(resolveAgentCmd(undefined, "sess-9", "/repo/extensions/omni.ts")).toEqual([
-			"pi",
-			"--mode",
-			"rpc",
-			"--session-id",
+		expect(
+			resolveAgentCmd(undefined, "sess-9", "/repo/extensions/omni.ts", { HOME: "/nonexistent" }, "/nowhere/bun"),
+		).toEqual(["pi", "--mode", "rpc", "--session-id", "sess-9", "--no-approve", "-e", "/repo/extensions/omni.ts"]);
+	});
+	it("resolves the pi binary absolutely so the spawn survives PATH-less parents", () => {
+		const bin = tempDir("ppi-bin-");
+		writeFileSync(join(bin, "pi"), "#!/bin/sh\n", { mode: 0o755 });
+		const cmd = resolveAgentCmd(
+			undefined,
 			"sess-9",
-			"--no-approve",
-			"-e",
 			"/repo/extensions/omni.ts",
-		]);
+			{ HOME: "/nonexistent" },
+			join(bin, "bun"),
+		);
+		expect(cmd[0]).toBe(join(bin, "pi"));
 	});
 	it("an explicit --agent-cmd wins wholesale", () => {
 		expect(resolveAgentCmd("node /x/mock-agent.mjs", "sess-9", "/repo/extensions/omni.ts")).toEqual([

@@ -25,8 +25,10 @@ curl http://localhost:8787/api/health      # ok · gateway · agent · stt · tt
 
 The unit is `~/.config/systemd/user/pppi-gateway.service` with absolute bun +
 repo paths (the user manager has no PATH/cwd), `Restart=on-failure` (3s
-backoff), `PPPI_DIR=%h/.pppi`, and clean SIGTERM shutdown (`TimeoutStopSec=15`).
-Re-running the installer updates the unit and restarts the service.
+backoff), `PPPI_DIR=%h/.pppi`, a real `PATH` (the omni child is a `pi`
+resolved absolutely, and TTS/STT helpers like espeak-ng need one), and clean
+SIGTERM shutdown (`TimeoutStopSec=15`). Re-running the installer updates the
+unit and restarts the service.
 
 ## Migrating an existing phone pairing
 
