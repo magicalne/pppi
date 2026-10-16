@@ -75,12 +75,10 @@ class MarkdownTest {
 
 	@Test
 	fun neverAnchorsJavascriptOrDataHrefs() {
-		// a parseable unsafe href keeps the label, drops the URL
+		// a parseable unsafe href keeps the label, drops the URL — the label
+		// folds into the surrounding text run (single Text node, web parity)
 		val out = Markdown.parseInline("click [me](javascript:x) now")
-		assertEquals(
-			listOf(MdInline.Text("click "), MdInline.Text("me"), MdInline.Text(" now")),
-			out,
-		)
+		assertEquals(listOf(MdInline.Text("click me now")), out)
 		// a parenthesized unsafe href never parses as a link at all — literal text
 		assertEquals(
 			listOf(MdInline.Text("click [me](javascript:alert(1)) now")),
