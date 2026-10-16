@@ -268,6 +268,16 @@ once with `bun run install:ext` (copies it to `~/.pi/agent/extensions/pppi/`):
 
 ## Testing
 
+PRs run the gate workflow ([`.github/workflows/pr.yml`](.github/workflows/pr.yml)):
+web jobs (typecheck, biome, the serialized vitest suite, web build) and an
+android job (`assembleDebug` + JVM unit tests), path-filtered so only the
+affected side runs.
+
+**Making the checks required** (repo owner, once): Settings → Branches → Add
+rule (or edit the existing `main` rule) → Require status checks to pass
+before merging → select `web` and `android` → Save. The names appear in that
+list after the workflow has run at least once.
+
 ```bash
 bun run typecheck       # strict TS across TS packages
 bun run test            # 98 tests incl. real STT/barge-in (skip without models/speech gen)
