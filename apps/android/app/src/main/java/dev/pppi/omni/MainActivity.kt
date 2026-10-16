@@ -711,8 +711,9 @@ fun ChatScreen(
 					}
 					is ServerEvent.AssistantFinal -> {
 						val idx = messages.indexOfFirst { it.id == evt.id }
-						if (idx >= 0) messages[idx] = messages[idx].copy(text = evt.text, artifacts = evt.artifacts, tasks = evt.tasks)
-						else messages.add(Msg(evt.id, "assistant", evt.text, null, evt.target, evt.profileId, 0, evt.artifacts, evt.tasks))
+						// tasks ride ChatEntry snapshots + live task events (#15), not the final
+						if (idx >= 0) messages[idx] = messages[idx].copy(text = evt.text, artifacts = evt.artifacts)
+						else messages.add(Msg(evt.id, "assistant", evt.text, null, evt.target, evt.profileId, 0, evt.artifacts))
 					}
 					is ServerEvent.AgentStateEvt -> {
 						agentState = evt.state
