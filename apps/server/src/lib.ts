@@ -44,7 +44,7 @@ export function markedOmniSession(dir: string = pppiDir()): string | null {
  * shell environments.
  */
 export function resolvePiBinary(
-	env: { HOME?: string } = process.env,
+	env: { HOME?: string | undefined; [key: string]: string | undefined } = process.env,
 	execPath: string = process.execPath,
 ): string {
 	const candidates = [join(dirname(execPath), "pi")];
@@ -59,7 +59,7 @@ export function resolveAgentCmd(
 	explicit: string | undefined,
 	omniSessionId: string,
 	extensionPath: string,
-	env: { HOME?: string } = process.env,
+	env: { HOME?: string | undefined; [key: string]: string | undefined } = process.env,
 	execPath: string = process.execPath,
 ): string[] {
 	return explicit
@@ -73,5 +73,5 @@ export function resolveAgentCmd(
 				"--no-approve",
 				"-e",
 				extensionPath,
-		];
+			];
 }
