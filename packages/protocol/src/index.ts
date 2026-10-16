@@ -34,6 +34,21 @@ export type Profile = {
 	description: string;
 };
 
+/** Derived-profile palette (deterministic per session id). Shared by the
+ *  gateway's profile derivation and clients that need the same identity. */
+export const PROFILE_COLORS = [
+	"#e8b14a", // amber
+	"#5b8c51", // matcha
+	"#7aa2ff", // periwinkle
+	"#d96c47", // ember
+	"#b48ead", // lilac
+	"#4fb0a5", // teal
+	"#e05f65", // rose
+	"#8fae5b", // moss
+	"#c78a4d", // caramel
+	"#6f8db9", // steel
+] as const;
+
 /** Pairing facts for one machine (gateway). `urls` are the LAN addresses clients can pair against. */
 export type PairInfo = {
 	machine: string;
