@@ -709,6 +709,26 @@ fun ChatScreen(
 					}
 					is ServerEvent.AgentNotify -> notice = evt.message
 					is ServerEvent.ErrorEvt -> notice = evt.message
+					// #13: a delegated session finished in the background — land its
+					// preview as a profile-tinted reply bubble (skip if the full text
+					// already arrived under the same id)
+					is ServerEvent.PeerReport -> {
+						if (messages.indexOfFirst { it.id == evt.id } < 0) {
+							messages.add(Msg(evt.id, "assistant", evt.preview, null, null, evt.profileId))
+						}
+					}
+					// #15: background job status — surface on the notice line for now;
+					// full task cards are tracked as Android follow-up
+					is ServerEvent.TaskEvt -> {
+						val t = evt.task
+						notice = when (t.status) {
+							"queued" -> "queued: ${t.title}"
+							"running" -> "running: ${t.title}"
+							"done" -> "done: ${t.title}" + (t.detail?.let { " — $it" } ?: "")
+							"failed" -> "failed: ${t.title}" + (t.detail?.let { " — $it" } ?: "")
+							else -> "${t.status}: ${t.title}"
+						}
+					}
 					is ServerEvent.AgentInfoEvt -> {}
 					// parsed for protocol parity; the pill owns voice-mode truth locally
 					is ServerEvent.VoiceActive -> {}
