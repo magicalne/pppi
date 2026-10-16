@@ -305,6 +305,16 @@
 .bubble .md a {
 	color: inherit;
 }
+
+/* #35 contrast fix: code chips, pre blocks and table headers carry their own
+   --surface background — inside tinted peer bubbles the inherited dark ink
+   (rgba(20,18,16,.96)) goes dark-on-dark in dark themes. Give them the app's
+   text-on-surface pair instead. */
+.bubble.peer-msg .md-code-i,
+.bubble.peer-msg .md-pre,
+.bubble.peer-msg .md-table th {
+	color: var(--text);
+}
 .md .md-code-i {
 	font-family: var(--font-mono);
 	font-size: 0.88em;

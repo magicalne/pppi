@@ -631,6 +631,8 @@ fun ChatScreen(
 	val voiceMachine = remember { VoicePhaseMachine() }
 	val voiceClientRef = remember { java.util.concurrent.atomic.AtomicReference<VoiceClient?>(null) }
 	val voiceEngineRef = remember { java.util.concurrent.atomic.AtomicReference<VoiceAudioEngine?>(null) }
+	// echo gate (#21 parity with web): per voice session, driven from TTS events
+	val voiceGateRef = remember { java.util.concurrent.atomic.AtomicReference<EchoGate?>(null) }
 	val stoppingVoice = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
 
 	// transcript-line honesty: server VAD says speech is flowing but STT has
@@ -878,6 +880,7 @@ fun ChatScreen(
 	/** Single cleanup path for voice mode: safe from any thread, idempotent. */
 	fun teardownVoice() {
 		VoiceLog.i("ui", "voice teardown")
+		voiceGateRef.getAndSet(null)?.reset() // session end — gate open immediately
 		voiceEngineRef.getAndSet(null)?.stop()
 		voiceClientRef.getAndSet(null)?.close()
 		voiceOn = false
@@ -911,7 +914,10 @@ fun ChatScreen(
 							is VoiceServerEvent.Vad -> {
 								val stop = voiceMachine.onVad(evt.speaking)
 								voicePhase = voiceMachine.phase
-								if (stop) voiceEngineRef.get()?.stopPlayback()
+								if (stop) {
+								voiceEngineRef.get()?.stopPlayback()
+								voiceGateRef.get()?.interrupt()
+							}
 								if (evt.speaking) {
 									voiceSpeakingSince = System.currentTimeMillis()
 									voiceStalled = false
@@ -936,16 +942,25 @@ fun ChatScreen(
 								voiceCommitted = evt.text
 								voiceTentative = ""
 							}
-							is VoiceServerEvent.TtsStart -> voiceRate = evt.rate
+							is VoiceServerEvent.TtsStart -> {
+								voiceRate = evt.rate
+								voiceGateRef.get()?.beginPlayback() // echo gate: agent speaking
+							}
 							is VoiceServerEvent.TtsEnd -> {
 								voicePhase = VoicePhase.LISTENING
+								// echo gate: natural drain holds the 400ms tail; an interrupted
+								// playback is already fading — reopen after the 250ms tail
+								if (evt.interrupted) voiceGateRef.get()?.interrupt() else voiceGateRef.get()?.playbackDrained()
 								voiceClientRef.get()?.playbackDone()
 							}
 							is VoiceServerEvent.VoiceError -> notice = evt.message
 							else -> {}
 						}
 					},
-					onAudio = { pcm -> voiceEngineRef.get()?.playPcm(pcm.toByteArray(), voiceRate) },
+					onAudio = { pcm ->
+						voiceGateRef.get()?.feedChunk() // echo gate: refresh activity
+						voiceEngineRef.get()?.playPcm(pcm.toByteArray(), voiceRate)
+					},
 					onBoot = { component, stage, reason ->
 						// server boot progress (model loading) → honest pill text
 						if (stage != "ready") {
@@ -987,13 +1002,16 @@ fun ChatScreen(
 					},
 				)
 				val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-				val engine = VoiceAudioEngine(
-					context,
-					client,
-					audioManager,
-					onMicLevel = { voiceLevel = it },
-					onPlayLevel = { voiceOutLevel = it },
-				)
+				val gate = EchoGate()
+					voiceGateRef.set(gate)
+					val engine = VoiceAudioEngine(
+						context,
+						client,
+						audioManager,
+						onMicLevel = { voiceLevel = it },
+						onPlayLevel = { voiceOutLevel = it },
+						gate = gate,
+					)
 				voiceClientRef.set(client)
 				voiceEngineRef.set(engine)
 				client.start()
@@ -1020,6 +1038,7 @@ fun ChatScreen(
 	}
 
 	fun interruptVoice() {
+		voiceGateRef.get()?.interrupt() // echo gate: explicit cut reopens the mic sooner
 		voiceEngineRef.get()?.stopPlayback()
 		voiceClientRef.get()?.interrupt()
 		voicePhase = VoicePhase.LISTENING

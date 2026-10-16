@@ -81,6 +81,10 @@ private fun appendInline(
 	nodes: List<MdInline>,
 	base: TextStyle,
 	theme: PppiTheme,
+	// ink for surface-backed pieces (code chips): the app's text-on-surface
+	// pair, NOT the surrounding ink — delegated bubbles use a dark ink on a
+	// tinted background that would be dark-on-dark on code chips (#35)
+	codeColor: Color,
 	onLink: (String) -> Unit,
 ) {
 	for (n in nodes) {
@@ -91,21 +95,22 @@ private fun appendInline(
 					SpanStyle(
 						fontFamily = FontFamily.Monospace,
 						fontSize = base.fontSize * 0.88f,
+						color = codeColor,
 						background = theme.surface,
 					),
 				) { sb.append(n.s) }
 			is MdInline.Strong -> sb.withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
-				appendInline(sb, n.c, base, theme, onLink)
+				appendInline(sb, n.c, base, theme, codeColor, onLink)
 			}
 			is MdInline.Em -> sb.withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-				appendInline(sb, n.c, base, theme, onLink)
+				appendInline(sb, n.c, base, theme, codeColor, onLink)
 			}
 			is MdInline.Link -> {
 				val tag = "md-link"
 				sb.withLink(
 					LinkAnnotation.Clickable(tag = tag, styles = TextLinkStyles(SpanStyle(color = theme.accent, textDecoration = TextDecoration.Underline))) { onLink(n.href) },
 				) {
-					appendInline(sb, n.c, base, theme, onLink)
+					appendInline(sb, n.c, base, theme, codeColor, onLink)
 				}
 			}
 		}
@@ -113,10 +118,10 @@ private fun appendInline(
 }
 
 @Composable
-private fun MdText(nodes: List<MdInline>, base: TextStyle, theme: PppiTheme) {
+private fun MdText(nodes: List<MdInline>, base: TextStyle, theme: PppiTheme, codeColor: Color) {
 	val context = LocalContext.current
 	Text(
-		text = buildAnnotatedString { appendInline(this, nodes, base, theme) { openUrl(context, it) } },
+		text = buildAnnotatedString { appendInline(this, nodes, base, theme, codeColor) { openUrl(context, it) } },
 		style = base,
 		modifier = Modifier.fillMaxWidth(),
 	)
@@ -127,9 +132,9 @@ private fun MdText(nodes: List<MdInline>, base: TextStyle, theme: PppiTheme) {
 private val BLOCK_GAP = 10.dp
 
 @Composable
-private fun MdBlockView(b: MdBlock, base: TextStyle, theme: PppiTheme) {
+private fun MdBlockView(b: MdBlock, base: TextStyle, theme: PppiTheme, codeColor: Color) {
 	when (b) {
-		is MdBlock.Para -> MdText(b.c, base, theme)
+		is MdBlock.Para -> MdText(b.c, base, theme, codeColor)
 
 		is MdBlock.Heading -> {
 			val scale = when {
@@ -145,6 +150,7 @@ private fun MdBlockView(b: MdBlock, base: TextStyle, theme: PppiTheme) {
 					lineHeight = (base.lineHeight.value * scale).sp,
 				),
 				theme,
+				codeColor,
 			)
 		}
 
@@ -154,7 +160,7 @@ private fun MdBlockView(b: MdBlock, base: TextStyle, theme: PppiTheme) {
 				// card, not the raw HTML — the real card lands on assistant_final
 				MdPendingArtifact(theme)
 			} else {
-				MdCodeBlock(b.s, theme)
+				MdCodeBlock(b.s, theme, codeColor)
 			}
 
 		is MdBlock.Hr -> Box(
@@ -165,7 +171,7 @@ private fun MdBlockView(b: MdBlock, base: TextStyle, theme: PppiTheme) {
 			Box(Modifier.width(3.dp).fillMaxHeight().background(theme.dim.copy(alpha = 0.5f)))
 			Spacer(Modifier.width(10.dp))
 			Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(BLOCK_GAP)) {
-				b.c.forEach { MdBlockView(it, base.copy(color = theme.dim), theme) }
+				b.c.forEach { MdBlockView(it, base.copy(color = theme.dim), theme, codeColor) }
 			}
 		}
 
@@ -178,7 +184,7 @@ private fun MdBlockView(b: MdBlock, base: TextStyle, theme: PppiTheme) {
 						modifier = Modifier.width(if (b.ordered) 26.dp else 16.dp),
 					)
 					Column(Modifier.weight(1f)) {
-						MdText(item, base, theme)
+						MdText(item, base, theme, codeColor)
 					}
 				}
 			}
@@ -191,7 +197,7 @@ private fun MdBlockView(b: MdBlock, base: TextStyle, theme: PppiTheme) {
 						Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 6.dp),
 						contentAlignment = alignOf(b.align, c),
 					) {
-						MdText(cell, base.copy(fontWeight = FontWeight.SemiBold, fontSize = base.fontSize * 0.92f), theme)
+						MdText(cell, base.copy(color = codeColor, fontWeight = FontWeight.SemiBold, fontSize = base.fontSize * 0.92f), theme, codeColor)
 					}
 				}
 			}
@@ -203,7 +209,7 @@ private fun MdBlockView(b: MdBlock, base: TextStyle, theme: PppiTheme) {
 							Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 6.dp),
 							contentAlignment = alignOf(b.align, c),
 						) {
-							MdText(cell, base.copy(fontSize = base.fontSize * 0.92f), theme)
+								MdText(cell, base.copy(fontSize = base.fontSize * 0.92f), theme, codeColor)
 						}
 					}
 				}
@@ -241,7 +247,7 @@ private fun MdPendingArtifact(theme: PppiTheme) {
 
 /** fenced code: mono, horizontally scrollable, with a raw-code copy button */
 @Composable
-fun MdCodeBlock(code: String, theme: PppiTheme) {
+fun MdCodeBlock(code: String, theme: PppiTheme, codeColor: Color = theme.text) {
 	// 0 = idle, 1 = copied, 2 = failed
 	var flash by remember { mutableIntStateOf(0) }
 	val clipboard = LocalClipboardManager.current
@@ -265,7 +271,7 @@ fun MdCodeBlock(code: String, theme: PppiTheme) {
 			fontFamily = FontFamily.Monospace,
 			fontSize = 13.sp,
 			lineHeight = 18.sp,
-			color = theme.text,
+			color = codeColor,
 			softWrap = false,
 			overflow = TextOverflow.Visible,
 			modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
@@ -296,12 +302,16 @@ fun MarkdownBody(
 	color: Color = theme.text,
 	fontSize: TextUnit = 17.sp,
 	lineHeight: TextUnit = 26.sp,
+	/** ink for surface-backed pieces (code chips, table header) — defaults to
+	 *  the app's text-on-surface pair so tinted delegated bubbles can't go
+	 *  dark-on-dark (#35 contrast fix) */
+	codeColor: Color = theme.text,
 ) {
 	val blocks = remember(text) { Markdown.parseBlocks(text) }
 	if (blocks.isEmpty()) return
 	val base = TextStyle(color = color, fontSize = fontSize, lineHeight = lineHeight)
 	Column(verticalArrangement = Arrangement.spacedBy(BLOCK_GAP)) {
-		blocks.forEach { MdBlockView(it, base, theme) }
+		blocks.forEach { MdBlockView(it, base, theme, codeColor) }
 	}
 }
 
