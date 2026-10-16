@@ -201,7 +201,7 @@ class MainActivity : ComponentActivity() {
 	}
 }
 
-data class Msg(val id: String, val role: String, val text: String, val source: String?, val target: String? = null, val profileId: String? = null, val ts: Long = 0)
+data class Msg(val id: String, val role: String, val text: String, val source: String?, val target: String? = null, val profileId: String? = null, val ts: Long = 0, val artifacts: List<Artifact> = emptyList(), val tasks: List<TaskUpdate> = emptyList())
 
 /** the recent window cached on the client; older pages load only on demand (scroll to top) */
 const val HISTORY_PAGE = 50
@@ -574,6 +574,10 @@ fun ChatScreen(
 	var agentState by remember { mutableStateOf("starting") }
 	var toolLabel by remember { mutableStateOf<String?>(null) }
 	var notice by remember { mutableStateOf<String?>(null) }
+	// #15: live task registry — latest status per id (task events / hello seed)
+	var liveTasks by remember { mutableStateOf(mapOf<String, TaskUpdate>()) }
+	// #17: the artifact opened full-screen, if any
+	var openArtifact by remember { mutableStateOf<Artifact?>(null) }
 	var recording by remember { mutableStateOf(false) }
 	var level by remember { mutableIntStateOf(0) }
 	var input by remember { mutableStateOf("") }
@@ -612,6 +616,17 @@ fun ChatScreen(
 	var voiceLastPartialAt by remember { mutableLongStateOf(0L) }
 	var voiceStalled by remember { mutableStateOf(false) }
 	var serverVersion by remember { mutableStateOf("") }
+	// #18: keep the screen awake while the voice session is engaged
+	val window = (LocalContext.current as? android.app.Activity)?.window
+	androidx.compose.runtime.DisposableEffect(voiceBoot) {
+		val keep = voiceBoot !is VoiceBootState.Idle && voiceBoot !is VoiceBootState.Failed
+		if (keep) window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+		onDispose { window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+	}
+	// #17: full-screen sandboxed artifact viewer
+	openArtifact?.let { a ->
+		ArtifactViewer(a, theme) { openArtifact = null }
+	}
 	val voiceAttempts = remember { java.util.concurrent.atomic.AtomicInteger(0) }
 	val voiceMachine = remember { VoicePhaseMachine() }
 	val voiceClientRef = remember { java.util.concurrent.atomic.AtomicReference<VoiceClient?>(null) }
@@ -655,7 +670,8 @@ fun ChatScreen(
 					is ServerEvent.HelloOk -> {
 						agentState = evt.agent.state
 						messages.clear()
-						messages.addAll(evt.history.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId, it.ts) })
+						messages.addAll(evt.history.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId, it.ts, it.artifacts, it.tasks) })
+						if (evt.tasks.isNotEmpty()) liveTasks = liveTasks + evt.tasks.associateBy { it.id }
 						hasMoreHistory = evt.history.size >= HISTORY_PAGE
 						// learn the machine's name + omni profile color once, off the UI thread
 						thread(name = "pppi-learn") {
@@ -695,8 +711,9 @@ fun ChatScreen(
 					}
 					is ServerEvent.AssistantFinal -> {
 						val idx = messages.indexOfFirst { it.id == evt.id }
-						if (idx >= 0) messages[idx] = Msg(evt.id, "assistant", evt.text, null, evt.target, evt.profileId)
-						else messages.add(Msg(evt.id, "assistant", evt.text, null, evt.target, evt.profileId))
+						// tasks ride ChatEntry snapshots + live task events (#15), not the final
+						if (idx >= 0) messages[idx] = messages[idx].copy(text = evt.text, artifacts = evt.artifacts)
+						else messages.add(Msg(evt.id, "assistant", evt.text, null, evt.target, evt.profileId, 0, evt.artifacts))
 					}
 					is ServerEvent.AgentStateEvt -> {
 						agentState = evt.state
@@ -718,17 +735,10 @@ fun ChatScreen(
 							messages.add(Msg(evt.id, "assistant", evt.preview, null, null, evt.profileId))
 						}
 					}
-					// #15: background job status — surface on the notice line for now;
-					// full task cards are tracked as Android follow-up
+					// #15: background job status — flip the live-task registry; cards
+					// rendered from it update in place
 					is ServerEvent.TaskEvt -> {
-						val t = evt.task
-						notice = when (t.status) {
-							"queued" -> "queued: ${t.title}"
-							"running" -> "running: ${t.title}"
-							"done" -> "done: ${t.title}" + (t.detail?.let { " — $it" } ?: "")
-							"failed" -> "failed: ${t.title}" + (t.detail?.let { " — $it" } ?: "")
-							else -> "${t.status}: ${t.title}"
-						}
+						liveTasks = liveTasks + (evt.task.id to evt.task)
 					}
 					is ServerEvent.AgentInfoEvt -> {}
 					// parsed for protocol parity; the pill owns voice-mode truth locally
@@ -742,7 +752,7 @@ fun ChatScreen(
 					}
 					is ServerEvent.HistoryPageEvt -> {
 						loadingHistory = false
-						val older = evt.entries.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId, it.ts) }
+						val older = evt.entries.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId, it.ts, it.artifacts, it.tasks) }
 						if (older.isEmpty()) {
 							hasMoreHistory = false
 						} else {
@@ -1173,6 +1183,8 @@ fun ChatScreen(
 									MarkdownBody(m.text.ifEmpty { "…" }, theme, color = Color(0xFF141210))
 								}
 							}
+							m.artifacts.forEach { a -> ArtifactCard(a, theme) { openArtifact = a } }
+							m.tasks.forEach { t -> TaskCard(liveTask(t, liveTasks), theme) }
 							MsgCopyAffordance(m.text, theme)
 						}
 					} else {
@@ -1185,7 +1197,9 @@ fun ChatScreen(
 								SelectionContainer {
 									MarkdownBody(m.text.ifEmpty { "…" }, theme)
 								}
-								MsgCopyAffordance(m.text, theme, alignEnd = false)
+																	m.artifacts.forEach { a -> ArtifactCard(a, theme) { openArtifact = a } }
+									m.tasks.forEach { t -> TaskCard(liveTask(t, liveTasks), theme) }
+MsgCopyAffordance(m.text, theme, alignEnd = false)
 							}
 						}
 					}
