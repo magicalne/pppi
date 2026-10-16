@@ -17,11 +17,12 @@
 import { execFileSync, spawn } from "node:child_process";
 import { constants, accessSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { VoiceTtsStatus } from "@pppi/protocol";
 import { audioLog } from "./audio-log.ts";
+import { homeDir } from "./config.ts";
 import { type VoiceTts, abortError } from "./voice.ts";
 import { decodeWav } from "./wav.ts";
 
@@ -76,7 +77,7 @@ class GenerateQueue {
 
 /** Where setup-voice.mjs / manual downloads land. */
 export function ttsModelRoot(): string {
-	return join(homedir(), ".pppi", "models", "tts");
+	return join(homeDir(), ".pppi", "models", "tts");
 }
 
 /** First executable `name` on PATH (null when absent) — no subprocess, safe in constructors. */
@@ -362,7 +363,7 @@ export function resolveKokoroModel(searchDirs?: string[]): { dir: string } | { r
 		if (onnxPath) return { dir: explicit };
 	}
 	// HF cache snapshots (as laid out by `huggingface-cli download` or git lfs)
-	const hfCache = join(homedir(), ".cache", "huggingface", "hub", KOKORO_REPO_DIR, "snapshots");
+	const hfCache = join(homeDir(), ".cache", "huggingface", "hub", KOKORO_REPO_DIR, "snapshots");
 	try {
 		for (const snap of readdirSync(hfCache)) {
 			const dir = join(hfCache, snap);
