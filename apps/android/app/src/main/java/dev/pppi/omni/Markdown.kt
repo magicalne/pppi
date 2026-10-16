@@ -12,6 +12,7 @@
 // a line and its successor, so streaming deltas never re-shape earlier
 // blocks.
 
+package dev.pppi.omni
 // ---------------------------------------------------------------- inline AST
 
 sealed class MdInline {
