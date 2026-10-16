@@ -9,8 +9,8 @@
 //   4. pi-transcribe's recommended model in the HuggingFace cache
 
 import { constants, accessSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { homeDir } from "./config.ts";
 import { type DecodedWav, toMono16k } from "./wav.ts";
 
 const RECOMMENDED_REPO_DIR = "models--handy-computer--parakeet-unified-en-0.6b-gguf";
@@ -36,7 +36,7 @@ export function resolveSttModel(): SttStatus {
 		return { ready: true, modelPath: explicit, modelId: explicit };
 	}
 
-	const piTranscribeCfg = join(homedir(), ".pi", "agent", "pi-transcribe.json");
+	const piTranscribeCfg = join(homeDir(), ".pi", "agent", "pi-transcribe.json");
 	try {
 		const cfg = JSON.parse(readFileSync(piTranscribeCfg, "utf8")) as { model?: { path?: string; id?: string } };
 		if (cfg.model?.path && isFile(cfg.model.path)) {
@@ -49,7 +49,7 @@ export function resolveSttModel(): SttStatus {
 	// setup-voice layout: .gguf files under ~/.pppi/models/stt/ — prefer the
 	// recommended parakeet family, otherwise a stable (sorted) first pick
 	try {
-		const modelDir = join(homedir(), ".pppi", "models", "stt");
+		const modelDir = join(homeDir(), ".pppi", "models", "stt");
 		if (existsSync(modelDir)) {
 			const ggufs = readdirSync(modelDir)
 				.filter((f) => f.endsWith(".gguf") && isFile(join(modelDir, f)))
@@ -61,7 +61,7 @@ export function resolveSttModel(): SttStatus {
 		// fall through
 	}
 
-	const hfCache = join(homedir(), ".cache", "huggingface", "hub", RECOMMENDED_REPO_DIR, "snapshots");
+	const hfCache = join(homeDir(), ".cache", "huggingface", "hub", RECOMMENDED_REPO_DIR, "snapshots");
 	try {
 		for (const snap of readdirSync(hfCache)) {
 			const candidate = join(hfCache, snap, RECOMMENDED_FILE);

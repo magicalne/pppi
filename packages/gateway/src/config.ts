@@ -16,8 +16,15 @@ export type ServerConfig = {
 	streamingFeedback: boolean;
 };
 
+export function homeDir(): string {
+	// $HOME wins when set: matches CLI conventions (git, ssh) and keeps
+	// model resolution controllable — worker threads snapshot the environ,
+	// so os.homedir() alone can miss a HOME override (seen in CI's threads pool).
+	return process.env.HOME || homedir();
+}
+
 export function pppiDir(): string {
-	return process.env.PPPI_DIR ?? join(homedir(), ".pppi");
+	return process.env.PPPI_DIR ?? join(homeDir(), ".pppi");
 }
 
 export function loadOrCreateConfig(
