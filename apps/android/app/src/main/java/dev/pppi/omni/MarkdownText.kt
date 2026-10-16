@@ -43,6 +43,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -211,10 +212,10 @@ private fun MdBlockView(b: MdBlock, base: TextStyle, theme: PppiTheme) {
 	}
 }
 
-private fun alignOf(align: List<String?>, col: Int): Alignment.Horizontal = when (align.getOrNull(col)) {
-	"center" -> Alignment.CenterHorizontally
-	"right" -> Alignment.End
-	else -> Alignment.Start
+private fun alignOf(align: List<String?>, col: Int): Alignment = when (align.getOrNull(col)) {
+	"center" -> Alignment.TopCenter
+	"right" -> Alignment.TopEnd
+	else -> Alignment.TopStart
 }
 
 /** building-artifact placeholder (parity with the web's pending card) */
