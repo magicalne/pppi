@@ -1,0 +1,92 @@
+name: pr
+# The PR gate (#36): web (typecheck + biome + tests + web build) and android
+# (compile + unit tests). Path-filtered per job so doc-only or one-sided PRs
+# stay cheap; the serialized threads-pool test invocation mirrors release.yml
+# exactly, so pool-sensitive bugs (like the #33 homedir stub) surface here
+# first instead of at release time.
+
+on:
+  pull_request:
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "bun.lock"
+      - "package.json"
+      - ".github/workflows/pr.yml"
+
+concurrency:
+  group: pr-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      android: ${{ steps.filter.outputs.android }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            web:
+              - 'apps/web/**'
+              - 'apps/server/**'
+              - 'packages/**'
+              - 'bun.lock'
+              - 'package.json'
+              - '.github/workflows/pr.yml'
+            android:
+              - 'apps/android/**'
+              - 'packages/protocol/**'
+              - '.github/workflows/pr.yml'
+
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: install
+        run: bun install --frozen-lockfile
+
+      - name: typecheck
+        run: bun run typecheck
+
+      - name: lint
+        run: bun run lint
+
+      - name: test (serialized, release.yml's invocation)
+        run: bun run test --pool=threads --poolOptions.threads.maxThreads=1 --testTimeout=120000
+
+      - name: build web client
+        run: bun run build:web
+
+  android:
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # gradle wrapper + dependency caches (same-repo PRs write them; fork
+      # PRs just skip caching) — saves the ~1-2min dependency download per run
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: compile (debug — catches Kotlin/exhaustive-when breaks)
+        run: cd apps/android && ./gradlew :app:assembleDebug --no-daemon
+
+      - name: unit tests
+        run: cd apps/android && ./gradlew :app:testDebugUnitTest --no-daemon
