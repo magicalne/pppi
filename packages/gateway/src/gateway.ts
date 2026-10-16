@@ -28,12 +28,13 @@ import type {
 	ServerEvent,
 	SessionsResponse,
 	Target,
+	TaskUpdate,
 	VoiceTtsStatus,
 } from "@pppi/protocol";
 import { minimatch } from "minimatch";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { AgentPort } from "./agent.ts";
-import { entryWithArtifacts, extractArtifacts } from "./artifacts.ts";
+import { entryWithArtifacts, extractArtifacts, extractTasks } from "./artifacts.ts";
 import { AudioService } from "./audio-proxy.ts";
 import { tokensMatch } from "./config.ts";
 import { reportPreview, shouldPeerReport } from "./peerReport.ts";
@@ -295,6 +296,24 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 	// peer exchanges (targets + delegated replies) never enter the omni session
 	// transcript, so keep them here for reconnecting clients; lost on gateway restart.
 	const peerLog: ChatEntry[] = [];
+	// #15: live task registry — latest status per id, seeded from replies and
+	// history; changes broadcast as `task` events for live job cards
+	const taskRegistry = new Map<string, TaskUpdate>();
+	function ingestTasks(tasks: TaskUpdate[] | undefined, opts: { broadcast?: boolean } = {}): void {
+		for (const t of tasks ?? []) {
+			const prev = taskRegistry.get(t.id);
+			let next = t;
+			if (prev) {
+				// update fences usually omit the title; extraction defaults it to the
+				// id — keep the announcing title unless the update spells one out
+				const title = t.title === t.id && prev.title !== prev.id ? prev.title : t.title;
+				next = { ...prev, ...t, title };
+			}
+			if (prev && prev.status === next.status && prev.title === next.title && prev.detail === next.detail) continue;
+			taskRegistry.set(t.id, next);
+			if (opts.broadcast !== false) broadcast({ type: "task", task: next });
+		}
+	}
 	// voice sessions live in-process (cli host) or in the audio child (ext host)
 	let voiceSessions: Map<VoiceSession, WebSocket> | null = null;
 	let onVoiceSocket: (raw: WebSocket) => void = (raw) => raw.close();
@@ -324,14 +343,17 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			// direct 1:1 session: no tint needed there — profile colors attribute
 			// delegated work inside the omni conversation (see /api/peer-reply)
 			const replyId = randomUUID();
-			const { text: replyClean, artifacts: replyArts } = extractArtifacts(reply || "(empty reply)");
+			const arts = extractArtifacts(reply || "(empty reply)");
+			const both = extractTasks(arts.text);
 			broadcast({
 				type: "assistant_final",
 				id: replyId,
-				text: replyClean,
+				text: both.text,
 				target,
-				...(replyArts.length ? { artifacts: replyArts } : {}),
+				...(arts.artifacts.length ? { artifacts: arts.artifacts } : {}),
+				...(both.tasks.length ? { tasks: both.tasks } : {}),
 			});
+			ingestTasks(both.tasks);
 			peerLog.push({ id: replyId, role: "assistant", text: reply || "(empty reply)", ts: Date.now(), target });
 		} else {
 			const why = res.stderr.trim().split("\n")[0] || `pigeon exited ${res.code}`;
@@ -464,8 +486,16 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 		lastReply = text;
 		// artifacts (#17): peel fenced views out of the chat text; stored text
 		// stays raw (voice/repeat/history re-extract on their way out)
-		const { text: clean, artifacts } = extractArtifacts(text);
-		broadcast({ type: "assistant_final", id, text: clean, ...(artifacts.length ? { artifacts } : {}) });
+		const arts = extractArtifacts(text);
+		const both = extractTasks(arts.text);
+		broadcast({
+			type: "assistant_final",
+			id,
+			text: both.text,
+			...(arts.artifacts.length ? { artifacts: arts.artifacts } : {}),
+			...(both.tasks.length ? { tasks: both.tasks } : {}),
+		});
+		ingestTasks(both.tasks);
 		speakAssistant(
 			(s) => s.assistantFinal(id, text),
 			(a) => a.assistantFinal(id, text),
@@ -502,14 +532,17 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				if (seenReplies.has(e.msgId)) continue;
 				seenReplies.add(e.msgId);
 				const id = randomUUID();
-				const { text: replyClean, artifacts: replyArts } = extractArtifacts(e.reply);
+				const arts = extractArtifacts(e.reply);
+				const both = extractTasks(arts.text);
 				broadcast({
 					type: "assistant_final",
 					id,
-					text: replyClean,
+					text: both.text,
 					profileId: e.fromSessionId,
-					...(replyArts.length ? { artifacts: replyArts } : {}),
+					...(arts.artifacts.length ? { artifacts: arts.artifacts } : {}),
+					...(both.tasks.length ? { tasks: both.tasks } : {}),
 				});
+				ingestTasks(both.tasks);
 				maybePeerReport(id, e.fromSessionId, e.reply);
 				peerLog.push({ id, role: "assistant", text: e.reply, ts: Date.now(), profileId: e.fromSessionId });
 				// a delegated answer lands in the omni conversation — say it too.
@@ -687,14 +720,17 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				return json(res, 400, { ok: false, error: "session and text are required" });
 			}
 			const id = randomUUID();
-			const { text: cleanText, artifacts: cleanArts } = extractArtifacts(replyText);
+			const arts = extractArtifacts(replyText);
+			const both = extractTasks(arts.text);
 			broadcast({
 				type: "assistant_final",
 				id,
-				text: cleanText,
+				text: both.text,
 				profileId: session,
-				...(cleanArts.length ? { artifacts: cleanArts } : {}),
+				...(arts.artifacts.length ? { artifacts: arts.artifacts } : {}),
+				...(both.tasks.length ? { tasks: both.tasks } : {}),
 			});
+			ingestTasks(both.tasks);
 			maybePeerReport(id, session, replyText);
 			peerLog.push({ id, role: "assistant", text: replyText, ts: Date.now(), profileId: session });
 			// same speaking path as mailbox-discovered replies, but DISCRETE:
@@ -787,7 +823,19 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				} catch {
 					// keep empty history rather than failing the handshake
 				}
-				send(ws, { type: "hello_ok", agent: agentInfo(), history });
+				// seed the task registry from history (reconnect/restart: registry
+				// is in-memory) and hand this client the live snapshot — quietly,
+				// a reconnect must not spam task events to other clients
+				ingestTasks(
+					history.flatMap((h) => h.tasks ?? []),
+					{ broadcast: false },
+				);
+				send(ws, {
+					type: "hello_ok",
+					agent: agentInfo(),
+					history,
+					tasks: [...taskRegistry.values()].slice(-30),
+				});
 				// status-bar snapshot for this client (fresh ones arrive via broadcast)
 				send(ws, { type: "status", status: agent.status });
 				// same for voice occupancy: without a snapshot, a client that

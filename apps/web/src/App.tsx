@@ -6,10 +6,12 @@ import type {
 	ModelInfo,
 	ServerEvent,
 	SessionsResponse,
+	TaskUpdate,
 } from "@pppi/protocol";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArtifactCard, useArtifactViewer } from "./Artifact.tsx";
 import { PeerReportToast } from "./PeerReportToast.tsx";
+import { TaskCard, liveTask } from "./Task.tsx";
 import { copyTextToClipboard } from "./copy.ts";
 import { DEMO_ARTIFACT } from "./demoArtifact.ts";
 import { Markdown } from "./markdown.tsx";
@@ -37,6 +39,8 @@ type Msg = {
 	tool?: { phase: "start" | "end"; label?: string };
 	/** artifacts extracted from this reply by the gateway (#17) */
 	artifacts?: Artifact[];
+	/** task fences extracted from this reply (#15) — entry-time snapshots */
+	tasks?: TaskUpdate[];
 	/** ms epoch, set on history entries — anchors older-page loads */
 	ts?: number;
 };
@@ -145,6 +149,8 @@ export default function App() {
 	const [drawerOpen, setDrawerOpen] = useState(false);
 	/** issue #17: full-screen artifact viewer (cards in the chat open this) */
 	const artifactViewer = useArtifactViewer();
+	/** #15: live task registry — latest status per id (task events / hello seed) */
+	const [liveTasks, setLiveTasks] = useState<Record<string, TaskUpdate>>({});
 	/** #13: a delegated reply landed while idle — tappable notification */
 	const [peerReport, setPeerReport] = useState<{ id: string; profileId: string; preview: string } | null>(null);
 	const [connOpen, setConnOpen] = useState(false);
@@ -306,6 +312,7 @@ export default function App() {
 	function handleEvent(evt: ServerEvent) {
 		switch (evt.type) {
 			case "hello_ok": {
+				if (evt.tasks) setLiveTasks(Object.fromEntries(evt.tasks.map((t) => [t.id, t])));
 				setConnected(true);
 				setAgentState(evt.agent.state);
 				// idempotent resume (#22): server history replaces by id — a reply
@@ -432,6 +439,10 @@ export default function App() {
 				break;
 			case "voice_active":
 				setVoiceElsewhere(evt.active);
+				break;
+			case "task":
+				// #15: live status transition — cards flip in place
+				setLiveTasks((t) => ({ ...t, [evt.task.id]: evt.task }));
 				break;
 			case "peer_report":
 				// #13: background work finished — surface it, don't let it drown in chat
@@ -691,6 +702,9 @@ export default function App() {
 								{m.artifacts?.map((a) => (
 									<ArtifactCard key={a.id} artifact={a} onOpen={artifactViewer.open} />
 								))}
+								{m.tasks?.map((t) => (
+									<TaskCard key={t.id} task={liveTask(t, liveTasks)} />
+								))}
 								<MsgCopyButton text={m.text} />
 							</div>
 						);
@@ -704,6 +718,9 @@ export default function App() {
 								{m.text ? <Markdown text={m.text} /> : m.artifacts?.length ? null : <span>…</span>}
 								{m.artifacts?.map((a) => (
 									<ArtifactCard key={a.id} artifact={a} onOpen={artifactViewer.open} />
+								))}
+								{m.tasks?.map((t) => (
+									<TaskCard key={t.id} task={liveTask(t, liveTasks)} />
 								))}
 								<MsgCopyButton text={m.text} />
 							</div>

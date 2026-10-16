@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Artifact, ArtifactKind, ChatEntry } from "@pppi/protocol";
+import type { Artifact, ArtifactKind, ChatEntry, TaskUpdate } from "@pppi/protocol";
 
 /**
  * Artifacts — issue #17. Agents deliver rich, self-contained views inside an
@@ -27,7 +27,7 @@ import type { Artifact, ArtifactKind, ChatEntry } from "@pppi/protocol";
 export const ARTIFACT_FENCE = "pppi-artifact";
 const SUPPORTED_KINDS: ReadonlySet<string> = new Set(["html"]);
 
-const OPEN_RE = /^( {0,3})(`{3,}|~{3,})\s*pppi-artifact(.*)$/;
+const OPEN_RE = /^( {0,3})(`{3,}|~{3,})\s*pppi-(artifact|task)(.*)$/;
 
 /** parse ` title="Build report" kind=html` → { title, kind } */
 export function parseArtifactInfo(info: string): { title: string; kind: string | null } {
@@ -62,7 +62,14 @@ export function extractArtifacts(text: string): ExtractedArtifacts {
 			continue;
 		}
 		const marker = open[2]!;
-		const info = parseArtifactInfo(open[3] ?? "");
+		const type = open[3]!;
+		if (type !== "artifact") {
+			// task fences pass through the artifact scanner untouched (#15)
+			out.push(line);
+			i++;
+			continue;
+		}
+		const info = parseArtifactInfo(open[4] ?? "");
 		const kind = info.kind ?? "html";
 		const closeRe = new RegExp(`^[ \\t]{0,3}${marker[0] === "`" ? "\\`" : "~"}{${marker.length},}[ \\t]*$`);
 		i++;
@@ -112,10 +119,99 @@ function squashBlanks(text: string): string {
 		.trim();
 }
 
-/** ChatEntry-shaped entry → entry with the text cleaned and artifacts attached */
+// ---------------------------------------------------------------- tasks (#15)
+
+const TASK_STATUSES: ReadonlySet<string> = new Set(["queued", "running", "done", "failed"]);
+
+/** parse ` id=deploy title="Ship it" status=running detail="pushing…"` */
+export function parseTaskInfo(info: string): {
+	id: string;
+	title: string;
+	status: TaskUpdate["status"];
+	detail?: string;
+	valid: boolean;
+} {
+	const vals: Record<string, string> = {};
+	const re = /(id|title|status|detail)=("(?:[^"]*)"|'(?:[^']*)'|[^\s]+)/g;
+	for (const m of info.matchAll(re)) {
+		let v = m[2]!;
+		if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1);
+		else if (v.startsWith("'") && v.endsWith("'")) v = v.slice(1, -1);
+		vals[m[1]!] = v;
+	}
+	const id = vals.id ?? "";
+	const status = vals.status ?? "running";
+	return {
+		id,
+		title: vals.title?.trim() || id,
+		status: status as TaskUpdate["status"],
+		detail: vals.detail,
+		// id required; unknown statuses degrade to a plain code block (#28 pattern)
+		valid: id !== "" && TASK_STATUSES.has(status),
+	};
+}
+
+export type ExtractedTasks = { text: string; tasks: TaskUpdate[] };
+
+/** Pull ```pppi-task fences out of a reply (same boundary contract as artifacts). */
+export function extractTasks(text: string): ExtractedTasks {
+	const lines = text.replace(/\r\n?/g, "\n").split("\n");
+	const out: string[] = [];
+	const tasks: TaskUpdate[] = [];
+	let i = 0;
+	while (i < lines.length) {
+		const line = lines[i]!;
+		const open = OPEN_RE.exec(line);
+		if (!open || open[3] !== "task") {
+			out.push(line);
+			i++;
+			continue;
+		}
+		const marker = open[2]!;
+		const info = parseTaskInfo(open[4] ?? "");
+		const closeRe = new RegExp(`^[ \\t]{0,3}${marker[0] === "`" ? "\\`" : "~"}{${marker.length},}[ \\t]*$`);
+		i++;
+		const body: string[] = [];
+		let closeLine: string | null = null;
+		while (i < lines.length) {
+			if (closeRe.test(lines[i]!)) {
+				closeLine = lines[i]!;
+				i++;
+				break;
+			}
+			body.push(lines[i]!);
+			i++;
+		}
+		if (!info.valid || closeLine === null || body.join("\n").trim() !== "") {
+			// malformed / unknown status / stray content — keep as plain code
+			out.push(line);
+			out.push(...body);
+			if (closeLine !== null) out.push(closeLine);
+			continue;
+		}
+		tasks.push({
+			id: info.id,
+			title: info.title,
+			status: info.status,
+			...(info.detail ? { detail: info.detail } : {}),
+		});
+	}
+	const cleaned = squashBlanks(out.join("\n"));
+	return { text: cleaned, tasks };
+}
+
+/** entry → text cleaned, artifacts AND tasks attached (#17 + #15) */
 export function entryWithArtifacts<T extends ChatEntry>(entry: T): T {
-	if (entry.role !== "assistant" || !entry.text.includes(ARTIFACT_FENCE)) return entry;
-	const { text, artifacts } = extractArtifacts(entry.text);
-	if (artifacts.length === 0) return entry;
-	return { ...entry, text, artifacts };
+	if (entry.role !== "assistant") return entry;
+	if (!entry.text.includes("pppi-")) return entry;
+	const arts = extractArtifacts(entry.text);
+	const both = extractTasks(arts.text);
+	const text = both.text;
+	if (arts.artifacts.length === 0 && both.tasks.length === 0) return entry;
+	return {
+		...entry,
+		text,
+		...(arts.artifacts.length ? { artifacts: arts.artifacts } : {}),
+		...(both.tasks.length ? { tasks: both.tasks } : {}),
+	};
 }

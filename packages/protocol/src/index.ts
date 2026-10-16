@@ -16,6 +16,9 @@
 export type AgentState =
 	// v7: artifacts — rich self-contained HTML views delivered inside a reply
 	//     (fenced ```pppi-artifact blocks, extracted by the gateway). Issue #17.
+	// v8: tasks — background job envelope (```pppi-task fences → live task
+	//     events + job cards). Issue #15: the chat lane is for requests; accepted
+	//     work runs as tasks with queued→running→done/failed status.
 	"starting" | "idle" | "thinking" | "tool" | "streaming" | "compacting" | "waiting";
 
 export type MessageSource = "voice" | "text";
@@ -98,6 +101,22 @@ export type Artifact = {
 	content: string;
 };
 
+// ---------------------------------------------------------------- tasks (#15)
+
+/** Task lifecycle. "queued" is advisory pre-work; "done"/"failed" are terminal. */
+export type TaskStatus = "queued" | "running" | "done" | "failed";
+
+/** A background job: accepted work whose result is NOT the reply to a request.
+ *  Agents emit ```pppi-task fences in replies; the gateway peels them out and
+ *  keeps a live registry (latest per id). */
+export type TaskUpdate = {
+	id: string;
+	title: string;
+	status: TaskStatus;
+	/** optional one-liner: progress or the outcome ("PR #31 merged") */
+	detail?: string;
+};
+
 export type ChatEntry = {
 	id: string;
 	role: "user" | "assistant";
@@ -109,6 +128,9 @@ export type ChatEntry = {
 	profileId?: string;
 	/** artifacts extracted from this entry's text by the gateway (#17) */
 	artifacts?: Artifact[];
+	/** task fences extracted from this entry's text (#15) — status as of THEN;
+	 *  live status arrives via `task` events / hello_ok.tasks */
+	tasks?: TaskUpdate[];
 };
 
 // ---------------------------------------------------------------- client → server
@@ -126,7 +148,7 @@ export type ClientMessage =
 // ---------------------------------------------------------------- server → client
 
 export type ServerEvent =
-	| { type: "hello_ok"; agent: AgentInfo; history: ChatEntry[] }
+	| { type: "hello_ok"; agent: AgentInfo; history: ChatEntry[]; tasks?: TaskUpdate[] }
 	| { type: "hello_fail"; error: string }
 	| { type: "agent_info"; agent: AgentInfo }
 	| { type: "agent_state"; state: AgentState; toolName?: string }
@@ -148,6 +170,9 @@ export type ServerEvent =
 	| { type: "peer_report"; id: string; profileId: string; preview: string }
 	// the omni session was reset (/new): clients clear their mirrored history
 	| { type: "session_new" }
+	// a task changed (new job, status transition) — #15. Latest-per-id wins;
+	// clients render live job cards from these.
+	| { type: "task"; task: TaskUpdate }
 	// paged history: entries older than the requested `before`, newest-last
 	| { type: "history_page"; entries: ChatEntry[]; hasMore: boolean };
 

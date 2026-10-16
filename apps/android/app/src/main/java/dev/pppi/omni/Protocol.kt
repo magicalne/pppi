@@ -14,6 +14,7 @@ sealed class ServerEvent {
 	data class HelloOk(
 		val agent: AgentInfo,
 		val history: List<ChatEntry> = emptyList(),
+		val tasks: List<TaskUpdate> = emptyList(),
 	) : ServerEvent()
 
 	@Serializable
@@ -80,6 +81,10 @@ sealed class ServerEvent {
 
 	/** the omni session was reset (/new): clear the mirrored history */
 	@Serializable
+	@SerialName("task")
+	data class TaskEvt(val task: TaskUpdate) : ServerEvent()
+
+	@Serializable
 	@SerialName("peer_report")
 	data class PeerReport(val id: String, val profileId: String, val preview: String) : ServerEvent()
 
@@ -113,6 +118,18 @@ data class Artifact(
 	val content: String,
 )
 
+/**
+ * A background job (#15): accepted work with queued/running/done/failed
+ * status. Agents emit ```pppi-task fences; the gateway peels them out.
+ */
+@Serializable
+data class TaskUpdate(
+	val id: String,
+	val title: String,
+	val status: String = "running",
+	val detail: String? = null,
+)
+
 @Serializable
 data class ChatEntry(
 	val id: String,
@@ -123,6 +140,7 @@ data class ChatEntry(
 	val target: String? = null,
 	val profileId: String? = null,
 	val artifacts: List<Artifact> = emptyList(),
+	val tasks: List<TaskUpdate> = emptyList(),
 )
 
 @Serializable
