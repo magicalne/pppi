@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
-import { homedir } from "node:os";
+
 import { basename, dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type PigeonSession, listSessions, pigeon } from "@pppi/omni/pigeon";
@@ -37,6 +37,7 @@ import type { AgentPort } from "./agent.ts";
 import { entryWithArtifacts, extractArtifacts, extractTasks } from "./artifacts.ts";
 import { AudioService } from "./audio-proxy.ts";
 import { tokensMatch } from "./config.ts";
+import { homeDir } from "./config.ts";
 import { reportPreview, shouldPeerReport } from "./peerReport.ts";
 import { buildProfiles } from "./profiles.ts";
 import type { Stt } from "./stt.ts";
@@ -135,7 +136,7 @@ function enabledPatternsFromPi(cwd: string): string[] | undefined {
 			return undefined;
 		}
 	};
-	const global = read(join(homedir(), ".pi", "agent", "settings.json"));
+	const global = read(join(homeDir(), ".pi", "agent", "settings.json"));
 	const project = read(join(cwd, ".pi", "settings.json"));
 	const merged = [
 		...(Array.isArray(global?.enabledModels) ? (global!.enabledModels as unknown[]) : []),
