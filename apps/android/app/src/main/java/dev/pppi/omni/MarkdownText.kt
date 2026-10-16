@@ -166,7 +166,7 @@ private fun MdBlockView(b: MdBlock, base: TextStyle, theme: PppiTheme) {
 			}
 		}
 
-		is MdBlock.List -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+		is MdBlock.ListBlock -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
 			b.items.forEachIndexed { i, item ->
 				Row {
 					Text(

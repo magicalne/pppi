@@ -30,7 +30,7 @@ sealed class MdBlock {
 	data class Code(val lang: String, val s: String) : MdBlock()
 	data object Hr : MdBlock()
 	data class Quote(val c: List<MdBlock>) : MdBlock()
-	data class List(val ordered: Boolean, val start: Int, val items: List<List<MdInline>>) : MdBlock()
+	data class ListBlock(val ordered: Boolean, val start: Int, val items: List<List<MdInline>>) : MdBlock()
 	data class Table(
 		val align: List<String?>,
 		val head: List<List<MdInline>>,
@@ -441,7 +441,7 @@ object Markdown {
 					}
 					i++
 				}
-				blocks.add(MdBlock.List(ordered, start, items.map { parseInline(it) }))
+				blocks.add(MdBlock.ListBlock(ordered, start, items.map { parseInline(it) }))
 				continue
 			}
 
@@ -498,7 +498,7 @@ object Markdown {
 				.joinToString("\n\n")
 				.split("\n")
 				.joinToString("\n") { l -> "> $l".trimEnd() }
-			is MdBlock.List -> return b.items.mapIndexed { i, item ->
+			is MdBlock.ListBlock -> return b.items.mapIndexed { i, item ->
 				val marker = if (b.ordered) "${b.start + i}. " else "- "
 				marker + inlineText(item).replace("\n", "\n  ")
 			}.joinToString("\n")

@@ -164,13 +164,13 @@ class MarkdownTest {
 	fun unorderedAndOrderedListsWithContinuations() {
 		val blocks = Markdown.parseBlocks("- one\n- two\n  two more\n1. first\n2. second")
 		assertEquals(2, blocks.size)
-		val ul = blocks[0] as MdBlock.List
+		val ul = blocks[0] as MdBlock.ListBlock
 		assertEquals(false, ul.ordered)
 		assertEquals(
 			listOf(listOf(MdInline.Text("one")), listOf(MdInline.Text("two\ntwo more"))),
 			ul.items,
 		)
-		val ol = blocks[1] as MdBlock.List
+		val ol = blocks[1] as MdBlock.ListBlock
 		assertEquals(true, ol.ordered)
 		assertEquals(1, ol.start)
 		assertEquals(listOf(MdInline.Text("second")), ol.items[1])
