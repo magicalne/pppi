@@ -9,12 +9,9 @@
 //   4. pi-transcribe's recommended model in the HuggingFace cache
 
 import { constants, accessSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-
 import { join } from "node:path";
 import { homeDir } from "./config.ts";
 import { type DecodedWav, toMono16k } from "./wav.ts";
-
-import { homeDir } from "./config.ts";
 
 const RECOMMENDED_REPO_DIR = "models--handy-computer--parakeet-unified-en-0.6b-gguf";
 const RECOMMENDED_FILE = "parakeet-unified-en-0.6b-Q8_0.gguf";
