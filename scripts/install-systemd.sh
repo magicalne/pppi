@@ -37,6 +37,13 @@ if [[ ! -f "$CLI" ]]; then
 	exit 1
 fi
 
+# The user manager has no shell PATH: the gateway spawns the omni agent
+# (pi) and may exec TTS/STT helpers (espeak-ng, …), so give the unit a real
+# PATH anchored on bun's bin dir (where pi lives too).
+BIN_DIR="$(dirname "$BUN")"
+[[ ":$PATH:" == *":$HOME/.local/bin:"* ]] && LOCAL_BIN="$HOME/.local/bin" || LOCAL_BIN=""
+UNIT_PATH="$BIN_DIR${LOCAL_BIN:+:$LOCAL_BIN}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 UNIT_DIR="$HOME/.config/systemd/user"
 UNIT="$UNIT_DIR/pppi-gateway.service"
 mkdir -p "$UNIT_DIR"
@@ -62,6 +69,7 @@ WorkingDirectory=$REPO
 # absolute paths: the systemd user manager has no shell PATH or cwd
 ExecStart=$BUN run $CLI --host $HOST$EXTRA_ARGS
 Environment=PPPI_DIR=%h/.pppi
+Environment=PATH=$UNIT_PATH
 Restart=on-failure
 RestartSec=3
 # SIGTERM is handled (clean gateway + agent shutdown); give it a beat
