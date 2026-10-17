@@ -135,6 +135,15 @@ describe("rpc agent driver", () => {
 		expect(status.context.tokens).toBeGreaterThan(0);
 	});
 
+	it("derives levels from the model's map when the levels RPC under-reports (#48)", async () => {
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		// nospec: reasoning flag off, map has off/low/medium — the RPC answers ["off"]
+		await driver.setModel("mock", "nospec");
+		expect(driver.status.model).toMatchObject({ id: "nospec" });
+		expect(driver.status.thinkingLevels).toEqual(["off", "low", "medium"]);
+	});
+
 	it("set_thinking_level echoes the clamped level", async () => {
 		driver.start();
 		await new Promise<void>((r) => driver.once("ready", r));

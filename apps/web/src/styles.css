@@ -1084,8 +1084,12 @@
 	display: flex;
 	align-items: center;
 	gap: 10px;
-	min-height: 36px;
-	padding: 4px 16px calc(8px + env(safe-area-inset-bottom));
+	/* #48: one exactly-centered content strip; the safe-area band extends the
+	   background below it — asymmetric padding used to sag the brain off the
+	   ctx/model center line */
+	box-sizing: border-box;
+	height: calc(36px + env(safe-area-inset-bottom));
+	padding: 0 16px env(safe-area-inset-bottom);
 	background: var(--bg);
 	border-top: 1px solid var(--line);
 	font-size: 13px;
