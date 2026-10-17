@@ -33,7 +33,7 @@ describe("uploads (#upload)", () => {
 		driver.dispose();
 		await app.close();
 		const dir = process.env.PPPI_DIR;
-		delete process.env.PPPI_DIR;
+		process.env.PPPI_DIR = undefined;
 		if (dir) rmSync(dir, { recursive: true, force: true });
 	});
 
