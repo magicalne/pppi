@@ -10,10 +10,20 @@
 // extension, where only the deps shipped next to it resolve.
 
 import { randomUUID } from "node:crypto";
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import {
+	createReadStream,
+	existsSync,
+	mkdirSync,
+	readFile,
+	readFileSync,
+	realpathSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
+import type { Attachment } from "@pppi/protocol";
 
-import { basename, dirname, extname, join, normalize } from "node:path";
+import { basename, dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type PigeonSession, listSessions, pigeon } from "@pppi/omni/pigeon";
 import { loadRegistry } from "@pppi/omni/repos";
@@ -36,7 +46,7 @@ import { type WebSocket, WebSocketServer } from "ws";
 import type { AgentPort } from "./agent.ts";
 import { entryWithArtifacts, extractArtifacts, extractTasks } from "./artifacts.ts";
 import { AudioService } from "./audio-proxy.ts";
-import { tokensMatch } from "./config.ts";
+import { pppiDir, tokensMatch } from "./config.ts";
 import { homeDir } from "./config.ts";
 import { reportPreview, shouldPeerReport } from "./peerReport.ts";
 import { buildProfiles } from "./profiles.ts";
@@ -237,6 +247,50 @@ async function classify(omniSessionId: string, registryDir?: string): Promise<Se
 	);
 	const { projects, others } = classifySessions(visible, reg.repos, { profiles });
 	return { omniSessionId, projects, others, profiles };
+}
+
+// ---- upload helpers (#upload) -------------------------------------------
+
+const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+/** a readable regular file exists at `p` */
+function isFile(p: string): boolean {
+	try {
+		return statSync(p).isFile();
+	} catch {
+		return false;
+	}
+}
+
+function uploadsDir(): string {
+	return join(pppiDir(), "uploads");
+}
+
+/** one safe path segment: no separators, no dots, length-capped */
+function sanitizeSeg(raw: string): string {
+	const cleaned = raw.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/^\.+/, "_");
+	return cleaned.slice(0, 120) || "file";
+}
+
+/** magic-byte sniffing — trust content, not headers */
+export function sniffImageMime(buf: Buffer): "image/png" | "image/jpeg" | "image/webp" | null {
+	if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
+	if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+	if (buf.length >= 12 && buf.subarray(0, 4).toString() === "RIFF" && buf.subarray(8, 12).toString() === "WEBP") {
+		return "image/webp";
+	}
+	return null;
+}
+
+/** resolve without requiring the target to exist (no realpathSync on missing files) */
+function realishResolve(p: string): string {
+	let out = resolve(p);
+	while (existsSync(out) === false && out !== dirname(out)) out = dirname(out);
+	try {
+		return realpathSync(out);
+	} catch {
+		return resolve(p);
+	}
 }
 
 const MIME: Record<string, string> = {
@@ -563,24 +617,50 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 		}
 	}, 3_000);
 
-	async function submitUserText(text: string, source: "voice" | "text", target?: Target): Promise<{ id: string }> {
+	async function submitUserText(
+		text: string,
+		source: "voice" | "text",
+		target?: Target,
+		attachments: Attachment[] = [],
+	): Promise<{ id: string }> {
 		const id = randomUUID();
 		if (!target || target === agent.info.sessionId) {
 			// session commands ride any client's composer; peers get plain text
 			if (await handleSessionCommand(text)) return { id };
 			if (source === "voice") broadcast({ type: "transcript", id, text });
-			broadcast({ type: "user_message", id, text, source });
+			broadcast({ type: "user_message", id, text, source, attachments });
 			// appended speech while the agent works coalesces (see the block above)
 			if (source === "voice" && (agent.state !== "idle" || voiceInFlight)) {
 				foldVoiceFragment(text);
 				return { id };
 			}
 			if (source === "voice") voiceInFlight = { text, replied: false };
-			await agent.prompt(text);
+			await promptWithAttachments(text, attachments);
 			return { id };
 		}
 		await sendToPeer(text, target);
 		return { id };
+	}
+
+	/**
+	 * Deliver a prompt with uploaded attachments (#upload): images become pi
+	 * ImageContent parts (vision models SEE them) and a readable path line is
+	 * appended for every attachment — non-vision models still get the files as
+	 * paths their tools can open.
+	 */
+	async function promptWithAttachments(text: string, attachments: Attachment[]): Promise<void> {
+		if (attachments.length === 0) return agent.prompt(text);
+		const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+		for (const a of attachments) {
+			try {
+				const buf = readFileSync(a.path);
+				if (a.mime.startsWith("image/")) images.push({ type: "image", data: buf.toString("base64"), mimeType: a.mime });
+			} catch {
+				// unreadable file: the path line below still tells the agent where it was
+			}
+		}
+		const lines = attachments.map((a) => `[attachment] ${a.name} (${a.mime}, ${a.size}B) — ${a.path}`);
+		await agent.prompt([text, "", ...lines].join("\n"), { images });
 	}
 
 	/** `/new` and `/compact` — false when the text is not a session command. */
@@ -631,7 +711,63 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			res.end();
 			return;
 		}
-		const path = new URL(req.url ?? "/", "http://local").pathname;
+		const url = new URL(req.url ?? "/", "http://local");
+		const path = url.pathname;
+		// ---- uploads (#upload): POST /api/upload?sid=<client-session>&name=<file>
+		// body = raw bytes; Bearer token like every /api route. Images only in
+		// v1 (png/jpeg/webp, <=10MB), magic-byte sniffed, traversal-hardened.
+		if (req.method === "POST" && path === "/api/upload") {
+			const presented = bearer(req);
+			if (!presented || !tokensMatch(presented, opts.token))
+				return json(res, 401, { ok: false, error: "unauthorized" });
+			const sid = sanitizeSeg(String(url.searchParams.get("sid") ?? "default"));
+			const name = sanitizeSeg(String(url.searchParams.get("name") ?? "upload"));
+			const chunks: Buffer[] = [];
+			let size = 0;
+			for await (const chunk of req) {
+				size += (chunk as Buffer).length;
+				if (size > UPLOAD_MAX_BYTES) return json(res, 413, { ok: false, error: "file too large (max 10MB)" });
+				chunks.push(chunk as Buffer);
+			}
+			const buf = Buffer.concat(chunks);
+			const sniffed = sniffImageMime(buf);
+			if (!sniffed) return json(res, 400, { ok: false, error: "only png/jpeg/webp images are accepted" });
+			const dir = join(uploadsDir(), sid);
+			mkdirSync(dir, { recursive: true });
+			const fileName = `${Date.now()}-${name}`;
+			const filePath = join(dir, fileName);
+			// belt + suspenders: the final path must stay inside the uploads root
+			const resolved = realishResolve(filePath);
+			if (!resolved.startsWith(realishResolve(uploadsDir()))) return json(res, 400, { ok: false, error: "bad path" });
+			writeFileSync(filePath, buf);
+			const attachment: Attachment = {
+				path: filePath,
+				name,
+				mime: sniffed,
+				size: buf.length,
+				url: `/api/uploads/${sid}/${fileName}`,
+			};
+			return json(res, 200, { ok: true, attachment });
+		}
+		// serve an uploaded file (history thumbnails): token via query — img tags
+		// cannot send headers. LAN-first client; the token is the pairing secret.
+		if (req.method === "GET" && path.startsWith("/api/uploads/")) {
+			const presented = url.searchParams.get("token") ?? bearer(req);
+			if (!presented || !tokensMatch(presented, opts.token))
+				return json(res, 401, { ok: false, error: "unauthorized" });
+			const rel = path.slice("/api/uploads/".length);
+			const filePath = realishResolve(join(uploadsDir(), rel));
+			if (!filePath.startsWith(realishResolve(uploadsDir()))) return json(res, 400, { ok: false, error: "bad path" });
+			if (!isFile(filePath)) return json(res, 404, { ok: false, error: "not found" });
+			const data = readFileSync(filePath);
+			res.writeHead(200, {
+				"Content-Type": sniffImageMime(data) ?? "application/octet-stream",
+				"Content-Length": data.length,
+				"Cache-Control": "private, max-age=86400",
+			});
+			res.end(data);
+			return;
+		}
 		if (req.method === "GET" && path === "/api/health") {
 			// kick the child so a crashed/starting audio service self-heals
 			void audio?.ensure();
@@ -847,8 +983,8 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			}
 			if (msg.type === "chat") {
 				const text = (msg.text ?? "").trim();
-				if (text) {
-					submitUserText(text, msg.source ?? "text", msg.target).catch((err) =>
+				if (text || (msg.attachments?.length ?? 0) > 0) {
+					submitUserText(text, msg.source ?? "text", msg.target, msg.attachments ?? []).catch((err) =>
 						send(ws, { type: "error", message: String(err.message ?? err), target: msg.target }),
 					);
 				}

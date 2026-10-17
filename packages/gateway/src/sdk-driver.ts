@@ -15,6 +15,7 @@ import type { AgentStatus, ContextInfo, ModelInfo } from "@pppi/protocol";
 import {
 	type AgentSnapshot,
 	type AgentState,
+	type ImagePart,
 	textFromAssistant,
 	textFromUser,
 	toModelInfo,
@@ -214,7 +215,9 @@ export class SdkAgentDriver extends EventEmitter {
 	}
 
 	/** Send a user message; `deliver: "steer"` injects into the running turn. */
-	async prompt(text: string, opts?: { deliver?: "followUp" | "steer" }): Promise<void> {
+	async prompt(text: string, opts?: { deliver?: "followUp" | "steer"; images?: ImagePart[] }): Promise<void> {
+		// images ride only the RPC driver for now (#upload): the SDK session
+		// builds its own content; attachments still reach the agent as paths
 		const session = this.session;
 		if (!session) throw new Error("sdk session not started");
 		// pi executes extension commands (disposition "handled") even while

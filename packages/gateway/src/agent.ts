@@ -68,6 +68,9 @@ export type DriverEvents = {
  * the in-process extension driver (`/omni` hosting its own session). The
  * events are exactly the DriverEvents above — the gateway maps them to wire.
  */
+/** pi ImageContent: base64 image part for vision models (#upload). */
+export type ImagePart = { type: "image"; data: string; mimeType: string };
+
 export interface AgentPort extends EventEmitter {
 	/** Working directory the agent runs in (pi settings resolution). */
 	readonly cwd: string;
@@ -76,7 +79,7 @@ export interface AgentPort extends EventEmitter {
 	/** Last known status-bar snapshot; safest read is the `status` event. */
 	get status(): AgentStatus;
 	/** Send a user message; queues behind an active turn (followUp semantics). */
-	prompt(text: string, opts?: { deliver?: "followUp" | "steer" }): Promise<void>;
+	prompt(text: string, opts?: { deliver?: "followUp" | "steer"; images?: ImagePart[] }): Promise<void>;
 	abort(): void | Promise<void>;
 	/** Compact the session now (LLM summarization; seconds to minutes). */
 	compact(): Promise<void>;
@@ -440,13 +443,18 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 	 * Send a user message. Busy turns get the text queued (followUp) unless
 	 * `deliver: "steer"` injects it into the running turn (streaming feedback).
 	 */
-	async prompt(text: string, opts?: { deliver?: "followUp" | "steer" }): Promise<void> {
+	async prompt(text: string, opts?: { deliver?: "followUp" | "steer"; images?: ImagePart[] }): Promise<void> {
 		const extra: Record<string, unknown> = this.isStreaming ? { streamingBehavior: opts?.deliver ?? "followUp" } : {};
+		if (opts?.images?.length) extra.images = opts.images;
 		let res = await this.request("prompt", 30_000, { message: text, ...extra });
 		if (!res.success) {
 			// Race: streaming started between our check and the command.
 			if (!this.isStreaming || /stream/i.test(res.error ?? "")) {
-				res = await this.request("prompt", 30_000, { message: text, streamingBehavior: "followUp" });
+				res = await this.request("prompt", 30_000, {
+					message: text,
+					streamingBehavior: "followUp",
+					...(opts?.images?.length ? { images: opts.images } : {}),
+				});
 				if (!res.success) throw new Error(res.error ?? "prompt rejected");
 			} else {
 				throw new Error(res.error ?? "prompt rejected");

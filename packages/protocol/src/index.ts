@@ -26,6 +26,19 @@ export type MessageSource = "voice" | "text";
 /** undefined/"omni" target = the omni agent itself; otherwise a peer session id. */
 export type Target = string | undefined;
 
+/**
+ * An uploaded file riding a chat message (v9): stored server-side under
+ * ~/.pppi/uploads/<sid>/; `path` is the server-side file path (agent-facing),
+ * `url` the client-facing fetch route (token-authenticated).
+ */
+export type Attachment = {
+	path: string;
+	name: string;
+	mime: string;
+	size: number;
+	url: string;
+};
+
 /** Identity of a pi session. Color tints that agent's replies; description is agent-readable. */
 export type Profile = {
 	id: string; // session id the profile belongs to
@@ -152,7 +165,7 @@ export type ChatEntry = {
 
 export type ClientMessage =
 	| { type: "hello"; token: string; client: "web" | "android" | "test" }
-	| { type: "chat"; text: string; source?: MessageSource; target?: Target }
+	| { type: "chat"; text: string; source?: MessageSource; target?: Target; attachments?: Attachment[] }
 	| { type: "abort"; target?: Target }
 	| { type: "set_model"; provider: string; modelId: string }
 	| { type: "set_thinking_level"; level: string }
@@ -167,7 +180,14 @@ export type ServerEvent =
 	| { type: "hello_fail"; error: string }
 	| { type: "agent_info"; agent: AgentInfo }
 	| { type: "agent_state"; state: AgentState; toolName?: string }
-	| { type: "user_message"; id: string; text: string; source: MessageSource; target?: Target }
+	| {
+			type: "user_message";
+			id: string;
+			text: string;
+			source: MessageSource;
+			target?: Target;
+			attachments?: Attachment[];
+	  }
 	| { type: "transcript"; id: string; text: string; target?: Target }
 	| { type: "assistant_delta"; id: string; delta: string; target?: Target; profileId?: string }
 	| { type: "assistant_final"; id: string; text: string; target?: Target; profileId?: string; artifacts?: Artifact[] }
