@@ -31,9 +31,13 @@ sealed class ServerEvent {
 
 	@Serializable
 	@SerialName("user_message")
-	data class UserMessage(val id: String, val text: String, val source: String = "text", val target: String? = null
-	@Serializable
-	val attachments: List<AttachmentRef> = emptyList(), : ServerEvent()
+	data class UserMessage(
+		val id: String,
+		val text: String,
+		val source: String = "text",
+		val target: String? = null,
+		val attachments: List<AttachmentRef> = emptyList(),
+	) : ServerEvent()
 
 	@Serializable
 	@SerialName("transcript")
