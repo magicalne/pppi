@@ -4,9 +4,7 @@
 
 import type { AgentStatus, ModelInfo } from "@pppi/protocol";
 import { useRef, useState } from "react";
-
-/** pi's canonical thinking ladder (pi-agent-core ThinkingLevel). */
-const LADDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+import { LADDER, brainDead, disabledReason, nextTapLevel } from "./brainState.ts";
 
 /** Brightness of the brain per level — dim at off, fully lit at max. */
 const FILL_ALPHA: Record<string, number> = {
@@ -93,11 +91,14 @@ export function StatusBar(props: {
 	const [linger, setLinger] = useState<string | null>(null);
 	const trackRef = useRef<HTMLDivElement | null>(null);
 	const lingerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	// #48: distinguish a TAP (no meaningful movement) from the swipe gesture
+	const downAt = useRef<{ x: number; y: number } | null>(null);
+	const dragged = useRef(false);
 
 	const stops = status?.thinkingLevels ?? [];
 	const level = status?.thinkingLevel ?? "off";
 	const curIdx = Math.max(0, stops.indexOf(level));
-	const noThinking = !status?.model || (!status.model.reasoning && stops.length <= 1);
+	const noThinking = brainDead(status?.model ?? null, stops); // #48: map-aware
 	const brainDisabled = !active || noThinking;
 
 	const showChip = (text: string) => {
@@ -127,16 +128,13 @@ export function StatusBar(props: {
 
 	const onBrainDown = (e: React.PointerEvent<HTMLDivElement>) => {
 		if (brainDisabled) {
-			if (active)
-				props.notify(
-					noThinking
-						? status?.model
-							? "this model doesn't do thinking"
-							: "no model yet"
-						: `switch model in ${props.targetLabel} itself`,
-				);
+			// never a silent dead icon (#48): say why on tap
+			const why = disabledReason(status?.model ?? null, active, props.targetLabel);
+			if (why) props.notify(why);
 			return;
 		}
+		downAt.current = { x: e.clientX, y: e.clientY };
+		dragged.current = false;
 		// touch pointers implicitly capture; explicit capture is a mouse enhancement
 		// and must never break the gesture (synthetic/inactive pointer ids throw)
 		try {
@@ -150,6 +148,8 @@ export function StatusBar(props: {
 
 	const onBrainMove = (e: React.PointerEvent<HTMLDivElement>) => {
 		if (!sliding) return;
+		const d = downAt.current;
+		if (d && !dragged.current && Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) > 6) dragged.current = true;
 		setPreview(stopFromX(e.clientX));
 	};
 
@@ -159,6 +159,13 @@ export function StatusBar(props: {
 	const onBrainUp = () => {
 		if (!sliding) return;
 		setSliding(false);
+		// a TAP (no drag) cycles to the next level instead of no-op'ing (#48);
+		// a swipe commits what the user last saw under their finger
+		if (!dragged.current) {
+			const next = nextTapLevel(stops, level);
+			if (next) stepTo(stops.indexOf(next));
+			return;
+		}
 		if (preview !== curIdx) stepTo(preview);
 	};
 

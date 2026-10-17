@@ -501,7 +501,7 @@ describe("model list (enabled patterns)", () => {
 		patterns.splice(0, patterns.length);
 		ws.send(JSON.stringify({ type: "list_models" }));
 		evt = await nextEvent(ws, "model_list");
-		expect(evt.models.map((m: any) => m.id)).toEqual(["mock-1", "mock-2", "other-1"]);
+		expect(evt.models.map((m: any) => m.id)).toEqual(["mock-1", "mock-2", "nospec", "other-1"]);
 
 		// model switch via the same socket: status reflects the new model
 		ws.send(JSON.stringify({ type: "set_model", provider: "other", modelId: "other-1" }));

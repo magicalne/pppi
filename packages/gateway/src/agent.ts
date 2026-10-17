@@ -89,6 +89,22 @@ export interface AgentPort extends EventEmitter {
 	history(opts?: { before?: number; limit?: number }): Promise<{ entries: HistoryEntry[]; hasMore: boolean }>;
 }
 
+/**
+ * The canonical pi ladder, in order. Thinking-level stop lists are always a
+ * subsequence of this (pi-agent-core ThinkingLevel).
+ */
+const LADDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** Levels in canonical order from a model's thinkingLevelMap; keeps the
+ *  existing list when the map carries nothing new (#48 fallback). */
+export function levelsFromMap(model: ModelInfo | null, keep: string[] = []): string[] {
+	const map = model?.thinkingLevelMap;
+	if (!map || Object.keys(map).length === 0) return keep;
+	const merged = new Set([...keep, ...Object.keys(map)]);
+	"off" in map || merged.add("off"); // off is always a legal level
+	return LADDER.filter((l) => merged.has(l));
+}
+
 /** Map pi's Model (pi-ai) to the wire ModelInfo; tolerant of partial data (mock/tests). */
 export function toModelInfo(m: any): ModelInfo | null {
 	if (!m || typeof m !== "object" || !m.provider || !m.id) return null;
@@ -507,10 +523,17 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 	}
 
 	private async refreshLevels(): Promise<void> {
-		const res = await this.request("get_available_thinking_levels", 15_000);
-		if (res.success && Array.isArray(res.data?.levels)) {
-			this.snapshot.thinkingLevels = res.data.levels.filter((l: unknown): l is string => typeof l === "string");
+		const res = await this.request("get_available_thinking_levels", 15_000).catch(() => null);
+		if (res?.success && Array.isArray(res.data?.levels)) {
+			const levels = res.data.levels.filter((l: unknown): l is string => typeof l === "string");
+			this.snapshot.thinkingLevels = levels.length > 1 ? levels : levelsFromMap(this.snapshot.model, levels);
+			return;
 		}
+		// request failed (or returned junk): the model's thinkingLevelMap is
+		// still pi-truth — a brain-dead status bar on a thinking-capable model
+		// (#48) is worse than deriving the ladder from the map
+		const derived = levelsFromMap(this.snapshot.model, this.snapshot.thinkingLevels);
+		if (derived.length > this.snapshot.thinkingLevels.length) this.snapshot.thinkingLevels = derived;
 	}
 
 	private async refreshStats(): Promise<void> {

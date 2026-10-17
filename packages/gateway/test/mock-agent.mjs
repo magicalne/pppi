@@ -44,6 +44,17 @@ const state = {
 const availableModels = [
 	state.model,
 	{ provider: "mock", id: "mock-2", name: "Mock 2", reasoning: false, contextWindow: 50_000, thinkingLevelMap: {} },
+	// #48 shape: reasoning flag missing but the map carries pi-truth —
+	// supportedLevels() answers ["off"] for it (the under-report the brain
+	// used to die on); levelsFromMap must recover low/medium
+	{
+		provider: "mock",
+		id: "nospec",
+		name: "Mock NoSpec",
+		reasoning: false,
+		contextWindow: 50_000,
+		thinkingLevelMap: { off: "none", low: "low", medium: "medium" },
+	},
 	{
 		provider: "other",
 		id: "other-1",
