@@ -1,3 +1,5 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,6 +10,119 @@ import { Stt } from "../src/stt.ts";
 import { encodeWav16k } from "../src/wav.ts";
 
 const mockAgent = join(dirname(fileURLToPath(import.meta.url)), "mock-agent.mjs");
+
+describe("uploads (#upload)", () => {
+	let app: Awaited<ReturnType<typeof createGateway>>;
+	let driver: RpcAgentDriver;
+	let port = 0;
+	const token = "test-token-1234";
+	// 1x1 transparent PNG
+	const PNG = Buffer.from(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+		"base64",
+	);
+
+	beforeEach(async () => {
+		process.env.PPPI_DIR = mkdtempSync(join(tmpdir(), "pppi-upload-"));
+		driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
+		app = await createGateway({ token, agent: driver, stt: Stt.create({ disabled: true }) });
+		await app.listen(0, "127.0.0.1");
+		port = app.address()?.port ?? 0;
+	});
+	afterEach(async () => {
+		driver.dispose();
+		await app.close();
+		const dir = process.env.PPPI_DIR;
+		process.env.PPPI_DIR = undefined;
+		if (dir) rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("rejects without a token", async () => {
+		const res = await fetch(`http://127.0.0.1:${port}/api/upload?sid=s1&name=x.png`, { method: "POST", body: PNG });
+		expect(res.status).toBe(401);
+	});
+
+	it("rejects non-image bodies (magic-byte sniffed)", async () => {
+		const res = await fetch(`http://127.0.0.1:${port}/api/upload?sid=s1&name=notes.txt`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}` },
+			body: "just text, definitely not an image",
+		});
+		expect(res.status).toBe(400);
+	});
+
+	it("enforces the 10MB cap", async () => {
+		const big = Buffer.alloc(10 * 1024 * 1024 + 1);
+		big[0] = 0x89;
+		big[1] = 0x50;
+		big[2] = 0x4e;
+		big[3] = 0x47;
+		const res = await fetch(`http://127.0.0.1:${port}/api/upload?sid=s1&name=big.png`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}` },
+			body: big,
+		});
+		expect(res.status).toBe(413);
+	});
+
+	it("sanitizes names against path traversal", async () => {
+		const res = await fetch(`http://127.0.0.1:${port}/api/upload?sid=..%2F..&name=..%2Fevil.png`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}` },
+			body: PNG,
+		});
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
+		// the stored path sits under uploads/, with sanitized segments only
+		expect(body.attachment.path).toMatch(/uploads[/\\]_[_.]+[/\\]/);
+		expect(body.attachment.name).not.toContain("..");
+	});
+
+	it("stores, serves back, and rides a chat message into the agent turn", async () => {
+		const up = await fetch(`http://127.0.0.1:${port}/api/upload?sid=s1&name=shot.png`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}` },
+			body: PNG,
+		});
+		expect(up.status).toBe(200);
+		const { attachment } = (await up.json()) as any;
+		expect(attachment).toMatchObject({ name: "shot.png", mime: "image/png", size: PNG.length });
+		expect(existsSync(attachment.path)).toBe(true);
+
+		// serve-back: token required, image/png when present
+		expect((await fetch(`http://127.0.0.1:${port}${attachment.url}`)).status).toBe(401);
+		const served = await fetch(`http://127.0.0.1:${port}${attachment.url}?token=${token}`);
+		expect(served.status).toBe(200);
+		expect(served.headers.get("content-type")).toBe("image/png");
+
+		// round-trip: chat with the attachment reaches the agent as image + path line
+		process.env.MOCK_REPLY = "got {echo}";
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+		await new Promise<void>((resolve, reject) => {
+			ws.on("open", () => {
+				ws.send(JSON.stringify({ type: "hello", token, client: "test" }));
+				resolve();
+			});
+			ws.on("error", reject);
+		});
+		const echo = await new Promise<any>((resolve, reject) => {
+			ws.on("message", (raw) => {
+				const evt = JSON.parse(raw.toString());
+				if (evt.type === "assistant_final") resolve(evt);
+			});
+			setTimeout(() => reject(new Error("no reply")), 10_000);
+			ws.send(JSON.stringify({ type: "chat", text: "what is this?", attachments: [attachment] }));
+		});
+		// the agent saw the image part AND the readable path line
+		expect(echo.text).toContain("[images:1]");
+		expect(echo.text).toContain("[attachment] shot.png");
+		expect(echo.text).toContain(attachment.path);
+		// the user_message echo carries the attachment for bubble rendering
+		ws.close();
+	});
+});
 
 describe("gateway server", () => {
 	let app: Awaited<ReturnType<typeof createGateway>>;

@@ -239,7 +239,9 @@ function handle(cmd) {
 			// with MOCK_DELTA_MS, a first text delta lands early — the agent has
 			// "started replying" even though the turn is still busy.
 			const turn = () => {
-				const text = reply.replace("{echo}", String(cmd.message).slice(0, 120));
+				const text =
+					reply.replace("{echo}", String(cmd.message).slice(0, 120)) +
+					(cmd.images?.length ? ` [images:${cmd.images.length}]` : "");
 				state.isStreaming = true; // truthful, like real pi — status syncs rely on it
 				write({ type: "agent_start" });
 				let started = false;

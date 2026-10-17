@@ -9,8 +9,10 @@ import type {
 	SessionsResponse,
 	TaskUpdate,
 } from "@pppi/protocol";
+import type { Attachment } from "@pppi/protocol";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArtifactCard, useArtifactViewer } from "./Artifact.tsx";
+import { AttachmentChips } from "./Attachments.tsx";
 import { PeerReportToast } from "./PeerReportToast.tsx";
 import { OMNI, SessionDrawer, type Target } from "./SessionDrawer.tsx";
 import { TaskCard, liveTask } from "./Task.tsx";
@@ -40,6 +42,8 @@ type Msg = {
 	tool?: { phase: "start" | "end"; label?: string };
 	/** artifacts extracted from this reply by the gateway (#17) */
 	artifacts?: Artifact[];
+	/** uploads riding this message (#upload) */
+	attachments?: Attachment[];
 	/** task fences extracted from this reply (#15) — entry-time snapshots */
 	tasks?: TaskUpdate[];
 	/** ms epoch, set on history entries — anchors older-page loads */
@@ -155,6 +159,10 @@ export default function App() {
 	const [connOpen, setConnOpen] = useState(false);
 	const [sessions, setSessions] = useState<SessionsResponse | null>(null);
 	const [textInput, setTextInput] = useState("");
+	// #upload: picked files awaiting the next text send (voice note: they
+	// ride the NEXT text turn — speech alone can't carry them)
+	const [pendingFiles, setPendingFiles] = useState<Array<{ id: string; file: File; url: string }>>([]);
+	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const [hasMoreHistory, setHasMoreHistory] = useState(false);
 	const [serverVersion, setServerVersion] = useState("");
 	const wsRef = useRef<WebSocket | null>(null);
@@ -492,10 +500,38 @@ export default function App() {
 
 	const sendText = useCallback(() => {
 		const text = textInput.trim();
-		if (!text || !wsRef.current) return;
-		wsRef.current.send(JSON.stringify({ type: "chat", text, target: target.id }));
-		setTextInput("");
-	}, [textInput, target]);
+		if ((!text && pendingFiles.length === 0) || !wsRef.current) return;
+		if (pendingFiles.length === 0) {
+			wsRef.current.send(JSON.stringify({ type: "chat", text, target: target.id }));
+			setTextInput("");
+			return;
+		}
+		// upload the picked files, then send text + refs in one chat message
+		const sid = conn?.id ?? "web";
+		void (async () => {
+			const uploaded: Attachment[] = [];
+			for (const f of pendingFiles) {
+				const res = await fetch(
+					`${conn?.url ?? ""}/api/upload?sid=${encodeURIComponent(sid)}&name=${encodeURIComponent(f.file.name)}`,
+					{
+						method: "POST",
+						headers: { authorization: `Bearer ${conn?.token ?? ""}` },
+						body: f.file,
+					},
+				).catch(() => null);
+				if (!res?.ok) {
+					showNotice(`couldn't upload ${f.file.name}`);
+					return; // keep every chip; nothing half-sent
+				}
+				const body = (await res.json()) as { attachment: Attachment };
+				uploaded.push(body.attachment);
+			}
+			wsRef.current?.send(JSON.stringify({ type: "chat", text, target: target.id, attachments: uploaded }));
+			for (const f of pendingFiles) URL.revokeObjectURL(f.url);
+			setPendingFiles([]);
+			setTextInput("");
+		})();
+	}, [textInput, target, pendingFiles, conn, showNotice]);
 
 	const toggleVoice = useCallback(() => {
 		if (!conn) return;
@@ -687,6 +723,9 @@ export default function App() {
 									{m.source === "voice" && <span className="mic-glyph">🎙</span>}
 									{m.text}
 								</div>
+								{m.attachments?.length ? (
+									<AttachmentChips attachments={m.attachments} token={conn?.token ?? ""} />
+								) : null}
 								<MsgCopyButton text={m.text} />
 							</div>
 						);
@@ -822,6 +861,51 @@ export default function App() {
 					)}
 					{!voice.on && !voice.state.boot && (
 						<>
+							{pendingFiles.length > 0 && (
+								<div className="attach-chips">
+									{pendingFiles.map((f) => (
+										<span className="attach-chip" key={f.id}>
+											<img src={f.url} alt={f.file.name} />
+											<button
+												type="button"
+												aria-label={`remove ${f.file.name}`}
+												onClick={() => {
+													URL.revokeObjectURL(f.url);
+													setPendingFiles((prev) => prev.filter((x) => x.id !== f.id));
+												}}
+											>
+												✕
+											</button>
+										</span>
+									))}
+								</div>
+							)}
+							<button
+								type="button"
+								className="attach"
+								aria-label="attach images"
+								onClick={() => fileInputRef.current?.click()}
+							>
+								📎
+							</button>
+							<input
+								ref={fileInputRef}
+								type="file"
+								accept="image/png,image/jpeg,image/webp"
+								multiple
+								hidden
+								onChange={(e) => {
+									const files = Array.from(e.target.files ?? []);
+									if (files.length) {
+										setPendingFiles((prev) => [
+											...prev,
+											...files.map((file) => ({ id: crypto.randomUUID(), file, url: URL.createObjectURL(file) })),
+										]);
+									}
+									e.target.value = "";
+								}}
+							/>
+
 							<input
 								value={textInput}
 								onChange={(e) => setTextInput(e.target.value)}

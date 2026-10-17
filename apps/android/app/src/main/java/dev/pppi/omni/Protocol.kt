@@ -31,7 +31,9 @@ sealed class ServerEvent {
 
 	@Serializable
 	@SerialName("user_message")
-	data class UserMessage(val id: String, val text: String, val source: String = "text", val target: String? = null) : ServerEvent()
+	data class UserMessage(val id: String, val text: String, val source: String = "text", val target: String? = null
+	@Serializable
+	val attachments: List<AttachmentRef> = emptyList(), : ServerEvent()
 
 	@Serializable
 	@SerialName("transcript")
@@ -116,6 +118,16 @@ data class Artifact(
 	val title: String,
 	val kind: String = "html",
 	val content: String,
+)
+
+/** An uploaded file riding a chat message (protocol v9; UI comes later). */
+@Serializable
+data class AttachmentRef(
+	val path: String,
+	val name: String,
+	val mime: String = "application/octet-stream",
+	val size: Long = 0,
+	val url: String = "",
 )
 
 /**
