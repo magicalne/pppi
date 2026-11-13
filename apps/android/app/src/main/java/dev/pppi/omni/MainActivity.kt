@@ -707,7 +707,7 @@ fun ChatScreen(
 					}
 					is ServerEvent.Transcript -> {
 						pendingVoiceId = evt.id
-								messages.add(Msg(evt.id, "user", evt.text, "voice", evt.target, attachments = evt.attachments))
+						messages.add(Msg(evt.id, "user", evt.text, "voice", evt.target))
 					}
 					is ServerEvent.UserMessage -> {
 						val idx = messages.indexOfFirst { it.id == evt.id }
