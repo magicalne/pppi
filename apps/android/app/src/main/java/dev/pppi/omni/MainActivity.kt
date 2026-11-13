@@ -201,7 +201,7 @@ class MainActivity : ComponentActivity() {
 	}
 }
 
-data class Msg(val id: String, val role: String, val text: String, val source: String?, val target: String? = null, val profileId: String? = null, val ts: Long = 0, val artifacts: List<Artifact> = emptyList(), val tasks: List<TaskUpdate> = emptyList())
+data class Msg(val id: String, val role: String, val text: String, val source: String?, val target: String? = null, val profileId: String? = null, val ts: Long = 0, val artifacts: List<Artifact> = emptyList(), val tasks: List<TaskUpdate> = emptyList(), val attachments: List<AttachmentRef> = emptyList())
 
 /** the recent window cached on the client; older pages load only on demand (scroll to top) */
 const val HISTORY_PAGE = 50
@@ -210,6 +210,12 @@ data class UiTarget(val id: String?, val label: String) {
 	companion object {
 		val OMNI = UiTarget(null, "Omni")
 	}
+}
+
+/** mirror-program navigation: full-screen surfaces over the chat root */
+sealed interface NavScreen {
+	data object Chat : NavScreen
+	data object Sessions : NavScreen
 }
 
 typealias ClientFactory = (
@@ -590,7 +596,14 @@ fun ChatScreen(
 		)
 	}
 	var selected by remember { mutableStateOf(UiTarget.OMNI) }
-	var sheetOpen by remember { mutableStateOf(false) }
+	// mirror program (#57): screen backstack — Chat / Sessions / Detail;
+	// later tasks (push-to-talk, uploads) extend the Chat screen
+	var screen by remember { mutableStateOf<NavScreen>(NavScreen.Chat) }
+	var detailRow by remember { mutableStateOf<SessionRow?>(null) }
+	androidx.activity.compose.BackHandler(enabled = screen != NavScreen.Chat || detailRow != null) {
+		detailRow = null
+		if (screen != NavScreen.Chat) screen = NavScreen.Chat
+	}
 	var headerPx by remember { mutableIntStateOf(0) }
 	var sessions by remember { mutableStateOf<SessionsResponseDto?>(null) }
 
@@ -672,7 +685,7 @@ fun ChatScreen(
 					is ServerEvent.HelloOk -> {
 						agentState = evt.agent.state
 						messages.clear()
-						messages.addAll(evt.history.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId, it.ts, it.artifacts, it.tasks) })
+						messages.addAll(mergeHelloHistory(emptyList(), evt.history.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId, it.ts, it.artifacts, it.tasks) }))
 						if (evt.tasks.isNotEmpty()) liveTasks = liveTasks + evt.tasks.associateBy { it.id }
 						hasMoreHistory = evt.history.size >= HISTORY_PAGE
 						// learn the machine's name + omni profile color once, off the UI thread
@@ -698,8 +711,8 @@ fun ChatScreen(
 					}
 					is ServerEvent.UserMessage -> {
 						val idx = messages.indexOfFirst { it.id == evt.id }
-						if (idx >= 0) messages[idx] = Msg(evt.id, "user", evt.text, evt.source, evt.target)
-						else messages.add(Msg(evt.id, "user", evt.text, evt.source, evt.target))
+						if (idx >= 0) messages[idx] = messages[idx].copy(attachments = evt.attachments)
+						else messages.add(Msg(evt.id, "user", evt.text, evt.source, evt.target, attachments = evt.attachments))
 						pendingVoiceId = null
 					}
 					is ServerEvent.AssistantDelta -> {
@@ -758,8 +771,11 @@ fun ChatScreen(
 						if (older.isEmpty()) {
 							hasMoreHistory = false
 						} else {
-							// prepend; LazyColumn's item keys keep the viewport anchored
-							messages.addAll(0, older)
+							// prepend deduped (#22: overlap pages after reconnects must
+							// not duplicate); LazyColumn keys keep the viewport anchored
+							val merged = mergeOlderPage(messages.toList(), older)
+							messages.clear()
+							messages.addAll(merged)
 							hasMoreHistory = evt.hasMore
 						}
 					}
@@ -781,8 +797,8 @@ fun ChatScreen(
 	}
 
 	// poll session states while a peer is selected or the sheet is open
-	LaunchedEffect(sheetOpen, selected) {
-		while (sheetOpen || selected.id != null) {
+	LaunchedEffect(screen, selected) {
+		while (screen != NavScreen.Chat || selected.id != null) {
 			sessions = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
 				sessionsFetcher(server, token)
 			}
@@ -1085,7 +1101,7 @@ fun ChatScreen(
 			modifier = Modifier
 				.fillMaxWidth()
 				.background(theme.bg)
-				.clickable { sheetOpen = true }
+				.clickable { screen = NavScreen.Sessions }
 				.semantics { contentDescription = "sessions" }
 				.onGloballyPositioned { headerPx = it.size.height }
 				.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -1181,6 +1197,9 @@ fun ChatScreen(
 									.padding(horizontal = 14.dp, vertical = 10.dp),
 							)
 							}
+						}
+						m.attachments.takeIf { it.isNotEmpty() }?.let {
+							AttachmentChips(theme, it, server, token)
 						}
 						MsgCopyAffordance(m.text, theme)
 					}
@@ -1462,86 +1481,28 @@ MsgCopyAffordance(m.text, theme, alignEnd = false)
 	}
 
 	// ---- target tree drawer (PRD §4): drops from the presence bar, in front of chat
-	if (sheetOpen) {
-		Box(Modifier.fillMaxSize()) {
-			Box(
-				Modifier
-					.fillMaxSize()
-					.pointerInput(Unit) { detectTapGestures { sheetOpen = false } }
-					.background(Color.Black.copy(alpha = 0.45f)),
-			)
-			val headerDp = with(LocalDensity.current) { headerPx.toDp() }
-			Column(
-				Modifier
-					.padding(top = headerDp + 8.dp, start = 12.dp, end = 12.dp)
-					.widthIn(max = 340.dp)
-					.heightIn(max = 460.dp)
-					.verticalScroll(rememberScrollState())
-					.clip(RoundedCornerShape(18.dp))
-					.background(theme.bg)
-					.border(1.dp, theme.line, RoundedCornerShape(18.dp))
-					.padding(vertical = 8.dp),
-			) {
-			Text(
-				"SESSIONS",
-				color = theme.dim,
-				fontSize = 12.sp,
-				modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-			)
-			TreeRow(theme, "Omni", "the whole fleet", selected.id == null, depth = 0) {
-				selected = UiTarget.OMNI
-				sheetOpen = false
-			}
-			for (p in sessions?.projects ?: emptyList()) {
-				val mains = p.sessions.filter { it.worktree == null }
-				if (mains.isEmpty()) {
-					TreeRow(theme, "${p.name} — no open session", "", depth = 1, dim = true)
-				}
-				for ((i, s) in mains.withIndex()) {
-					val label = if (i == 0) p.name else (s.name ?: "main")
-					TreeRow(theme, label, stateLabel(s.state), selected.id == s.sessionId, depth = 1) {
-						selected = UiTarget(s.sessionId, label)
-						sheetOpen = false
-					}
-				}
-				for (s in p.sessions) {
-					if (s.worktree == null) continue
-					TreeRow(theme, s.worktree ?: "worktree", stateLabel(s.state), selected.id == s.sessionId, depth = 2) {
-						selected = UiTarget(s.sessionId, s.worktree ?: "worktree")
-						sheetOpen = false
-					}
-				}
-			}
-			for (s in sessions?.others ?: emptyList()) {
-				val label = s.name ?: "#${s.sessionId.take(4)}"
-				TreeRow(theme, label, stateLabel(s.state), selected.id == s.sessionId, depth = 1) {
-					selected = UiTarget(s.sessionId, label)
-					sheetOpen = false
-				}
-			}
-			Box(
-				Modifier
-					.padding(horizontal = 16.dp, vertical = 6.dp)
-					.fillMaxWidth()
-					.height(1.dp)
-					.background(theme.line),
-			)
-			Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-				Text(
-					"Unpair this device",
-					color = theme.dim,
-					fontSize = 14.sp,
-					modifier = Modifier
-						.fillMaxWidth()
-						.clip(RoundedCornerShape(12.dp))
-						.border(1.dp, theme.line, RoundedCornerShape(12.dp))
-						.clickable { sheetOpen = false; onDisconnect() }
-						.padding(12.dp),
-					textAlign = TextAlign.Center,
-				)
-			}
-		}
-		}
+	// ---- mirror-program screens (#57): fleet list + session detail --------
+	if (screen == NavScreen.Sessions) {
+		SessionsScreen(
+			theme = theme,
+			rows = sessionsRows(sessions, sessions?.profiles ?: emptyMap()),
+			selectedId = selected.id,
+			onPick = { row ->
+				selected = if (row.kind == SessionRow.Kind.OMNI) UiTarget.OMNI else UiTarget(row.key, row.label)
+				screen = NavScreen.Chat
+			},
+			onOpenDetail = { row -> detailRow = row },
+			onBack = { screen = NavScreen.Chat },
+		)
+	}
+	detailRow?.let { row ->
+		SessionDetailScreen(
+			theme = theme,
+			row = row,
+			profile = sessions?.profiles?.get(row.key),
+			omniStatus = agentStatus,
+			onBack = { detailRow = null },
+		)
 	}
 
 	// ---- model sheet (enabled models from pi settings) ----
