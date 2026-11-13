@@ -598,7 +598,7 @@ fun ChatScreen(
 	var selected by remember { mutableStateOf(UiTarget.OMNI) }
 	// mirror program (#57): screen backstack — Chat / Sessions / Detail;
 	// later tasks (push-to-talk, uploads) extend the Chat screen
-	var screen by remember { mutableStateOf(NavScreen.Chat) }
+	var screen by remember { mutableStateOf<NavScreen>(NavScreen.Chat) }
 	var detailRow by remember { mutableStateOf<SessionRow?>(null) }
 	androidx.activity.compose.BackHandler(enabled = screen != NavScreen.Chat || detailRow != null) {
 		detailRow = null
@@ -711,8 +711,8 @@ fun ChatScreen(
 					}
 					is ServerEvent.UserMessage -> {
 						val idx = messages.indexOfFirst { it.id == evt.id }
-						if (idx >= 0) messages[idx] = Msg(evt.id, "user", evt.text, evt.source, evt.target)
-								else messages.add(Msg(evt.id, "user", evt.text, evt.source, evt.target, attachments = evt.attachments))
+						if (idx >= 0) messages[idx] = messages[idx].copy(attachments = evt.attachments)
+						else messages.add(Msg(evt.id, "user", evt.text, evt.source, evt.target, attachments = evt.attachments))
 						pendingVoiceId = null
 					}
 					is ServerEvent.AssistantDelta -> {
