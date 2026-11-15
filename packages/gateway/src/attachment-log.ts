@@ -11,7 +11,6 @@ import { pppiDir } from "./config.ts";
 
 type Record_ = { ts: number; text: string; attachments: Attachment[] };
 
-const MAX_RECORDS = 500;
 let cache: Map<number, Record_[]> | null = null;
 
 function logPath(): string {

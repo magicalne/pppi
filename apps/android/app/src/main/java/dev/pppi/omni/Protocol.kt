@@ -155,9 +155,9 @@ data class ChatEntry(
 	val ts: Long = 0,
 	val target: String? = null,
 	val profileId: String? = null,
-	val artifacts: List<Artifact> = emptyList(
-	val attachments: List<AttachmentRef> = emptyList(),),
+	val artifacts: List<Artifact> = emptyList(),
 	val tasks: List<TaskUpdate> = emptyList(),
+	val attachments: List<AttachmentRef> = emptyList(),
 )
 
 @Serializable

@@ -622,7 +622,9 @@ fun ChatScreen(
 				null
 			}
 		}
-		if (picked.isNotEmpty()) pendingUploads = pendingUploads + picked
+		val allowed = picked.filter { isAllowedUploadName(it.name) }
+		if (picked.isNotEmpty() && allowed.isEmpty()) notice = "unsupported type — images, pdf, txt, md, csv, json, xml, yaml, log"
+		if (allowed.isNotEmpty()) pendingUploads = pendingUploads + allowed
 	}
 	androidx.activity.compose.BackHandler(enabled = screen != NavScreen.Chat || detailRow != null) {
 		detailRow = null
@@ -1424,7 +1426,7 @@ MsgCopyAffordance(m.text, theme, alignEnd = false)
 					modifier = Modifier
 						.size(44.dp)
 						.clip(CircleShape)
-						.clickable(enabled = !recording && !voiceOn) { attachPicker.launch(PICKER_MIME_TYPES) }
+						.clickable(enabled = !recording && !voiceOn) { attachPicker.launch("*/*") }
 						.testTag("pppi.attach"),
 					contentAlignment = Alignment.Center,
 				) {

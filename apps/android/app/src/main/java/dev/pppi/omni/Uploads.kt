@@ -27,6 +27,13 @@ val PICKER_MIME_TYPES = arrayOf(
 	"text/yaml",
 )
 
+/** client-side guard for picker results (the contract takes one mime string,
+ *  so the picker opens general content and we filter by name here) */
+fun isAllowedUploadName(name: String): Boolean {
+	val ext = name.substringAfterLast('.', "").lowercase()
+	return ext in setOf("png", "jpg", "jpeg", "webp", "pdf", "txt", "md", "csv", "json", "xml", "yaml", "yml", "log")
+}
+
 /** chip icon + label for a pending/sent attachment (pure, testable) */
 fun attachmentChipModel(name: String, mime: String, size: Long): ChipModel {
 	val icon = when {

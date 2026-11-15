@@ -61,7 +61,7 @@ describe("attachment history log (#50 v1 gap closed)", () => {
 		resetAttachmentLogForTest();
 	});
 	afterAll(() => {
-		delete process.env.PPPI_DIR;
+		process.env.PPPI_DIR = undefined;
 		rmSync(dir, { recursive: true, force: true });
 	});
 

@@ -18,6 +18,16 @@ class UploadsTest {
 	}
 
 	@Test
+	fun pickedNamesAreFilteredAgainstTheAllowlist() {
+		assertTrue(isAllowedUploadName("shot.png"))
+		assertTrue(isAllowedUploadName("Spec.PDF"))
+		assertTrue(isAllowedUploadName("data.json"))
+		assertTrue(!isAllowedUploadName("tool.exe"))
+		assertTrue(!isAllowedUploadName("archive.zip"))
+		assertTrue(!isAllowedUploadName("noext"))
+	}
+
+	@Test
 	fun chipModelsPickIconsByType() {
 		assertEquals("🖼", attachmentChipModel("shot.png", "image/png", 10).icon)
 		assertEquals("📕", attachmentChipModel("spec.pdf", "application/pdf", 10).icon)
