@@ -1,4 +1,4 @@
-# Uploads — attach screenshots and files to chat (#upload)
+# Uploads — attach files to chat (#upload, v2 #59)
 
 Attach an image from the composer (📎), type a line of text, send: the files
 upload first, then ride the message.
@@ -36,14 +36,22 @@ ride that message.
 - **Text-only models**: the model sees the `[attachment] … — path` line and
   can open/read the file with its tools (the path is server-local).
 
-## v1 limits (deliberate)
+## v2 (#59): general formats + Android parity + history
 
-- Images only (png/jpeg/webp); other file types are a natural follow-up —
-  the endpoint + references would carry them, only the sniff would widen.
-- History reload does not re-attach: the live `user_message` echo renders
-  thumbnails; older messages lose them after a reload (pi's history stores
-  images in the session file, not as our references). Re-ask the agent if
-  you need to look again.
-- Android client: gateway + protocol are ready (additive fields with
-  defaults in the Kotlin mirror); the composer UI is web-first, Android
-  parity tracked separately.
+- **Allowlist**: images (png/jpeg/webp, magic-sniffed — unchanged) plus
+  documents by extension: **pdf, txt, md, csv, json, xml, yaml, log**. PDFs
+  are `%PDF-` magic-checked; anything else is rejected with the supported
+  list. No generic binary catch-all (deliberate security posture). Cap is
+  **20MB**.
+- **Per-type agent delivery**: images → ImageContent vision parts
+  (unchanged); text-ish types inline a **short preview** (first ~800 chars,
+  JSON-escaped) alongside the `[attachment] … — path` line so the agent
+  knows what the file is without opening it; **PDFs stay path-only** (the
+  agent opens them with its tools).
+- **Android composer parity**: 📎 in the composer opens the system picker
+  (photo/document), uploads via the same endpoint, chips + image thumbs in
+  chat and history.
+- **History reload re-attaches**: the gateway logs every chat-with-
+  attachments to `~/.pppi/uploads/messages.jsonl` and merges refs back into
+  hello/history entries (matched by timestamp + text, since ChatEntry ids
+  are regenerated per fetch).

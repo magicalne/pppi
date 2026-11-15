@@ -157,6 +157,7 @@ data class ChatEntry(
 	val profileId: String? = null,
 	val artifacts: List<Artifact> = emptyList(),
 	val tasks: List<TaskUpdate> = emptyList(),
+	val attachments: List<AttachmentRef> = emptyList(),
 )
 
 @Serializable
@@ -168,7 +169,12 @@ sealed class ClientMessage {
 
 	@Serializable
 	@SerialName("chat")
-	data class Chat(val text: String, val source: String = "text", val target: String? = null) : ClientMessage()
+	data class Chat(
+		val text: String,
+		val source: String = "text",
+		val target: String? = null,
+		val attachments: List<AttachmentRef> = emptyList(),
+	) : ClientMessage()
 
 	@Serializable
 	@SerialName("abort")

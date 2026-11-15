@@ -159,6 +159,8 @@ export type ChatEntry = {
 	/** task fences extracted from this entry's text (#15) — status as of THEN;
 	 *  live status arrives via `task` events / hello_ok.tasks */
 	tasks?: TaskUpdate[];
+	/** uploads that rode this message (v2 #59: persisted server-side, ride history reloads) */
+	attachments?: Attachment[];
 };
 
 // ---------------------------------------------------------------- client → server

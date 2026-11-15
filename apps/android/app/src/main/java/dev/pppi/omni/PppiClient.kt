@@ -75,9 +75,12 @@ class PppiClient(
 		retryDelayMs = (retryDelayMs * 2).coerceAtMost(15_000)
 	}
 
-	override fun sendChat(text: String, target: String?) {
+	override fun sendChat(text: String, target: String?, attachments: List<AttachmentRef>) {
 		ws?.send(
-			protocolJson.encodeToString(ClientMessage.serializer(), ClientMessage.Chat(text, target = target)),
+			protocolJson.encodeToString(
+				ClientMessage.serializer(),
+				ClientMessage.Chat(text, target = target, attachments = attachments),
+			),
 		)
 	}
 

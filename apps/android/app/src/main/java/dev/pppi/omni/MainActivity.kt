@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -600,6 +601,31 @@ fun ChatScreen(
 	// later tasks (push-to-talk, uploads) extend the Chat screen
 	var screen by remember { mutableStateOf<NavScreen>(NavScreen.Chat) }
 	var detailRow by remember { mutableStateOf<SessionRow?>(null) }
+	// uploads v2 (#59): picked files await the next send
+	var pendingUploads by remember { mutableStateOf<List<PendingUpload>>(emptyList()) }
+	val attachPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+		val picked = uris.mapNotNull { u ->
+			try {
+				val cursor = context.contentResolver.query(u, null, null, null, null)
+				cursor?.use { c ->
+					if (!c.moveToFirst()) return@use null
+				val nameIdx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+				val sizeIdx = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+				PendingUpload(
+						uri = u,
+						name = if (nameIdx >= 0) c.getString(nameIdx) ?: "file" else "file",
+						mime = context.contentResolver.getType(u) ?: "application/octet-stream",
+						size = if (sizeIdx >= 0 && !c.isNull(sizeIdx)) c.getLong(sizeIdx) else 0L,
+					)
+				}
+			} catch (_: Exception) {
+				null
+			}
+		}
+		val allowed = picked.filter { isAllowedUploadName(it.name) }
+		if (picked.isNotEmpty() && allowed.isEmpty()) notice = "unsupported type — images, pdf, txt, md, csv, json, xml, yaml, log"
+		if (allowed.isNotEmpty()) pendingUploads = pendingUploads + allowed
+	}
 	androidx.activity.compose.BackHandler(enabled = screen != NavScreen.Chat || detailRow != null) {
 		detailRow = null
 		if (screen != NavScreen.Chat) screen = NavScreen.Chat
@@ -685,7 +711,7 @@ fun ChatScreen(
 					is ServerEvent.HelloOk -> {
 						agentState = evt.agent.state
 						messages.clear()
-						messages.addAll(mergeHelloHistory(emptyList(), evt.history.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId, it.ts, it.artifacts, it.tasks) }))
+						messages.addAll(mergeHelloHistory(emptyList(), evt.history.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId, it.ts, it.artifacts, it.tasks, it.attachments) }))
 						if (evt.tasks.isNotEmpty()) liveTasks = liveTasks + evt.tasks.associateBy { it.id }
 						hasMoreHistory = evt.history.size >= HISTORY_PAGE
 						// learn the machine's name + omni profile color once, off the UI thread
@@ -767,7 +793,7 @@ fun ChatScreen(
 					}
 					is ServerEvent.HistoryPageEvt -> {
 						loadingHistory = false
-						val older = evt.entries.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId, it.ts, it.artifacts, it.tasks) }
+						val older = evt.entries.map { Msg(it.id, it.role, it.text, it.source, it.target, it.profileId, it.ts, it.artifacts, it.tasks, it.attachments) }
 						if (older.isEmpty()) {
 							hasMoreHistory = false
 						} else {
@@ -829,9 +855,28 @@ fun ChatScreen(
 
 	fun sendChat() {
 		val t = input.trim()
-		if (t.isEmpty()) return
-		client.sendChat(t, selected.id)
+		if (t.isEmpty() && pendingUploads.isEmpty()) return
+		if (pendingUploads.isEmpty()) {
+			client.sendChat(t, selected.id)
+			input = ""
+			return
+		}
+		// upload first, then one chat message carrying the refs (#59)
+		val picked = pendingUploads
+		pendingUploads = emptyList()
+		val text0 = t
 		input = ""
+		thread(name = "pppi-upload") {
+			val refs = picked.mapNotNull { p ->
+				val bytes = readUploadBytes(context.contentResolver, p.uri) ?: return@mapNotNull null
+				uploadAttachment(server, token, "android", p.name, bytes)
+			}
+			if (refs.isEmpty()) {
+				notice = "couldn't read or upload the attachment(s)"
+				return@thread
+			}
+			client.sendChat(text0, selected.id, refs)
+		}
 	}
 
 	fun startRecording() {
@@ -1375,6 +1420,39 @@ MsgCopyAffordance(m.text, theme, alignEnd = false)
 						enabled = !recording,
 						modifier = Modifier.weight(1f).testTag("pppi.composer"),
 					)
+				}
+				// uploads v2 (#59): attach + pending chips ride the next send
+				Box(
+					modifier = Modifier
+						.size(44.dp)
+						.clip(CircleShape)
+						.clickable(enabled = !recording && !voiceOn) { attachPicker.launch("*/*") }
+						.testTag("pppi.attach"),
+					contentAlignment = Alignment.Center,
+				) {
+					Text("📎", fontSize = 17.sp, color = theme.dim)
+				}
+				if (pendingUploads.isNotEmpty()) {
+					Row(
+						Modifier
+							.widthIn(max = 180.dp)
+							.horizontalScroll(rememberScrollState()),
+						horizontalArrangement = Arrangement.spacedBy(6.dp),
+					) {
+						for (p in pendingUploads) {
+							val chip = attachmentChipModel(p.name, p.mime, p.size)
+							Row(
+								Modifier
+									.clip(RoundedCornerShape(8.dp))
+									.border(1.dp, theme.line, RoundedCornerShape(8.dp))
+									.clickable { pendingUploads = pendingUploads - p }
+									.padding(horizontal = 8.dp, vertical = 4.dp),
+								verticalAlignment = Alignment.CenterVertically,
+							) {
+								Text("${chip.icon} ${chip.label} ✕", color = theme.dim, fontSize = 11.sp, maxLines = 1)
+							}
+						}
+					}
 				}
 				Box(
 					modifier = Modifier

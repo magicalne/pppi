@@ -42,17 +42,28 @@ describe("uploads (#upload)", () => {
 		expect(res.status).toBe(401);
 	});
 
-	it("rejects non-image bodies (magic-byte sniffed)", async () => {
+	it("rejects non-allowlisted types with a clear reason (v2)", async () => {
+		const res = await fetch(`http://127.0.0.1:${port}/api/upload?sid=s1&name=tool.exe`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${token}` },
+			body: "MZ fake executable",
+		});
+		expect(res.status).toBe(400);
+		expect(((await res.json()) as any).error).toContain("unsupported type");
+	});
+
+	it("accepts allowlisted documents (v2) and reports their type", async () => {
 		const res = await fetch(`http://127.0.0.1:${port}/api/upload?sid=s1&name=notes.txt`, {
 			method: "POST",
 			headers: { authorization: `Bearer ${token}` },
 			body: "just text, definitely not an image",
 		});
-		expect(res.status).toBe(400);
+		expect(res.status).toBe(200);
+		expect(((await res.json()) as any).attachment).toMatchObject({ mime: "text/plain", name: "notes.txt" });
 	});
 
-	it("enforces the 10MB cap", async () => {
-		const big = Buffer.alloc(10 * 1024 * 1024 + 1);
+	it("enforces the 20MB cap (v2)", async () => {
+		const big = Buffer.alloc(20 * 1024 * 1024 + 1);
 		big[0] = 0x89;
 		big[1] = 0x50;
 		big[2] = 0x4e;

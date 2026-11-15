@@ -3,7 +3,7 @@ package dev.pppi.omni
 /** Abstraction over the gateway connection so UI tests can inject a fake. */
 interface PppiConnection {
 	fun connect()
-	fun sendChat(text: String, target: String? = null)
+	fun sendChat(text: String, target: String? = null, attachments: List<AttachmentRef> = emptyList())
 	fun abort()
 	fun setModel(provider: String, modelId: String)
 	fun setThinkingLevel(level: String)
