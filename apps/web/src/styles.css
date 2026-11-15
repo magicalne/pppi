@@ -1567,6 +1567,19 @@
 	overflow: hidden;
 	border: 1px solid var(--line);
 }
+.attach-chip .attach-chip-doc {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	width: 130px;
+	height: 100%;
+	padding: 0 6px;
+	font-size: 10.5px;
+	color: var(--text);
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
 .attach-chip img {
 	width: 100%;
 	height: 100%;

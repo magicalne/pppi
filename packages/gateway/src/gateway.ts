@@ -45,6 +45,7 @@ import { minimatch } from "minimatch";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { AgentPort } from "./agent.ts";
 import { entryWithArtifacts, extractArtifacts, extractTasks } from "./artifacts.ts";
+import { recordAttachments, withHistoryAttachments } from "./attachment-log.ts";
 import { AudioService } from "./audio-proxy.ts";
 import { pppiDir, tokensMatch } from "./config.ts";
 import { homeDir } from "./config.ts";
@@ -251,7 +252,35 @@ async function classify(omniSessionId: string, registryDir?: string): Promise<Se
 
 // ---- upload helpers (#upload) -------------------------------------------
 
-const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+export const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+
+/** v2 document allowlist (#59): explicit, no generic binary catch-all.
+ *  Extension -> mime; `preview` types may be inlined to the agent turn. */
+export const UPLOAD_DOC_TYPES: Record<string, { mime: string; preview: boolean }> = {
+	pdf: { mime: "application/pdf", preview: false },
+	txt: { mime: "text/plain", preview: true },
+	md: { mime: "text/markdown", preview: true },
+	csv: { mime: "text/csv", preview: true },
+	json: { mime: "application/json", preview: true },
+	xml: { mime: "application/xml", preview: true },
+	yaml: { mime: "text/yaml", preview: true },
+	yml: { mime: "text/yaml", preview: true },
+	log: { mime: "text/x-log", preview: true },
+};
+
+export type ClassifiedUpload = { mime: string; kind: "image" | "document"; preview: boolean } | null;
+
+/** classify an upload: images by magic bytes (headers lie), documents by
+ *  allowlisted extension with a %PDF magic check — anything else is null. */
+export function classifyUpload(buf: Buffer, name: string): ClassifiedUpload {
+	const img = sniffImageMime(buf);
+	if (img) return { mime: img, kind: "image", preview: false };
+	const ext = sanitizeSeg(name).split(".").pop()?.toLowerCase() ?? "";
+	const doc = UPLOAD_DOC_TYPES[ext];
+	if (!doc) return null;
+	if (ext === "pdf" && buf.subarray(0, 5).toString() !== "%PDF-") return null; // magic-checked
+	return { mime: doc.mime, kind: "document", preview: doc.preview };
+}
 
 /** a readable regular file exists at `p` */
 function isFile(p: string): boolean {
@@ -625,6 +654,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 	): Promise<{ id: string }> {
 		const id = randomUUID();
 		if (!target || target === agent.info.sessionId) {
+			if (attachments.length > 0) recordAttachments(Date.now(), text, attachments);
 			// session commands ride any client's composer; peers get plain text
 			if (await handleSessionCommand(text)) return { id };
 			if (source === "voice") broadcast({ type: "transcript", id, text });
@@ -659,7 +689,22 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 				// unreadable file: the path line below still tells the agent where it was
 			}
 		}
-		const lines = attachments.map((a) => `[attachment] ${a.name} (${a.mime}, ${a.size}B) — ${a.path}`);
+		const lines = attachments.map((a) => {
+			let line = `[attachment] ${a.name} (${a.mime}, ${a.size}B) — ${a.path}`;
+			// text-ish documents: inline a short preview so the agent knows what
+			// it is without opening the file (#59); pdfs/others stay path-only
+			const ext = sanitizeSeg(a.name).split(".").pop()?.toLowerCase() ?? "";
+			if (UPLOAD_DOC_TYPES[ext]?.preview) {
+				try {
+					const raw = readFileSync(a.path).subarray(0, 2048).toString("utf8");
+					const printable = raw.replaceAll("\r", "").trim();
+					if (printable.length > 0) line += `\n  preview: ${JSON.stringify(printable.slice(0, 800))}`;
+				} catch {
+					// unreadable: the path line still says where it is
+				}
+			}
+			return line;
+		});
 		await agent.prompt([text, "", ...lines].join("\n"), { images });
 	}
 
@@ -726,12 +771,16 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			let size = 0;
 			for await (const chunk of req) {
 				size += (chunk as Buffer).length;
-				if (size > UPLOAD_MAX_BYTES) return json(res, 413, { ok: false, error: "file too large (max 10MB)" });
+				if (size > UPLOAD_MAX_BYTES) return json(res, 413, { ok: false, error: "file too large (max 20MB)" });
 				chunks.push(chunk as Buffer);
 			}
 			const buf = Buffer.concat(chunks);
-			const sniffed = sniffImageMime(buf);
-			if (!sniffed) return json(res, 400, { ok: false, error: "only png/jpeg/webp images are accepted" });
+			const kind = classifyUpload(buf, name);
+			if (!kind)
+				return json(res, 400, {
+					ok: false,
+					error: "unsupported type — images (png/jpeg/webp), pdf, txt, md, csv, json, xml, yaml, log",
+				});
 			const dir = join(uploadsDir(), sid);
 			mkdirSync(dir, { recursive: true });
 			const fileName = `${Date.now()}-${name}`;
@@ -743,7 +792,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			const attachment: Attachment = {
 				path: filePath,
 				name,
-				mime: sniffed,
+				mime: kind.mime,
 				size: buf.length,
 				url: `/api/uploads/${sid}/${fileName}`,
 			};
@@ -761,7 +810,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 			if (!isFile(filePath)) return json(res, 404, { ok: false, error: "not found" });
 			const data = readFileSync(filePath);
 			res.writeHead(200, {
-				"Content-Type": sniffImageMime(data) ?? "application/octet-stream",
+				"Content-Type": sniffImageMime(data) ?? "application/octet-stream", // docs fall to octet-stream: safe default
 				"Content-Length": data.length,
 				"Cache-Control": "private, max-age=86400",
 			});
@@ -955,6 +1004,7 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 					history = [...entries, ...peerLog]
 						.map((h) => ({ ...h, id: randomUUID() }))
 						.map(entryWithArtifacts)
+						.map(withHistoryAttachments)
 						.sort((a, b) => a.ts - b.ts)
 						.slice(-50);
 				} catch {
@@ -1018,7 +1068,10 @@ export async function createGateway(opts: GatewayOptions): Promise<Gateway> {
 					});
 					send(ws, {
 						type: "history_page",
-						entries: entries.map((h) => ({ ...h, id: randomUUID() })).map(entryWithArtifacts),
+						entries: entries
+							.map((h) => ({ ...h, id: randomUUID() }))
+							.map(entryWithArtifacts)
+							.map(withHistoryAttachments),
 						hasMore,
 					});
 				})().catch((err) => send(ws, { type: "error", message: String(err.message ?? err) }));

@@ -5,7 +5,7 @@ import type { Attachment } from "@pppi/protocol";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { AttachmentChips } from "../src/Attachments.tsx";
+import { AttachmentChips, fileIconFor } from "../src/Attachments.tsx";
 
 const img: Attachment = {
 	path: "/home/u/.pppi/uploads/s1/1-shot.png",
@@ -43,5 +43,16 @@ describe("AttachmentChips render (#upload)", () => {
 	it("keeps attachment order", () => {
 		const html = renderToStaticMarkup(createElement(AttachmentChips, { attachments: [img, file], token: "t" }));
 		expect(html.indexOf("shot.png")).toBeLessThan(html.indexOf("notes.txt"));
+	});
+});
+
+describe("fileIconFor (#59 typed chips)", () => {
+	it("images, pdfs, data files and everything else get distinct icons", () => {
+		expect(fileIconFor("image/png")).toMatch(/\u{1F5BC}|\u{1F5BC}\uFE0F/u);
+		expect(fileIconFor("application/pdf")).toBe("\u{1F4D5}");
+		expect(fileIconFor("text/csv")).toBe("\u{1F4C4}");
+		expect(fileIconFor("application/json")).toBe("\u{1F4C4}");
+		expect(fileIconFor("application/xml")).toBe("\u{1F4C4}");
+		expect(fileIconFor("text/x-log")).toBe("\u{1F4C1}");
 	});
 });

@@ -12,7 +12,7 @@ import type {
 import type { Attachment } from "@pppi/protocol";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArtifactCard, useArtifactViewer } from "./Artifact.tsx";
-import { AttachmentChips } from "./Attachments.tsx";
+import { AttachmentChips, fileIconFor } from "./Attachments.tsx";
 import { PeerReportToast } from "./PeerReportToast.tsx";
 import { OMNI, SessionDrawer, type Target } from "./SessionDrawer.tsx";
 import { TaskCard, liveTask } from "./Task.tsx";
@@ -865,7 +865,13 @@ export default function App() {
 								<div className="attach-chips">
 									{pendingFiles.map((f) => (
 										<span className="attach-chip" key={f.id}>
-											<img src={f.url} alt={f.file.name} />
+											{f.file.type.startsWith("image/") ? (
+												<img src={f.url} alt={f.file.name} />
+											) : (
+												<span className="attach-chip-doc" title={f.file.name}>
+													{fileIconFor(f.file.type)} {f.file.name}
+												</span>
+											)}
 											<button
 												type="button"
 												aria-label={`remove ${f.file.name}`}
@@ -891,7 +897,7 @@ export default function App() {
 							<input
 								ref={fileInputRef}
 								type="file"
-								accept="image/png,image/jpeg,image/webp"
+								accept="image/png,image/jpeg,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json,application/xml,text/yaml,.md,.yml,.yaml,.log"
 								multiple
 								hidden
 								onChange={(e) => {
