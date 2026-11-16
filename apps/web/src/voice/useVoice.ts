@@ -79,6 +79,7 @@ export function useVoice() {
 	});
 	const [levels, setLevels] = useState({ mic: 0, out: 0 });
 	const refs = useRef({
+		pttArmed: false,
 		mic: null as MicStream | null,
 		client: null as VoiceClient | null,
 		player: null as TtsPlayer | null,
@@ -143,8 +144,10 @@ export function useVoice() {
 		});
 	}, []);
 
+	/** #53: mode "ptt" opens a manual-endpointing session; the mic streams
+	 *  always (keep-alive + levels), ptt frames hold/release the utterance */
 	const start = useCallback(
-		async (base: string, token: string, reconnect = false) => {
+		async (base: string, token: string, reconnect = false, mode: "vad" | "ptt" = "vad") => {
 			const r = refs.current;
 			if (r.client) return;
 			r.lastStart = { base, token };
@@ -156,96 +159,101 @@ export function useVoice() {
 			}));
 			const mic = new MicStream();
 			const player = new TtsPlayer();
-			const client = new VoiceClient(base, token, {
-				onState: (s) => {
-					if (s === "thinking") setPhase("thinking");
-					else if (s === "speaking") setPhase("agent-speaking");
-					else if (s === "listening" && refs.current.phase !== "user-speaking") setPhase("listening");
-				},
-				onVad: (speaking) => {
-					if (speaking) {
-						// the user's voice wins instantly: drop agent audio
-						player.stopAll();
-						refs.current.speakingSince = Date.now();
-						refs.current.stalled = false;
-						setState((s) => ({ ...s, tentative: "", committed: "", stalled: false }));
-						setPhase("user-speaking");
-					} else {
-						refs.current.speakingSince = 0;
-						refs.current.stalled = false;
-						setState((s) => ({ ...s, stalled: false }));
-						if (refs.current.phase === "user-speaking") setPhase("listening");
-					}
-				},
-				onPartial: (committed, tentative) => {
-					if (committed || tentative) {
-						refs.current.lastPartialAt = Date.now();
-						if (refs.current.stalled) {
+			const client = new VoiceClient(
+				base,
+				token,
+				{
+					onState: (s) => {
+						if (s === "thinking") setPhase("thinking");
+						else if (s === "speaking") setPhase("agent-speaking");
+						else if (s === "listening" && refs.current.phase !== "user-speaking") setPhase("listening");
+					},
+					onVad: (speaking) => {
+						if (speaking) {
+							// the user's voice wins instantly: drop agent audio
+							player.stopAll();
+							refs.current.speakingSince = Date.now();
 							refs.current.stalled = false;
-							setState((s) => ({ ...s, committed, tentative, stalled: false }));
+							setState((s) => ({ ...s, tentative: "", committed: "", stalled: false }));
+							setPhase("user-speaking");
+						} else {
+							refs.current.speakingSince = 0;
+							refs.current.stalled = false;
+							setState((s) => ({ ...s, stalled: false }));
+							if (refs.current.phase === "user-speaking") setPhase("listening");
+						}
+					},
+					onPartial: (committed, tentative) => {
+						if (committed || tentative) {
+							refs.current.lastPartialAt = Date.now();
+							if (refs.current.stalled) {
+								refs.current.stalled = false;
+								setState((s) => ({ ...s, committed, tentative, stalled: false }));
+								return;
+							}
+						}
+						setState((s) => ({ ...s, committed, tentative }));
+					},
+					onFinal: (text) => setState((s) => ({ ...s, committed: text, tentative: "" })),
+					onTtsStart: (rate) => {
+						refs.current.ttsRate = rate;
+						refs.current.gate.beginPlayback();
+						setPhase("agent-speaking");
+					},
+					onTtsChunk: (pcm) => {
+						refs.current.gate.feedChunk();
+						player.play(pcm, refs.current.ttsRate);
+						const now = Date.now();
+						if (now - refs.current.levelAt.out >= 80) {
+							refs.current.levelAt.out = now;
+							setLevels((l) => ({ ...l, out: peak16(pcm) }));
+						}
+					},
+					onTtsEnd: (interrupted) => {
+						setPhase("listening");
+						if (interrupted) setState((s) => ({ ...s, notice: "interrupted" }));
+						setLevels((l) => ({ ...l, out: 0 }));
+						// speaker drained locally — end the echo-gate tail, then tell
+						// the server so echo-aware barge-in thresholds can relax
+						void player.waitIdle().then(() => {
+							refs.current.gate.playbackDrained();
+							refs.current.client?.playbackDone();
+						});
+					},
+					onError: (message) => setState((s) => ({ ...s, notice: withTtsFix(message) })),
+					onBoot: (frame: VoiceBootFrame) => {
+						if (frame.stage === "ready") return; // one component done; hello is next
+						if (frame.stage === "failed") {
+							// tts failures name the fix, not just the symptom
+							setBoot(
+								"warming",
+								frame.component === "tts"
+									? withTtsFix(frame.reason ?? "the gateway's voice is not set up")
+									: (frame.reason ?? "the gateway's voice models aren't ready"),
+							);
 							return;
 						}
-					}
-					setState((s) => ({ ...s, committed, tentative }));
+						setBoot("warming", `loading ${BOOT_COMPONENT[frame.component ?? ""] ?? "the voice models"}…`);
+					},
+					onGone: () => {
+						// stop() nulls the refs first, so a live client here = the drop
+						// was not user-initiated → auto-reconnect twice, then give up
+						if (refs.current.client !== client) return;
+						refs.current.dropPhase = refs.current.phase; // #22: for the resume note
+						const attempts = ++refs.current.attempts;
+						void stop();
+						if (attempts <= 2 && refs.current.lastStart) {
+							setBoot("reconnecting");
+							const { base: b, token: t } = refs.current.lastStart;
+							setTimeout(() => void refs.current.startFn?.(b, t, true), 2000);
+						} else {
+							refs.current.attempts = 0;
+							setState((s) => ({ ...s, notice: "voice dropped — tap ● to start again" }));
+						}
+					},
 				},
-				onFinal: (text) => setState((s) => ({ ...s, committed: text, tentative: "" })),
-				onTtsStart: (rate) => {
-					refs.current.ttsRate = rate;
-					refs.current.gate.beginPlayback();
-					setPhase("agent-speaking");
-				},
-				onTtsChunk: (pcm) => {
-					refs.current.gate.feedChunk();
-					player.play(pcm, refs.current.ttsRate);
-					const now = Date.now();
-					if (now - refs.current.levelAt.out >= 80) {
-						refs.current.levelAt.out = now;
-						setLevels((l) => ({ ...l, out: peak16(pcm) }));
-					}
-				},
-				onTtsEnd: (interrupted) => {
-					setPhase("listening");
-					if (interrupted) setState((s) => ({ ...s, notice: "interrupted" }));
-					setLevels((l) => ({ ...l, out: 0 }));
-					// speaker drained locally — end the echo-gate tail, then tell
-					// the server so echo-aware barge-in thresholds can relax
-					void player.waitIdle().then(() => {
-						refs.current.gate.playbackDrained();
-						refs.current.client?.playbackDone();
-					});
-				},
-				onError: (message) => setState((s) => ({ ...s, notice: withTtsFix(message) })),
-				onBoot: (frame: VoiceBootFrame) => {
-					if (frame.stage === "ready") return; // one component done; hello is next
-					if (frame.stage === "failed") {
-						// tts failures name the fix, not just the symptom
-						setBoot(
-							"warming",
-							frame.component === "tts"
-								? withTtsFix(frame.reason ?? "the gateway's voice is not set up")
-								: (frame.reason ?? "the gateway's voice models aren't ready"),
-						);
-						return;
-					}
-					setBoot("warming", `loading ${BOOT_COMPONENT[frame.component ?? ""] ?? "the voice models"}…`);
-				},
-				onGone: () => {
-					// stop() nulls the refs first, so a live client here = the drop
-					// was not user-initiated → auto-reconnect twice, then give up
-					if (refs.current.client !== client) return;
-					refs.current.dropPhase = refs.current.phase; // #22: for the resume note
-					const attempts = ++refs.current.attempts;
-					void stop();
-					if (attempts <= 2 && refs.current.lastStart) {
-						setBoot("reconnecting");
-						const { base: b, token: t } = refs.current.lastStart;
-						setTimeout(() => void refs.current.startFn?.(b, t, true), 2000);
-					} else {
-						refs.current.attempts = 0;
-						setState((s) => ({ ...s, notice: "voice dropped — tap ● to start again" }));
-					}
-				},
-			});
+				mode,
+			);
 			refs.current.mic = mic;
 			refs.current.player = player;
 			refs.current.client = client;
@@ -313,6 +321,11 @@ export function useVoice() {
 					}
 				});
 				setOn(true);
+				// #53: a hold that arrived while connecting fires now
+				if (refs.current.pttArmed) {
+					refs.current.pttArmed = false;
+					refs.current.client?.pttStart();
+				}
 				refs.current.wasWanted = true; // #22: mic armed — auto-resume on unlock if it drops
 				refs.current.dropPhase = null;
 				setBoot(null);
@@ -383,7 +396,27 @@ export function useVoice() {
 
 	const clearNotice = useCallback(() => setState((s) => ({ ...s, notice: null })), []);
 
-	return { on, state, levels, start, stop, interrupt, clearNotice };
+	// ptt hold: begin = ensure the session is up (or start it), then hold
+	const pttBegin = useCallback(
+		(base: string, token: string) => {
+			if (!on) {
+				void start(base, token, false, "ptt");
+				// the hold lands when hello_ok arrives — mark the intent so the
+				// ready path sends ptt_start once the socket is live
+				refs.current.pttArmed = true;
+				return;
+			}
+			refs.current.client?.pttStart();
+		},
+		[start, on],
+	);
+
+	const pttRelease = useCallback(() => {
+		refs.current.pttArmed = false;
+		refs.current.client?.pttEnd();
+	}, []);
+
+	return { on, state, levels, start, stop, interrupt, clearNotice, pttBegin, pttRelease };
 }
 
 function humanSttReason(reason?: string): string {

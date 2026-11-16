@@ -25,10 +25,12 @@ export class VoiceClient {
 	private mic: MicStream | null = null;
 	private live = false;
 
+	/** "vad" = always-listen (default); "ptt" = manual endpointing (#53) */
 	constructor(
 		private readonly base: string,
 		private readonly token: string,
 		private readonly handlers: VoiceHandlers,
+		private readonly mode: "vad" | "ptt" = "vad",
 	) {}
 
 	async start(mic: MicStream): Promise<void> {
@@ -48,7 +50,7 @@ export class VoiceClient {
 				}
 				reject(new Error("voice handshake timed out"));
 			}
-			ws.onopen = () => ws.send(JSON.stringify({ type: "hello", token: this.token, client: "web" }));
+			ws.onopen = () => ws.send(JSON.stringify({ type: "hello", token: this.token, client: "web", mode: this.mode }));
 			ws.onmessage = (m) => {
 				if (typeof m.data === "string") {
 					const evt = JSON.parse(m.data) as VoiceServerEvent;
@@ -104,6 +106,17 @@ export class VoiceClient {
 		if (this.live && sock && sock.readyState === sock.OPEN) {
 			sock.send(JSON.stringify({ type: "interrupt" }));
 		}
+	}
+
+	/** push-to-talk (#53): hold = ptt_start, release = ptt_end (mode:"ptt") */
+	pttStart(): void {
+		const sock = this.ws;
+		if (sock && sock.readyState === sock.OPEN) sock.send(JSON.stringify({ type: "ptt_start" }));
+	}
+
+	pttEnd(): void {
+		const sock = this.ws;
+		if (sock && sock.readyState === sock.OPEN) sock.send(JSON.stringify({ type: "ptt_end" }));
 	}
 
 	/** The local speaker went idle — relax the server's echo-aware barge-in. */

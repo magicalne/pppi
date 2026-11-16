@@ -232,6 +232,8 @@ fun PppiApp(theme: PppiTheme, setTheme: (String) -> Unit) {
 	val store = remember { ConnectionsStore(context) }
 	var connections by remember { mutableStateOf(store.load()) }
 	var activeId by remember { mutableStateOf<String?>(null) }
+	// #53: voice mode — always-listen / push-to-talk / off (Appearance page)
+	var voiceMode by remember { mutableStateOf(VoiceModeStore.load(context)) }
 	var showThemes by remember { mutableStateOf(false) }
 	var machinesOpen by remember { mutableStateOf(false) }
 	val conn = connections.firstOrNull { it.id == activeId } ?: connections.firstOrNull()
@@ -268,6 +270,7 @@ fun PppiApp(theme: PppiTheme, setTheme: (String) -> Unit) {
 			token = conn.token,
 			onDisconnect = { remove(conn.id) },
 			onOpenThemes = { showThemes = true },
+			voiceMode = voiceMode,
 			onOpenMachines = { machinesOpen = true },
 			onConnectionInfo = { name, color ->
 				save(connections.map { if (it.id == conn.id) it.copy(name = name ?: it.name, color = color ?: it.color) else it })
@@ -294,7 +297,15 @@ fun PppiApp(theme: PppiTheme, setTheme: (String) -> Unit) {
 	// its websocket, state and scroll position survive the round trip
 	if (showThemes && conn != null) {
 		Box(Modifier.fillMaxSize().background(theme.bg)) {
-			ThemesPage(theme, setTheme) { showThemes = false }
+			ThemesPage(
+				theme,
+				setTheme,
+				{ showThemes = false },
+				voiceMode,
+			) { m ->
+				voiceMode = m
+				VoiceModeStore.save(context, m)
+			}
 		}
 	}
 
@@ -565,6 +576,8 @@ fun ChatScreen(
 	token: String,
 	onDisconnect: () -> Unit,
 	onOpenThemes: () -> Unit,
+	/** #53: always-listen / push-to-talk / off — picker lives in the Appearance page */
+	voiceMode: VoiceMode = VoiceMode.ALWAYS,
 	onOpenMachines: () -> Unit = {},
 	onConnectionInfo: (String?, String?) -> Unit = { _, _ -> },
 	clientFactory: ClientFactory = ::pppiClientFactory,
@@ -1098,6 +1111,11 @@ fun ChatScreen(
 		voiceBoot = VoiceBootState.Idle
 	}
 
+	// picking OFF in the appearance page ends a live voice session
+	LaunchedEffect(voiceMode) {
+		if (voiceMode == VoiceMode.OFF && voiceOn) stopVoice()
+	}
+
 	fun interruptVoice() {
 		voiceGateRef.get()?.interrupt() // echo gate: explicit cut reopens the mic sooner
 		voiceEngineRef.get()?.stopPlayback()
@@ -1500,6 +1518,16 @@ MsgCopyAffordance(m.text, theme, alignEnd = false)
 											// safety net: an orphaned recording finishes on the next press
 											tryAwaitRelease()
 											stopRecordingAndSend()
+										}
+										voiceMode == VoiceMode.OFF -> {
+											// #53/#54: off means no tap-to-listen; hold-to-talk still works
+											tryAwaitRelease()
+											notice = "voice is off — hold the mic to talk anyway, or pick a mode in ◐"
+										}
+										voiceMode == VoiceMode.PTT && !recording && !voiceOn && !voiceBoot.booting -> {
+											// tap in ptt mode is a hint, not a session start
+											tryAwaitRelease()
+											notice = "push-to-talk — hold the mic, release to send"
 										}
 										// micGranted is remembered state — the permission may have been
 										// revoked in system settings while we stayed alive, and an

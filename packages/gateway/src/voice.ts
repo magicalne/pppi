@@ -162,6 +162,9 @@ export class VoiceSession {
 	private preRoll: Float32Array[] = [];
 	private preRollSamples = 0;
 	private capture: Capture | null = null;
+	/** ptt session (#53): VAD endpointing is bypassed; ptt frames hold/release */
+	private pttMode = false;
+	private pttHold = false;
 
 	// uplink telemetry — makes a deaf session visible ("no audio", "digital
 	// silence", "signal but no speech", or "speech flowing")
@@ -280,7 +283,7 @@ export class VoiceSession {
 			if (this.authed) this.onAudio(data);
 			return;
 		}
-		let msg: { type?: string; token?: string };
+		let msg: { type?: string; token?: string; mode?: string };
 		try {
 			msg = JSON.parse(data.toString()) as { type?: string; token?: string };
 		} catch {
@@ -294,6 +297,7 @@ export class VoiceSession {
 				return this.close("bad token");
 			}
 			this.authed = true;
+			this.pttMode = (msg as { mode?: string }).mode === "ptt";
 			this.deps.onAuthed();
 			// every 5s: what did the uplink actually deliver? the pane reads this
 			this.telemetryTimer = setInterval(() => this.logTelemetry(), 5_000);
@@ -306,6 +310,26 @@ export class VoiceSession {
 			return;
 		}
 		switch (msg.type) {
+			case "ptt_start": {
+				if (!this.pttMode || this.pttHold) break;
+				// manual utterance: open the capture now (no VAD dependency); stop
+				// the agent's speech — the user is talking over it
+				this.pttHold = true;
+				this.speaker?.abort();
+				this.onSpeechStart(false);
+				break;
+			}
+			case "ptt_end": {
+				if (!this.pttHold) break;
+				this.pttHold = false;
+				// release = send: dispatch immediately (no grace window)
+				if (this.capture) {
+					this.capture.speechMs = this.audioMs - this.capture.startedAt;
+					this.send({ type: "vad", speaking: false });
+					void this.dispatchCapture();
+				}
+				break;
+			}
 			case "interrupt":
 				this.interrupt();
 				break;
@@ -332,6 +356,11 @@ export class VoiceSession {
 			pcm[i] = s;
 		}
 
+		if (this.pttMode) {
+			// #53: VAD endpointing is off — audio outside a hold is keep-alive only
+			if (this.pttHold && this.capture) this.appendCapture(pcm);
+			return;
+		}
 		if (this.capture) {
 			this.appendCapture(pcm);
 		} else {

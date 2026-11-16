@@ -169,6 +169,16 @@ class VoiceClient(
 		if (live) ws?.send(VoiceClientMessages.interrupt())
 	}
 
+	/** #53: manual endpointing frames (streaming ptt sessions; the native
+	 *  hold-to-talk recorder uses the batch upload path instead) */
+	fun pttStart() {
+		if (live) ws?.send(VoiceClientMessages.pttStart())
+	}
+
+	fun pttEnd() {
+		if (live) ws?.send(VoiceClientMessages.pttEnd())
+	}
+
 	fun playbackDone() {
 		if (live) ws?.send(VoiceClientMessages.playbackDone())
 	}

@@ -25,6 +25,7 @@ import { StatusBar } from "./status/StatusBar.tsx";
 import { THEMES, type ThemeId, applyTheme, loadTheme } from "./theme.ts";
 import { VoiceWave } from "./voice/VoiceWave.tsx";
 import { useVoice } from "./voice/useVoice.ts";
+import { type VoiceMode, loadVoiceMode, persistVoiceMode } from "./voice/voiceMode.ts";
 import { useWakeLock } from "./wakeLock.ts";
 
 type Pairing = { server: string; token: string };
@@ -183,6 +184,9 @@ export default function App() {
 	/** set when prepending a history page so the scroll effect restores position instead of jumping to bottom */
 	const prependScrollRef = useRef<{ height: number; top: number } | null>(null);
 	const voice = useVoice();
+	// #53: voice mode — always-listen or push-to-talk (long-press the mic)
+	const [voiceMode, setVoiceMode] = useState<VoiceMode>(loadVoiceMode);
+	const [modeOpen, setModeOpen] = useState(false);
 	// issue #18: keep the screen awake while the conversation is live — voice on,
 	// voice booting, or an omni/delegated stream visibly working. The optional
 	// "Keep screen on" toggle (Appearance page) forces it on regardless.
@@ -535,6 +539,11 @@ export default function App() {
 
 	const toggleVoice = useCallback(() => {
 		if (!conn) return;
+		if (voiceMode === "ptt") {
+			// #53: in ptt mode a tap only ends a live session; holds talk
+			if (voice.on || voice.state.boot) void voice.stop(true);
+			return;
+		}
 		if (voice.on || voice.state.boot) {
 			// the button always means stop/hang up — even mid-boot it cancels.
 			// userInitiated (#22): the user ended the mic session — no auto-resume on unlock
@@ -542,7 +551,7 @@ export default function App() {
 			return;
 		}
 		voice.start(conn.url, conn.token).catch(() => showNotice("microphone unavailable — check permissions"));
-	}, [conn, voice, showNotice]);
+	}, [conn, voice, voiceMode, showNotice]);
 
 	// leaving a machine (or unmount) ends its voice session — user-initiated:
 	// this device no longer wants the mic, so a later unlock must not re-arm it
@@ -671,6 +680,34 @@ export default function App() {
 								if (conn) removeConnection(conn.id);
 							}}
 						/>
+					</>
+				)}
+
+				{modeOpen && (
+					<>
+						<div className="backdrop" onClick={() => setModeOpen(false)} />
+						<div className="sheet mode-sheet" onClick={(e) => e.stopPropagation()}>
+							<h3>Voice mode</h3>
+							{(["always", "ptt"] as const).map((m) => (
+								<button
+									type="button"
+									key={m}
+									className={`mrow ${voiceMode === m ? "active" : ""}`}
+									onClick={() => {
+										setVoiceMode(m);
+										persistVoiceMode(m);
+										if (voice.on) void voice.stop(true); // restart applies the mode
+										setModeOpen(false);
+									}}
+								>
+									<span className="mcheck" aria-hidden>
+										{voiceMode === m ? "✓" : ""}
+									</span>
+									<span className="mname">{m === "always" ? "Always listen" : "Push to talk"}</span>
+									<span className="msub">{m === "always" ? "just talk" : "hold the mic · release sends"}</span>
+								</button>
+							))}
+						</div>
 					</>
 				)}
 
@@ -853,6 +890,18 @@ export default function App() {
 								type="button"
 								className={`mic ${voice.on ? "rec" : "boot"}`}
 								onClick={toggleVoice}
+								onContextMenu={(e) => {
+									// long-press / right-click: the mode picker (#53)
+									e.preventDefault();
+									setModeOpen(true);
+								}}
+								{...(voiceMode === "ptt"
+									? {
+											onPointerDown: () => conn && voice.pttBegin(conn.url, conn.token),
+											onPointerUp: () => voice.pttRelease(),
+											onPointerLeave: () => voice.pttRelease(),
+										}
+									: {})}
 								aria-label={voice.on ? "end voice session" : "cancel voice startup"}
 							>
 								{voice.on ? "■" : "●"}
