@@ -31,18 +31,26 @@ type GatewayModule = {
 		host: string;
 		cwd: string;
 		streamingFeedback?: boolean;
+		autoCompactLimit?: number | null;
 	};
 	createGateway: (opts: Record<string, unknown>) => Promise<{
 		listen: (port: number, host: string) => Promise<void>;
 		close: () => Promise<void>;
 	}>;
-	RpcAgentDriver: new (opts: { command: string[]; cwd: string }) => {
+	RpcAgentDriver: new (opts: { command: string[]; cwd: string; autoCompactLimit?: number | null }) => {
 		start: () => void;
 		dispose: () => void;
 	};
 };
 
-type BootConfig = { token: string; port: number; host: string; cwd: string; streamingFeedback?: boolean };
+type BootConfig = {
+	token: string;
+	port: number;
+	host: string;
+	cwd: string;
+	streamingFeedback?: boolean;
+	autoCompactLimit?: number | null;
+};
 type Notify = (message: string, level?: "info" | "error") => void;
 
 /**
@@ -248,6 +256,7 @@ export async function startOmniHost(notify: Notify, deps: HostDeps = {}): Promis
 	const driver = new gw.RpcAgentDriver({
 		command: [process.execPath, piEntry, "--mode", "rpc", "--session-id", omniSession, "--no-approve", "-e", omniEntry],
 		cwd: cfg.cwd,
+		autoCompactLimit: cfg.autoCompactLimit, // #55: config-file threshold
 	});
 
 	mkdirSync(cfg.cwd, { recursive: true });

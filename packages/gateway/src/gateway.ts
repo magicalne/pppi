@@ -63,7 +63,11 @@ export type GatewayOptions = {
 	stt?: Stt;
 	/** Serve voice from a spawned audio-service child (extension host): native
 	 *  STT, silero and kokoro stay out of pi's process. */
-	audioService?: { command: string[]; env?: Record<string, string | undefined> };
+	audioService?: {
+		command: string[];
+		env?: Record<string, string | undefined> /** #55: auto-compact hard limit in tokens (null = 70% of window) */;
+		autoCompactLimit?: number | null;
+	};
 	webDist?: string;
 	/** Max voice upload size (default 25 MiB ≈ 26 min of 16 kHz PCM16). */
 	maxVoiceBytes?: number;

@@ -185,15 +185,27 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 	private _state: AgentState = "starting";
 	private snapshot: AgentSnapshot = { model: null, thinkingLevel: "off", thinkingLevels: [] };
 	private context: ContextInfo | null = null;
+	/** in/out token totals from get_session_stats (#55 metrics) */
+	private tokens: { input: number; output: number } | null = null;
+	/** #55: hard-limit latch — cleared when context drops back under the limit */
+	private compactLatched = false;
+	/** #55: explicit threshold (tokens); null = 70% of the model context window */
+	private autoCompactLimit: number | null = null;
 	private modelsCache: { at: number; models: ModelInfo[] } | null = null;
 
 	readonly command: string[];
 	readonly cwd: string;
 
-	constructor(opts: { command: string[]; cwd: string }) {
+	constructor(opts: {
+		command: string[];
+		cwd: string;
+		/** #55: explicit auto-compact threshold in tokens (null = 70% of the model window) */
+		autoCompactLimit?: number | null;
+	}) {
 		super();
 		this.command = opts.command;
 		this.cwd = opts.cwd;
+		this.autoCompactLimit = opts.autoCompactLimit ?? null;
 	}
 
 	get state(): AgentState {
@@ -211,6 +223,7 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 			thinkingLevel: this.snapshot.thinkingLevel,
 			thinkingLevels: this.snapshot.thinkingLevels,
 			context: this.context,
+			tokens: this.tokens, // #55 metrics
 		};
 	}
 
@@ -272,6 +285,9 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 				this.emit("info", this.snapshot);
 				this.emitStatus();
 				this.setState(d.isStreaming ? "streaming" : "idle");
+				// #55: boot stats may already be over the limit — the idle state
+				// only settles after this line, so re-check now
+				this.checkAutoCompact();
 				// auto-compaction is pi's default, but a local setting could have
 				// it off — the context bar staying honest depends on it
 				void this.request("set_auto_compaction", 10_000, { enabled: true }).catch(() => {});
@@ -546,7 +562,42 @@ export class RpcAgentDriver extends EventEmitter implements AgentPort {
 
 	private async refreshStats(): Promise<void> {
 		const res = await this.request("get_session_stats", 15_000);
-		if (res.success) this.context = toContextInfo(res.data?.contextUsage);
+		if (res.success) {
+			this.context = toContextInfo(res.data?.contextUsage);
+			// #55 metrics: in/out token totals ride the status snapshot
+			const t = res.data?.tokens;
+			if (t && typeof t === "object") {
+				this.tokens = {
+					input: Number(t.input ?? 0) || 0,
+					output: Number(t.output ?? 0) || 0,
+				};
+			}
+			this.checkAutoCompact();
+		}
+	}
+
+	/**
+	 * #55 hard limit: when the context crosses the configured threshold (or
+	 * 70% of the model window when unset), fire pi's `compact` — from idle
+	 * only, once per crossing (the latch clears when context drops back
+	 * under). Config-only knob by design; no UI setting.
+	 */
+	private checkAutoCompact(): void {
+		const tokens = this.context?.tokens ?? null;
+		if (tokens === null) return;
+		const window = this.snapshot.model?.contextWindow ?? 0;
+		const limit = this.autoCompactLimit ?? (window > 0 ? Math.floor(window * 0.7) : 0);
+		if (limit <= 0) return;
+		if (tokens < limit) {
+			this.compactLatched = false; // room again — re-arm for the next crossing
+			return;
+		}
+		if (this.compactLatched || this._state !== "idle") return;
+		this.compactLatched = true;
+		console.error(`[agent] context ${tokens} >= ${limit} — auto-compacting (#55)`);
+		this.request("compact", 120_000)
+			.then(() => this.refreshStats().catch(() => {})) // metrics reflect the shrink
+			.catch((err) => console.error(`[agent] auto-compact failed: ${String((err as Error).message ?? err)}`));
 	}
 
 	/** Re-read everything the status bar shows; individual misses keep prior values. */

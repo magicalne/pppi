@@ -9,6 +9,7 @@ import * as net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadOrCreateConfig } from "@pppi/gateway";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { markedOmniSession, parseArgs, resolveAgentCmd, resolvePiBinary } from "../src/lib.ts";
 
@@ -94,6 +95,26 @@ describe("resolveAgentCmd", () => {
 			"node",
 			"/x/mock-agent.mjs",
 		]);
+	});
+});
+
+describe("autoCompactLimit config (#55)", () => {
+	it("reads the threshold from the stored config file, opts win, default null", () => {
+		const dir = tempDir("pppi-acfg-");
+		const prev = process.env.PPPI_DIR;
+		process.env.PPPI_DIR = dir;
+		try {
+			writeFileSync(join(dir, "config.json"), JSON.stringify({ token: "t", autoCompactLimit: 12345 }));
+			const fromFile = loadOrCreateConfig();
+			expect(fromFile.autoCompactLimit).toBe(12345);
+			const fromOpts = loadOrCreateConfig({ autoCompactLimit: 999 });
+			expect(fromOpts.autoCompactLimit).toBe(999);
+			rmSync(join(dir, "config.json"));
+			expect(loadOrCreateConfig().autoCompactLimit).toBeNull();
+		} finally {
+			if (prev === undefined) process.env.PPPI_DIR = undefined;
+			else process.env.PPPI_DIR = prev;
+		}
 	});
 });
 
