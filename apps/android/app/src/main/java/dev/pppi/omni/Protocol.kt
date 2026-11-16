@@ -333,7 +333,13 @@ sealed class VoiceClientMessage {
 
 	@Serializable
 	@SerialName("hello")
-	data class Hello(val token: String, val client: String = "android", val mode: String? = null) : VoiceClientMessage()
+	data class Hello(
+		val token: String,
+		val client: String = "android",
+		/** #53: "ptt" opens a manual-endpointing session; omitted (null) = vad */
+		@kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+		val mode: String? = null,
+	) : VoiceClientMessage()
 
 	@Serializable
 	@SerialName("ptt_start")

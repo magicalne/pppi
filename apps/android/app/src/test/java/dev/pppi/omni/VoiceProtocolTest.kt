@@ -49,6 +49,8 @@ class VoiceProtocolTest {
 			VoiceClientMessages.hello("t0"),
 		)
 		assertEquals("""{"type":"interrupt"}""", VoiceClientMessages.interrupt())
+		assertEquals("""{"type":"ptt_start"}""", VoiceClientMessages.pttStart())
+		assertEquals("""{"type":"ptt_end"}""", VoiceClientMessages.pttEnd())
 		assertEquals("""{"type":"playback_done"}""", VoiceClientMessages.playbackDone())
 	}
 
