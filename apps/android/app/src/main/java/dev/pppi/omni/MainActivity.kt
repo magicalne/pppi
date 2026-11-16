@@ -1562,7 +1562,7 @@ MsgCopyAffordance(m.text, theme, alignEnd = false)
 					contentAlignment = Alignment.Center,
 				) {
 					Text(
-						if (voiceOn || recording) "■" else "●",
+						if (voiceMode == VoiceMode.OFF && !voiceOn) "⃠" else if (voiceOn || recording) "■" else "●",
 						color = if (voiceOn || recording) Color.White else if (voiceBoot.booting) theme.accent else theme.accentInk,
 						fontSize = 16.sp,
 					)

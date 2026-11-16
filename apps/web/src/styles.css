@@ -1619,3 +1619,13 @@
 	border-radius: 8px;
 	padding: 4px 8px;
 }
+
+/* #54: voice OFF — dim + slashed; still tappable (opens the mode picker) */
+.pill .mic.off {
+	opacity: 0.55;
+}
+.pill .mic.off::after {
+	content: "\23E0";
+	font-size: 19px;
+	line-height: 1;
+}

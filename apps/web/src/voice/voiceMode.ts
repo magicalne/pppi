@@ -1,13 +1,14 @@
-// Voice mode persistence (#53): "always" (always-listen) | "ptt"
-// (push-to-talk). "off" + default-off land with #54. localStorage-backed;
-// unknown values fall back to "always".
+// Voice mode persistence (#53/#54): "always" | "ptt" | "off".
+// localStorage-backed; unknown/missing values default to OFF (#54: fresh
+// installs never surprise-record; the user opts into a mode explicitly).
 
-export type VoiceMode = "always" | "ptt";
+export type VoiceMode = "always" | "ptt" | "off";
 
 const KEY = "pppi.voiceMode";
 
 export function parseVoiceMode(raw: string | null): VoiceMode {
-	return raw === "ptt" ? "ptt" : "always";
+	if (raw === "ptt" || raw === "always" || raw === "off") return raw;
+	return "off"; // #54: the default state is OFF
 }
 
 export function loadVoiceMode(): VoiceMode {
