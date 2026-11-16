@@ -294,7 +294,16 @@ fun PppiApp(theme: PppiTheme, setTheme: (String) -> Unit) {
 	// its websocket, state and scroll position survive the round trip
 	if (showThemes && conn != null) {
 		Box(Modifier.fillMaxSize().background(theme.bg)) {
-			ThemesPage(theme, setTheme) { showThemes = false }
+			ThemesPage(
+				theme,
+				setTheme,
+				{ showThemes = false },
+				voiceMode,
+			) { m ->
+				voiceMode = m
+				VoiceModeStore.save(context, m)
+				if (m == VoiceMode.OFF && voiceOn) stopVoice()
+			}
 		}
 	}
 
@@ -603,6 +612,8 @@ fun ChatScreen(
 	var detailRow by remember { mutableStateOf<SessionRow?>(null) }
 	// uploads v2 (#59): picked files await the next send
 	var pendingUploads by remember { mutableStateOf<List<PendingUpload>>(emptyList()) }
+	// #53: voice mode — always-listen / push-to-talk / off (Appearance page)
+	var voiceMode by remember { mutableStateOf(VoiceModeStore.load(context)) }
 	val attachPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
 		val picked = uris.mapNotNull { u ->
 			try {
@@ -1500,6 +1511,16 @@ MsgCopyAffordance(m.text, theme, alignEnd = false)
 											// safety net: an orphaned recording finishes on the next press
 											tryAwaitRelease()
 											stopRecordingAndSend()
+										}
+										voiceMode == VoiceMode.OFF -> {
+											// #53/#54: off means no tap-to-listen; hold-to-talk still works
+											tryAwaitRelease()
+											notice = "voice is off — hold the mic to talk anyway, or pick a mode in ◐"
+										}
+										voiceMode == VoiceMode.PTT && !recording && !voiceOn && !voiceBoot.booting -> {
+											// tap in ptt mode is a hint, not a session start
+											tryAwaitRelease()
+											notice = "push-to-talk — hold the mic, release to send"
 										}
 										// micGranted is remembered state — the permission may have been
 										// revoked in system settings while we stayed alive, and an

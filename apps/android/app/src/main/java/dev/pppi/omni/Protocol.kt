@@ -333,7 +333,15 @@ sealed class VoiceClientMessage {
 
 	@Serializable
 	@SerialName("hello")
-	data class Hello(val token: String, val client: String = "android") : VoiceClientMessage()
+	data class Hello(val token: String, val client: String = "android", val mode: String? = null) : VoiceClientMessage()
+
+	@Serializable
+	@SerialName("ptt_start")
+	data object PttStart : VoiceClientMessage()
+
+	@Serializable
+	@SerialName("ptt_end")
+	data object PttEnd : VoiceClientMessage()
 
 	@Serializable
 	@SerialName("interrupt")
@@ -360,6 +368,12 @@ object VoiceClientMessages {
 
 	fun playbackDone(): String =
 		voiceJson.encodeToString(VoiceClientMessage.serializer(), VoiceClientMessage.PlaybackDone)
+
+	fun pttStart(): String =
+		voiceJson.encodeToString(VoiceClientMessage.serializer(), VoiceClientMessage.PttStart)
+
+	fun pttEnd(): String =
+		voiceJson.encodeToString(VoiceClientMessage.serializer(), VoiceClientMessage.PttEnd)
 }
 
 /** UI-facing turn-taking state, mirroring the web pill. */

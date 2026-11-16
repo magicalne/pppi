@@ -30,7 +30,13 @@ import androidx.compose.ui.unit.sp
 
 /** Appearance page (PRD §8): five themes as live mini chat previews. */
 @Composable
-fun ThemesPage(theme: PppiTheme, setTheme: (String) -> Unit, onBack: () -> Unit) {
+fun ThemesPage(
+	theme: PppiTheme,
+	setTheme: (String) -> Unit,
+	onBack: () -> Unit,
+	voiceMode: VoiceMode = VoiceMode.ALWAYS,
+	onPickVoiceMode: (VoiceMode) -> Unit = {},
+) {
 	Column(
 		Modifier
 			.fillMaxSize()
@@ -56,6 +62,27 @@ fun ThemesPage(theme: PppiTheme, setTheme: (String) -> Unit, onBack: () -> Unit)
 			fontSize = 13.5.sp,
 			modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
 		)
+		Text("VOICE", color = theme.dim, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp, bottom = 6.dp))
+		for (m in VoiceMode.entries) {
+			Row(
+				Modifier
+					.fillMaxWidth()
+					.clip(RoundedCornerShape(12.dp))
+					.background(if (voiceMode == m) theme.surface else Color.Transparent)
+					.border(1.dp, if (voiceMode == m) theme.accent else theme.line, RoundedCornerShape(12.dp))
+					.clickable { onPickVoiceMode(m) }
+					.padding(horizontal = 14.dp, vertical = 10.dp),
+				verticalAlignment = Alignment.CenterVertically,
+			) {
+				Text(if (voiceMode == m) "● " else "○ ", color = if (voiceMode == m) theme.accent else theme.dim, fontSize = 14.sp)
+				Column {
+					Text(voiceModeLabel(m), color = theme.text, fontSize = 15.sp)
+					Text(voiceModeHint(m), color = theme.dim, fontSize = 12.sp)
+				}
+			}
+			Spacer(Modifier.height(6.dp))
+		}
+		Spacer(Modifier.height(12.dp))
 		for (row in PppiThemes.chunked(2)) {
 			Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
 				for (t in row) {

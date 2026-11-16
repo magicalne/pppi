@@ -293,6 +293,48 @@ describe("interactive voice websocket", () => {
 		chat.close();
 	});
 
+	it("push-to-talk: audio outside a hold is ignored; hold+release dispatches immediately (#53)", async () => {
+		const v = await boot(scriptedStt(["held message"]));
+		// connect in ptt mode directly (voiceConnect sends a vad hello)
+		const voice = await new Promise<WebSocket>((resolve, reject) => {
+			const ws = new WebSocket(`${base}/voice`);
+			ws.on("open", () => {
+				ws.send(JSON.stringify({ type: "hello", token, client: "test", mode: "ptt" }));
+				resolve(ws);
+			});
+			ws.on("error", reject);
+		});
+		await nextEvent(voice, "voice_hello_ok");
+
+		// audio WITHOUT a hold: keep-alive only — nothing may dispatch
+		for (let i = 0; i < 10; i++) voice.send(pcmChunk(0.1));
+		await new Promise((r) => setTimeout(r, 300));
+		let dispatched = false;
+		const onEarly = (raw: Buffer) => {
+			try {
+				const evt = JSON.parse(raw.toString());
+				if (evt.type === "stt_final") dispatched = true;
+			} catch {}
+		};
+		voice.on("message", onEarly);
+
+		expect(dispatched).toBe(false); // keep-alive audio dispatched nothing
+		voice.off("message", onEarly);
+
+		// hold: manual capture opens, vad goes speaking
+		voice.send(JSON.stringify({ type: "ptt_start" }));
+		const vadOn = await nextEvent(voice, "vad");
+		expect(vadOn.speaking).toBe(true);
+		for (let i = 0; i < 8; i++) voice.send(pcmChunk(0.1)); // ~800ms held speech
+		await new Promise((r) => setTimeout(r, 100));
+
+		// release = send: immediate dispatch, no grace window
+		voice.send(JSON.stringify({ type: "ptt_end" }));
+		const final = await nextEvent(voice, "stt_final");
+		expect(final.text).toBe("held message"); // exactly one dispatch — the release
+		voice.close();
+	});
+
 	it("discards blips shorter than the minimum utterance", async () => {
 		const v = await boot(fakeStt("cough"));
 		const voice = await voiceConnect(token);

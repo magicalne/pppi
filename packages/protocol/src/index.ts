@@ -229,7 +229,11 @@ export type VoiceTtsStatus = { ready: true; provider: string; voice: string } | 
  * barge-in thresholds are echo-aware) and reports turns via `vad` events.
  */
 export type VoiceClientMessage =
-	| { type: "hello"; token: string; client: "web" | "android" | "test" }
+	| { type: "hello"; token: string; client: "web" | "android" | "test"; mode?: "vad" | "ptt" }
+	/** push-to-talk (#53): open the utterance manually (mode:"ptt" sessions) */
+	| { type: "ptt_start" }
+	/** release: finalize + dispatch immediately — hold = record, release = send */
+	| { type: "ptt_end" }
 	| { type: "interrupt" }
 	/** the client's speaker went idle — echo-aware barge-in thresholds can relax */
 	| { type: "playback_done" };
