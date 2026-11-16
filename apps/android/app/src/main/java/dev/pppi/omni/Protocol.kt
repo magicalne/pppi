@@ -219,8 +219,6 @@ data class ContextInfoDto(
 	val percent: Double? = null,
 )
 
-/** Full status-bar snapshot: everything the bar renders, so clients are dumb mirrors. */
-@Serializable
 /** #55 metrics: session token totals (display lands with #56). */
 @Serializable
 data class TokenTotalsDto(
@@ -228,6 +226,8 @@ data class TokenTotalsDto(
 	val output: Long = 0,
 )
 
+/** Full status-bar snapshot: everything the bar renders, so clients are dumb mirrors. */
+@Serializable
 data class AgentStatusDto(
 	val model: ModelInfoDto? = null,
 	val thinkingLevel: String = "off",
