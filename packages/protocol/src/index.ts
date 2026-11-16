@@ -108,6 +108,9 @@ export type AgentStatus = {
 	/** levels the current model supports, canonical order — the slider's stops */
 	thinkingLevels: string[];
 	context: ContextInfo | null;
+	/** #55 metrics: session token totals from get_session_stats (optional —
+	 *  older gateways omit; display lands with #56) */
+	tokens?: { input: number; output: number } | null;
 };
 
 // ---------------------------------------------------------------- artifacts (#17)

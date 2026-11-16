@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -142,6 +142,74 @@ describe("rpc agent driver", () => {
 		await driver.setModel("mock", "nospec");
 		expect(driver.status.model).toMatchObject({ id: "nospec" });
 		expect(driver.status.thinkingLevels).toEqual(["off", "low", "medium"]);
+	});
+
+	// ------------------------------------------------------------ #55
+
+	it("auto-compacts when context crosses the configured hard limit (#55)", async () => {
+		const compactFile = join(tmpdir(), `pppi-compact-${process.pid}-${Date.now()}`);
+		process.env.MOCK_COMPACT_FILE = compactFile;
+		process.env.MOCK_CTX_TOKENS = "9000"; // limit below
+		const driver = new RpcAgentDriver({
+			command: [process.execPath, mockAgent],
+			cwd: "/tmp",
+			autoCompactLimit: 8000,
+		});
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		// the stats refresh on ready sees 9000 >= 8000 -> compact fires -> stats re-read shows the shrink
+		await new Promise<void>((resolve) => {
+			const t0 = Date.now();
+			const poll = setInterval(() => {
+				if (driver.status.context?.tokens === 1000 || Date.now() - t0 > 8000) {
+					clearInterval(poll);
+					resolve();
+				}
+			}, 50);
+		});
+		expect(driver.status.context?.tokens).toBe(1000);
+		const fired = driver.status; // latch check below via a second refresh
+		expect(fired.tokens).toEqual({ input: 111, output: 222 });
+		// refresh again: context is under the limit — no second compact
+		await driver.setThinkingLevel("low");
+		await new Promise((r) => setTimeout(r, 200));
+		const lines = existsSync(compactFile) ? readFileSync(compactFile, "utf8").trim().split("\n") : [];
+		expect(lines.length).toBe(1);
+		driver.dispose();
+		process.env.MOCK_COMPACT_FILE = undefined;
+		process.env.MOCK_CTX_TOKENS = undefined;
+		rmSync(compactFile, { force: true });
+	});
+
+	it("the default limit is 70% of the model window (#55)", async () => {
+		const compactFile = join(tmpdir(), `pppi-compact2-${process.pid}-${Date.now()}`);
+		process.env.MOCK_COMPACT_FILE = compactFile;
+		process.env.MOCK_CTX_TOKENS = "70000"; // window is 100k -> limit 70k
+		const driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		await new Promise((r) => setTimeout(r, 400));
+		expect(existsSync(compactFile)).toBe(true);
+		driver.dispose();
+		process.env.MOCK_COMPACT_FILE = undefined;
+		process.env.MOCK_CTX_TOKENS = undefined;
+		rmSync(compactFile, { force: true });
+	});
+
+	it("below the threshold nothing compacts (#55)", async () => {
+		const compactFile = join(tmpdir(), `pppi-compact3-${process.pid}-${Date.now()}`);
+		process.env.MOCK_COMPACT_FILE = compactFile;
+		process.env.MOCK_CTX_TOKENS = "5000"; // under the 70k default
+		const driver = new RpcAgentDriver({ command: [process.execPath, mockAgent], cwd: "/tmp" });
+		driver.start();
+		await new Promise<void>((r) => driver.once("ready", r));
+		await new Promise((r) => setTimeout(r, 300));
+		expect(existsSync(compactFile)).toBe(false);
+		expect(driver.status.tokens).toEqual({ input: 111, output: 222 }); // metrics ride status
+		driver.dispose();
+		process.env.MOCK_COMPACT_FILE = undefined;
+		process.env.MOCK_CTX_TOKENS = undefined;
+		rmSync(compactFile, { force: true });
 	});
 
 	it("set_thinking_level echoes the clamped level", async () => {

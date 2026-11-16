@@ -219,6 +219,13 @@ data class ContextInfoDto(
 	val percent: Double? = null,
 )
 
+/** #55 metrics: session token totals (display lands with #56). */
+@Serializable
+data class TokenTotalsDto(
+	val input: Long = 0,
+	val output: Long = 0,
+)
+
 /** Full status-bar snapshot: everything the bar renders, so clients are dumb mirrors. */
 @Serializable
 data class AgentStatusDto(
@@ -226,6 +233,8 @@ data class AgentStatusDto(
 	val thinkingLevel: String = "off",
 	val thinkingLevels: List<String> = emptyList(),
 	val context: ContextInfoDto? = null,
+	/** #55 metrics: session token totals (display lands with #56) */
+	val tokens: TokenTotalsDto? = null,
 )
 
 // ---- GET /api/sessions (mirrors packages/protocol) ----

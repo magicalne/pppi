@@ -64,7 +64,7 @@ if (args.agent === "durable") {
 } else if (args.agent === "sdk") {
 	driver = new SdkAgentDriver({ cwd: cfg.cwd });
 } else {
-	driver = new RpcAgentDriver({ command: agentCmd, cwd: cfg.cwd });
+	driver = new RpcAgentDriver({ command: agentCmd, cwd: cfg.cwd, autoCompactLimit: cfg.autoCompactLimit });
 }
 const stt = Stt.create({ disabled: args["no-stt"] === true });
 const sttStatus = stt.status;

@@ -14,6 +14,14 @@ export type ServerConfig = {
 	cwd: string;
 	/** Streaming feedback: dispatch utterance prefixes while the user still talks. */
 	streamingFeedback: boolean;
+	/**
+	 * Auto-compact hard limit in tokens (#55): when the session context
+	 * crosses this, the gateway fires pi's compact. CONFIG ONLY —
+	 * deliberately not a UI setting (“UI makes everything complicated”).
+	 * null = 70% of the model's context window (recomputed when the model
+	 * changes). Lives in ~/.pppi/config.json.
+	 */
+	autoCompactLimit: number | null;
 };
 
 export function homeDir(): string {
@@ -28,11 +36,25 @@ export function pppiDir(): string {
 }
 
 export function loadOrCreateConfig(
-	opts: { port?: number; host?: string; token?: string; cwd?: string; streamingFeedback?: boolean } = {},
+	opts: {
+		port?: number;
+		host?: string;
+		token?: string;
+		cwd?: string;
+		streamingFeedback?: boolean;
+		/** #55: explicit compact threshold in tokens (opts > stored file > null = 70% of window) */
+		autoCompactLimit?: number | null;
+	} = {},
 ): ServerConfig {
 	const dir = pppiDir();
 	const path = join(dir, "config.json");
-	let stored: { token?: string; port?: number; host?: string; streamingFeedback?: boolean } = {};
+	let stored: {
+		token?: string;
+		port?: number;
+		host?: string;
+		streamingFeedback?: boolean;
+		autoCompactLimit?: number | null;
+	} = {};
 	if (existsSync(path)) {
 		try {
 			stored = JSON.parse(readFileSync(path, "utf8"));
@@ -57,6 +79,7 @@ export function loadOrCreateConfig(
 		host: opts.host ?? stored.host ?? "0.0.0.0",
 		cwd: opts.cwd ?? join(dir, "omni-home"),
 		streamingFeedback: opts.streamingFeedback ?? stored.streamingFeedback ?? envFeedback,
+		autoCompactLimit: opts.autoCompactLimit ?? stored.autoCompactLimit ?? null,
 	};
 }
 

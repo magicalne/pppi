@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 // Mock pi RPC agent for tests: speaks the subset of pi's RPC protocol that
 // apps/server/src/agent.ts relies on, without any LLM. Usage:
 //   MOCK_REPLY="hello world" node mock-agent.mjs
@@ -6,6 +7,7 @@
 import { StringDecoder } from "node:string_decoder";
 
 const reply = process.env.MOCK_REPLY ?? "mock ok";
+let mockCtxTokens = null;
 const _lines = [];
 
 const dec = new StringDecoder("utf8");
@@ -134,23 +136,28 @@ function handle(cmd) {
 				data: { levels: supportedLevels(state.model) },
 			});
 			break;
-		case "get_session_stats":
+		case "get_session_stats": {
+			// #55 tests: MOCK_CTX_TOKENS pins contextUsage.tokens (a compact
+			// clears the pin — post-compaction stats must show the shrink)
+			if (mockCtxTokens === null) mockCtxTokens = Number(process.env.MOCK_CTX_TOKENS ?? 0) || null;
+			const ctxTokens = mockCtxTokens ?? 1_000 + history.length * 100;
 			write({
 				id: cmd.id,
 				type: "response",
 				command: "get_session_stats",
 				success: true,
 				data: {
-					tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					tokens: { input: 111, output: 222, cacheRead: 0, cacheWrite: 0, total: 333 },
 					cost: 0,
 					contextUsage: {
-						tokens: 1_000 + history.length * 100,
+						tokens: ctxTokens,
 						contextWindow: state.model.contextWindow,
-						percent: Math.round(((1_000 + history.length * 100) / state.model.contextWindow) * 1000) / 10,
+						percent: Math.round((ctxTokens / state.model.contextWindow) * 1000) / 10,
 					},
 				},
 			});
 			break;
+		}
 		case "get_available_models":
 			write({
 				id: cmd.id,
@@ -197,6 +204,13 @@ function handle(cmd) {
 			write({ id: cmd.id, type: "response", command: "set_auto_compaction", success: true });
 			break;
 		case "compact":
+			// #55 tests: the shrink + an optional record of the firing
+			mockCtxTokens = 1_000;
+			if (process.env.MOCK_COMPACT_FILE) {
+				try {
+					appendFileSync(process.env.MOCK_COMPACT_FILE, `${Date.now()}\n`);
+				} catch {}
+			}
 			write({ type: "compaction_start", reason: "manual" });
 			write({ id: cmd.id, type: "response", command: "compact", success: true });
 			write({ type: "compaction_end", reason: "manual" });

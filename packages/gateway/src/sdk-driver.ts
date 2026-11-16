@@ -111,6 +111,7 @@ export class SdkAgentDriver extends EventEmitter {
 			thinkingLevel: this.snapshot.thinkingLevel,
 			thinkingLevels: this.snapshot.thinkingLevels,
 			context: this.context,
+			tokens: null, // #55: the SDK path doesn't poll get_session_stats yet
 		};
 	}
 
