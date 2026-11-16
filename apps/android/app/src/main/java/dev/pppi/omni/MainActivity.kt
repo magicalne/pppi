@@ -639,10 +639,6 @@ fun ChatScreen(
 		if (picked.isNotEmpty() && allowed.isEmpty()) notice = "unsupported type — images, pdf, txt, md, csv, json, xml, yaml, log"
 		if (allowed.isNotEmpty()) pendingUploads = pendingUploads + allowed
 	}
-	// picking OFF in the appearance page ends a live voice session
-	LaunchedEffect(voiceMode) {
-		if (voiceMode == VoiceMode.OFF && voiceOn) stopVoice()
-	}
 	androidx.activity.compose.BackHandler(enabled = screen != NavScreen.Chat || detailRow != null) {
 		detailRow = null
 		if (screen != NavScreen.Chat) screen = NavScreen.Chat
@@ -1113,6 +1109,11 @@ fun ChatScreen(
 		teardownVoice()
 		voiceAttempts.set(0)
 		voiceBoot = VoiceBootState.Idle
+	}
+
+	// picking OFF in the appearance page ends a live voice session
+	LaunchedEffect(voiceMode) {
+		if (voiceMode == VoiceMode.OFF && voiceOn) stopVoice()
 	}
 
 	fun interruptVoice() {
