@@ -12,7 +12,8 @@ describe("parseVoiceMode (#53/#54)", () => {
 		expect(parseVoiceMode("off")).toBe("off");
 		expect(parseVoiceMode(null)).toBe("off");
 		expect(parseVoiceMode("junk")).toBe("off");
-	});});
+	});
+});
 
 describe("android VoiceMode (#53)", () => {
 	it("labels + hints exist for all three modes", () => {
