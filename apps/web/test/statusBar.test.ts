@@ -119,6 +119,52 @@ describe("StatusBar render", () => {
 	});
 });
 
+describe("status bar live info (#56)", () => {
+	const base = {
+		models: [] as ModelInfo[],
+		active: true,
+		targetLabel: "road",
+		send: () => {},
+		notify: () => {},
+	};
+
+	it("shows in/out token totals when the gateway reports them", () => {
+		const html = renderToStaticMarkup(
+			createElement(StatusBar, {
+				...base,
+				status: status({ tokens: { input: 2100, output: 8400 } }),
+			}),
+		);
+		expect(html).toContain("ctx-io");
+		expect(html).toContain("↑2.1k");
+		expect(html).toContain("↓8.4k");
+	});
+
+	it("hides io when the gateway predates the metrics (#55 optional)", () => {
+		const html = renderToStaticMarkup(createElement(StatusBar, { ...base, status: status() }));
+		expect(html).not.toContain("ctx-io");
+	});
+
+	it("hides io while a peer target is active (the bar describes the answering agent)", () => {
+		const html = renderToStaticMarkup(
+			createElement(StatusBar, {
+				...base,
+				active: false,
+				status: status({ tokens: { input: 1, output: 2 } }),
+			}),
+		);
+		expect(html).not.toContain("ctx-io");
+	});
+
+	it("shows the reconnect glyph ONLY while the link is degraded; tap explains", () => {
+		const degraded = renderToStaticMarkup(createElement(StatusBar, { ...base, status: status(), reconnecting: true }));
+		expect(degraded).toContain("link-warn");
+		expect(degraded).toContain("reconnecting");
+		const healthy = renderToStaticMarkup(createElement(StatusBar, { ...base, status: status() }));
+		expect(healthy).not.toContain("link-warn");
+	});
+});
+
 describe("status-bar alignment (#48 style assertions)", () => {
 	const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 
