@@ -176,8 +176,8 @@ describe("rpc agent driver", () => {
 		const lines = existsSync(compactFile) ? readFileSync(compactFile, "utf8").trim().split("\n") : [];
 		expect(lines.length).toBe(1);
 		driver.dispose();
-		delete process.env.MOCK_COMPACT_FILE;
-		delete process.env.MOCK_CTX_TOKENS;
+		process.env.MOCK_COMPACT_FILE = undefined;
+		process.env.MOCK_CTX_TOKENS = undefined;
 		rmSync(compactFile, { force: true });
 	});
 
@@ -191,8 +191,8 @@ describe("rpc agent driver", () => {
 		await new Promise((r) => setTimeout(r, 400));
 		expect(existsSync(compactFile)).toBe(true);
 		driver.dispose();
-		delete process.env.MOCK_COMPACT_FILE;
-		delete process.env.MOCK_CTX_TOKENS;
+		process.env.MOCK_COMPACT_FILE = undefined;
+		process.env.MOCK_CTX_TOKENS = undefined;
 		rmSync(compactFile, { force: true });
 	});
 
@@ -207,8 +207,8 @@ describe("rpc agent driver", () => {
 		expect(existsSync(compactFile)).toBe(false);
 		expect(driver.status.tokens).toEqual({ input: 111, output: 222 }); // metrics ride status
 		driver.dispose();
-		delete process.env.MOCK_COMPACT_FILE;
-		delete process.env.MOCK_CTX_TOKENS;
+		process.env.MOCK_COMPACT_FILE = undefined;
+		process.env.MOCK_CTX_TOKENS = undefined;
 		rmSync(compactFile, { force: true });
 	});
 

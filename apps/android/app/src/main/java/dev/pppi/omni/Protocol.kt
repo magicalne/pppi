@@ -234,7 +234,6 @@ data class AgentStatusDto(
 	val thinkingLevels: List<String> = emptyList(),
 	val context: ContextInfoDto? = null,
 	/** #55 metrics: session token totals (display lands with #56) */
-	@Serializable
 	val tokens: TokenTotalsDto? = null,
 )
 
