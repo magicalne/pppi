@@ -1629,3 +1629,22 @@
 	font-size: 19px;
 	line-height: 1;
 }
+
+/* #56: in/out token totals ride the ctx slot; the reconnect glyph appears
+   only while the link is degraded */
+.status-bar .ctx-io {
+	color: var(--dim);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	font-size: 12px;
+}
+.status-bar .link-warn {
+	border: 0;
+	background: none;
+	color: var(--accent);
+	font-size: 15px;
+	line-height: 1;
+	padding: 0 2px;
+	cursor: pointer;
+	animation: ring-pulse 1.6s ease-in-out infinite;
+}

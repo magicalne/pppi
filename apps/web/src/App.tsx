@@ -993,6 +993,7 @@ export default function App() {
 				targetLabel={targetName}
 				send={(msg) => wsRef.current?.send(JSON.stringify(msg))}
 				notify={showNotice}
+				reconnecting={!connected}
 			/>
 
 			{artifactViewer.viewer}

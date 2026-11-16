@@ -294,7 +294,7 @@ describe("interactive voice websocket", () => {
 	});
 
 	it("push-to-talk: audio outside a hold is ignored; hold+release dispatches immediately (#53)", async () => {
-		const v = await boot(scriptedStt(["held message"]));
+		await boot(scriptedStt(["held message"]));
 		// connect in ptt mode directly (voiceConnect sends a vad hello)
 		const voice = await new Promise<WebSocket>((resolve, reject) => {
 			const ws = new WebSocket(`${base}/voice`);

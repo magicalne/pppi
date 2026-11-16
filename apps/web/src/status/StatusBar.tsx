@@ -83,6 +83,8 @@ export function StatusBar(props: {
 	targetLabel: string;
 	send: (msg: Record<string, unknown>) => void;
 	notify: (message: string) => void;
+	/** #56: live link state — the glyph shows ONLY while degraded */
+	reconnecting?: boolean;
 }) {
 	const { status, active } = props;
 	const [sheetOpen, setSheetOpen] = useState(false);
@@ -202,6 +204,11 @@ export function StatusBar(props: {
 		: ctx
 			? `${formatTokens(ctx.tokens)}/${formatTokens(ctx.contextWindow)} (${ctx.percent === null ? "—" : Math.round(ctx.percent)}%)`
 			: "—";
+	// #56: in/out token totals (#55 metrics) — compact, hidden when the
+	// gateway predates them; arrows read as "sent up / received down"
+	const io = status?.tokens;
+	const ioText =
+		active && io && (io.input > 0 || io.output > 0) ? `↑${formatTokens(io.input)} ↓${formatTokens(io.output)}` : "";
 	const ctxHot = active && (ctx?.percent ?? 0) >= 85;
 	const shownIdx = sliding ? preview : curIdx;
 	const frac = stops.length > 1 ? shownIdx / (stops.length - 1) : 0;
@@ -249,7 +256,20 @@ export function StatusBar(props: {
 					)}
 				</div>
 			) : (
-				<span className={`ctx ${ctxHot ? "ctx-danger" : ""}`}>{ctxText}</span>
+				<>
+					{props.reconnecting && (
+						<button
+							type="button"
+							className="link-warn"
+							aria-label="connection lost — reconnecting"
+							onClick={() => props.notify("connection blipped — reaching your machine again…")}
+						>
+							↻
+						</button>
+					)}
+					<span className={`ctx ${ctxHot ? "ctx-danger" : ""}`}>{ctxText}</span>
+					{ioText && <span className="ctx-io">{ioText}</span>}
+				</>
 			)}
 
 			<button type="button" className={`model ${active ? "" : "peer"}`} onClick={openModels} disabled={!active}>
