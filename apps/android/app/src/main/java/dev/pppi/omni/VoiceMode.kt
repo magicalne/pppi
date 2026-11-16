@@ -11,8 +11,7 @@ enum class VoiceMode { ALWAYS, PTT, OFF }
 fun parseVoiceMode(raw: String?): VoiceMode = when (raw) {
 	"always" -> VoiceMode.ALWAYS
 	"ptt" -> VoiceMode.PTT
-	// #53 keeps today's behavior as the default; #54 flips it to OFF
-	else -> VoiceMode.ALWAYS
+	else -> VoiceMode.OFF // #54: fresh installs start OFF — no surprise recording
 }
 
 fun voiceModeLabel(mode: VoiceMode): String = when (mode) {

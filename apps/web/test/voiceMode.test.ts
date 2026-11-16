@@ -5,12 +5,13 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parseVoiceMode } from "../src/voice/voiceMode.ts";
 
-describe("parseVoiceMode (#53)", () => {
-	it("ptt stays ptt; everything else falls back to always (#54 flips the default to off)", () => {
+describe("parseVoiceMode (#53/#54)", () => {
+	it("the three modes parse; missing/unknown default to OFF (#54)", () => {
 		expect(parseVoiceMode("ptt")).toBe("ptt");
 		expect(parseVoiceMode("always")).toBe("always");
-		expect(parseVoiceMode(null)).toBe("always");
-		expect(parseVoiceMode("junk")).toBe("always");
+		expect(parseVoiceMode("off")).toBe("off");
+		expect(parseVoiceMode(null)).toBe("off");
+		expect(parseVoiceMode("junk")).toBe("off");
 	});
 });
 

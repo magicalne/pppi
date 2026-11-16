@@ -544,6 +544,11 @@ export default function App() {
 			if (voice.on || voice.state.boot) void voice.stop(true);
 			return;
 		}
+		if (voiceMode === "off") {
+			// #54: off is tappable — the tap explains and offers the modes
+			setModeOpen(true);
+			return;
+		}
 		if (voice.on || voice.state.boot) {
 			// the button always means stop/hang up — even mid-boot it cancels.
 			// userInitiated (#22): the user ended the mic session — no auto-resume on unlock

@@ -11,9 +11,9 @@ class VoiceModeTest {
 	fun parsingRoundTripsTheThreeModes() {
 		assertEquals(VoiceMode.ALWAYS, parseVoiceMode("always"))
 		assertEquals(VoiceMode.PTT, parseVoiceMode("ptt"))
-		// #53 keeps today's default; #54 flips it to OFF
-		assertEquals(VoiceMode.ALWAYS, parseVoiceMode(null))
-		assertEquals(VoiceMode.ALWAYS, parseVoiceMode("junk"))
+		// #54: fresh installs start OFF — no surprise recording
+		assertEquals(VoiceMode.OFF, parseVoiceMode(null))
+		assertEquals(VoiceMode.OFF, parseVoiceMode("junk"))
 	}
 
 	@Test
