@@ -551,7 +551,7 @@ export default function App() {
 			return;
 		}
 		voice.start(conn.url, conn.token).catch(() => showNotice("microphone unavailable — check permissions"));
-	}, [conn, voice, showNotice]);
+	}, [conn, voice, voiceMode, showNotice]);
 
 	// leaving a machine (or unmount) ends its voice session — user-initiated:
 	// this device no longer wants the mic, so a later unlock must not re-arm it
